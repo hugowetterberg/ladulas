@@ -31,7 +31,15 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The happy path is around ten minutes: four for the tests, one for the
+    # linter, a couple for the two GTK compiles and their apt, two for
+    # goreleaser's eight binaries, and the packaging commit. This is not sized to
+    # that. A release job that runs out of time leaves a published tag whose
+    # packaging never landed, and it is the one step here that cannot be made
+    # cheap by trying harder — the apt below is a third party's mirror on a day
+    # of its choosing. So the limit is set to survive a bad one rather than to
+    # describe a good one, with the step that would spend it capped separately.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -64,10 +72,32 @@ jobs:
       # noticed, because neither `make test` nor golangci-lint compiles a file
       # behind a build tag nobody passes. So both tag combinations get built
       # here, and the GTK 4 one is the reason this needs apt at all.
+      #
+      # The apt is what makes this step worth a timeout of its own. It is 169
+      # packages and 97 MB, which is seconds on a healthy runner and was 23m56s
+      # at 55.8 kB/s on the first attempt at v0.0.1 — a degraded Azure mirror,
+      # not a slow compile. The two `go build`s never ran; the job's own limit
+      # cancelled the step mid-`Setting up`, and the only thing said about it was
+      # that the job had exceeded its maximum execution time.
+      #
+      # 35 minutes, then, and the number is chosen from that: it is above the
+      # worst rate actually seen, because a mirror that is slow but making
+      # progress should be waited out rather than turned into a re-run, and a
+      # release is worth half an hour. What it is for is the case that is not
+      # slow but stuck, where it fails in the step that is stuck and names it
+      # rather than reporting the job. It also leaves the rest of the hour for
+      # goreleaser and the packaging commit, which is the part that must not be
+      # what runs out of time: a tag published without its packaging is the one
+      # outcome here that needs a human.
+      #
+      # Acquire::Retries is for the other shape of the same weather: 80 MB at
+      # dial-up speed is long enough for a connection to be dropped part way
+      # through, and re-running the release is a worse way to retry one file.
       - name: Check that the tray still compiles
+        timeout-minutes: 35
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install --no-install-recommends -y -o Acquire::Retries=3 \
             libgtk-3-dev libwebkit2gtk-4.1-dev \
             libgtk-4-dev libwebkitgtk-6.0-dev
           go build -tags gui,gtk3 -o /dev/null ./cmd/ladulas
@@ -87,7 +117,8 @@ jobs:
       # check passed.
       - name: Validate the desktop entry
         run: |
-          sudo apt-get install --no-install-recommends -y desktop-file-utils
+          sudo apt-get install --no-install-recommends -y \
+            -o Acquire::Retries=3 desktop-file-utils
           output="$(desktop-file-validate contrib/ladulas.desktop 2>&1)"
           if [ -n "${output}" ]; then
             echo "${output}"
