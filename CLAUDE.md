@@ -28,26 +28,38 @@ heading.
 
 ## The daemon on this machine is not the tree
 
-Hugo's own instance runs as a systemd **user** unit from `~/go/bin`, so a
-change that builds and tests is still not a change that is running. After
-touching anything in `cmd/ladulasd`, `pkg/peer`, `pkg/approval`
-or the store, reinstall and restart before concluding anything about live
-behaviour:
+Hugo's own instance runs as a systemd **user** unit, and as of 2026-08-19
+that unit is the **package's**: `/usr/lib/systemd/user/ladulas.service`,
+installed by `ladulas-bin`, running `/usr/bin/ladulasd`. So
 
 ```
 make install
 systemctl --user restart ladulas.service
 ```
 
+**installs into `~/go/bin` and then restarts a binary in `/usr/bin`, and
+changes nothing that is running.** This file used to claim the unit ran
+from `~/go/bin`; it did not, and the sequence above was being run as if it
+were a deployment for some time before anybody checked.
+
+**Check `ExecStart` before believing anything about live behaviour:**
+
+```
+systemctl --user show ladulas.service -p ExecStart --value
+ls -l /usr/bin/ladulasd ~/go/bin/ladulasd
+```
+
+`ladulas status` is the other half of the check, and note that `ladulas`
+on `$PATH` may not be the binary the daemon is — compare the mtimes
+against the process start time before believing a symptom. "The feature
+does nothing" and "the feature is not running" look identical from the
+outside, and so do "the feature is not installed where the unit looks".
+
 **`make install`, not `go install`** — this machine has GTK 4 and
 `webkitgtk-6.0`, so `ladulas` here is always built with the desktop
 application in it (`-tags gui`, the Makefile's default `GUI_TAGS`). A
 binary installed without it is a binary whose `gui` command refuses to run,
 and the difference is invisible until somebody asks for a window.
-
-`ladulas status` is the check. Compare the binary's mtime against the
-process start time before believing a symptom — "the feature does nothing"
-and "the feature is not running" look identical from the outside.
 
 **The desktop application is a second process** (decision Z): `ladulas gui`
 is a client of the daemon, started from a `.desktop` entry rather than a
@@ -60,6 +72,14 @@ a symptom is in before changing anything.
 or the CLI, install it and restart the unit as part of the work — do not
 stop to ask whether now is a good time, and do not hand the restart back as
 a step for Hugo to run.
+
+But **say what that did and did not do.** While `ExecStart` is
+`/usr/bin/ladulasd`, the restart brings the package's binary back up and
+the change is in `~/go/bin` where nothing is looking at it. Reporting "the
+change is running" after that sequence is the specific wrong claim to
+avoid. Making it actually run means pointing the unit at `~/go/bin` with a
+drop-in, or rebuilding the package — and which of those Hugo wants has not
+been decided, so ask rather than choose.
 
 ## Unlocking after a restart
 
