@@ -455,12 +455,17 @@ func (e *Engine) submit(
 	req := &Request{
 		Msg:          msg,
 		Prompt:       RenderPrompt(msg),
-		GrantTTLs:    policy.GrantTTLs(),
-		GrantMaxTTL:  policy.MaxGrantTTL(),
 		GrantSubject: GrantSubject(msg),
 		GrantMachine: GrantMachine(msg),
 		Origin:       origin,
 		Body:         body,
+	}
+
+	// A kind that can be promised for carries the offer, and a kind that
+	// cannot carries none — which is what stops a surface offering it (§9).
+	if grantable(msg.GetKind()) {
+		req.GrantTTLs = policy.GrantTTLs()
+		req.GrantMaxTTL = policy.MaxGrantTTL()
 	}
 
 	e.logEntry(&ladulasv1.AuditEntry{
@@ -619,6 +624,33 @@ func (e *Engine) decide(
 	return e.prompt(ctx, req, policy)
 }
 
+// grantable reports whether "approve for a while" means anything for this kind
+// of request.
+//
+// A promise is a scope and a clock over signing with a key (§9). A pairing has
+// no key, happens once, and is a hard rule that always prompts — so a promise
+// about one could never be spent, and the offer was three buttons and a clock
+// under a question whose whole content is "is this the machine on the other
+// screen". It was there because the offer was sized from the policy for every
+// kind alike, and it read as an invitation to leave the door open for an hour.
+//
+// A key listing is the same shape of nothing: no key, no bytes, and nothing a
+// later request could match against.
+func grantable(kind ladulasv1.RequestKind) bool {
+	switch kind {
+	case ladulasv1.RequestKind_REQUEST_KIND_PAIRING,
+		ladulasv1.RequestKind_REQUEST_KIND_KEY_LIST:
+		return false
+	case ladulasv1.RequestKind_REQUEST_KIND_UNSPECIFIED,
+		ladulasv1.RequestKind_REQUEST_KIND_SSH_AUTH,
+		ladulasv1.RequestKind_REQUEST_KIND_GIT_SIGN,
+		ladulasv1.RequestKind_REQUEST_KIND_SSHSIG,
+		ladulasv1.RequestKind_REQUEST_KIND_OPAQUE_SIGN:
+	}
+
+	return true
+}
+
 func (e *Engine) matchGrant(msg *ladulasv1.ApprovalRequest) *ladulasv1.Grant {
 	if e.grants == nil {
 		return nil
@@ -635,8 +667,12 @@ func (e *Engine) matchGrant(msg *ladulasv1.ApprovalRequest) *ladulasv1.Grant {
 }
 
 // prompt fans a request out to every eligible approver and takes the first
-// answer: the local GUI, a console, and every paired peer that may approve for
-// this instance, all at once.
+// decision: the local GUI, a console, and every paired peer that may approve
+// for this instance, all at once.
+//
+// The first *decision*, and not simply the first thing that comes back — see
+// declined, which is the difference between a peer answering and a peer saying
+// it has nobody to ask.
 //
 // A request that arrived from a peer is not passed on to another peer. See
 // RemoteHandler for why.
@@ -699,8 +735,24 @@ func (e *Engine) prompt(
 	for {
 		select {
 		case r := <-results:
+			// A peer with nobody to ask has reported on itself rather than
+			// decided anything, and it does it instantly — so it goes on the
+			// same path as an approver that could not be reached at all
+			// (decision AC).
+			if declined(r.handler, r.answer) {
+				failed++
+
+				if failed == len(handlers) {
+					return deny(
+						ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER,
+						"no approver could be reached"), nil
+				}
+
+				continue
+			}
+
 			// Cancelling here is what tells the other approvers to drop their
-			// prompts: first response wins.
+			// prompts: first decision wins.
 			cancel()
 
 			return e.answerToResponse(req, r.handler, r.answer)
@@ -725,6 +777,41 @@ func (e *Engine) prompt(
 				"the request was withdrawn"), nil
 		}
 	}
+}
+
+// declined reports whether what came back from a peer is a report about the
+// peer rather than a decision about the request — decision AC.
+//
+// A peer runs the same engine, and a peer with no approver of its own denies
+// with NO_APPROVER the instant it is asked, because nothing was asked of
+// anybody. That travels back as a perfectly well-formed answer, and "first
+// response wins" then hands it the race against a desktop prompt waiting on a
+// human to look at a window — every time, because one of them takes a
+// millisecond and the other takes as long as a person takes. Pairing an
+// instance that cannot approve stopped being a second way to get an answer and
+// became a veto on the first.
+//
+// So the rule is that first *decision* wins, and this is not one. The engine
+// already tells an answer apart from the absence of one — handlers that error
+// go to failures and the request is denied only when every one of them has gone
+// — and this belongs on that path.
+//
+// Only NO_APPROVER, and only from a peer. A timeout means somebody was asked
+// and did not answer, which is a fact about the request; a peer's policy
+// denial, hard rule or human saying no are all decisions. And a local prompt
+// that reports NO_APPROVER is this instance's own engine, which cannot happen
+// and would be a bug to paper over here.
+//
+// An approval is never discarded whatever it says about its source: the source
+// is how a decision was reached, and an answer that approves has been decided.
+func declined(h Handler, answer *Answer) bool {
+	if _, remote := h.(RemoteHandler); !remote {
+		return false
+	}
+
+	return answer != nil &&
+		answer.Decision != ladulasv1.Decision_DECISION_APPROVE &&
+		answer.Source == ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER
 }
 
 // withOptionalTimeout applies a deadline when there is one to apply.
@@ -797,7 +884,11 @@ func (e *Engine) answerToResponse(
 	// itself is handed over signed, because keeping it here would only mean the
 	// requester waiting for this instance to be awake — and the daemon it is
 	// handed to could already sign with that key unasked.
-	if answer.GrantTTL > 0 {
+	//
+	// And only where a promise was offered at all: a request with no offer on
+	// it is one nothing can be promised about (grantable), and an answer that
+	// asks for one anyway is answering a question it was not shown.
+	if answer.GrantTTL > 0 && req.GrantMaxTTL > 0 {
 		if e.shouldDelegate(req) {
 			resp.Delegation, resp.Grant = e.delegate(
 				req.Msg, answer.GrantTTL, answer.GrantReach)

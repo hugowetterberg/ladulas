@@ -274,9 +274,26 @@ function renderPairing(request) {
       { label: "Its fingerprint", value: pairing.fingerprint, mono: true },
       { label: "Connected from", value: pairing.address, mono: true },
       { label: "Reachable at", value: (pairing.addresses || []).join(", "), mono: true },
-      { label: "May approve for us", value: yesNo(pairing.mayApprove) },
-      { label: "May ask us to approve", value: yesNo(pairing.mayRequest) },
+      // One sentence rather than two yes/no rows: what a pairing is for is a
+      // single decision, taken on the machine that displayed the code, and the
+      // wording is the core's so that every surface says it the same way.
+      { label: "This pairing", value: pairing.direction },
     ]),
+  );
+
+  // Where that decision was taken, which is the half a reader cannot work out
+  // from the sentence. The machine displaying the code chooses for both sides,
+  // so on the side that used one there is nothing to change here — only a
+  // pairing to decline and ask for again.
+  nodes.push(
+    el(
+      "p",
+      "provenance",
+      pairing.initiatedLocally
+        ? (pairing.name || "The other machine")
+          + " chose what this pairing is for when it displayed the code. Changing it means pairing again."
+        : "You chose what this pairing is for when you displayed the code.",
+    ),
   );
 
   if (pairing.keyFromCode) {
@@ -300,8 +317,4 @@ function renderGeneric(request) {
       asserted: detail.asserted,
     })),
   );
-}
-
-function yesNo(value) {
-  return value ? "yes" : "no";
 }

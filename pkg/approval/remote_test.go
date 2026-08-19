@@ -70,6 +70,190 @@ func TestUnreachableApproversDenyAtOnce(t *testing.T) {
 	}
 }
 
+// TestAPairingIsOfferedNoPromise: a pairing happens once and has no key, so
+// "approve for a while" is a question about it that cannot be answered. The
+// offer used to be sized from the policy for every kind alike, which put a
+// reach, a clock and an hour's worth of buttons under "is this the machine on
+// the other screen".
+func TestAPairingIsOfferedNoPromise(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	handler := &stubHandler{
+		id: "desktop",
+		answer: &approval.Answer{
+			Decision: ladulasv1.Decision_DECISION_APPROVE,
+			Reason:   "confirmed at the desktop",
+			// A surface asking for one anyway is answering a question it was
+			// not shown, and gets nothing rather than a promise.
+			GrantTTL: time.Hour,
+		},
+	}
+
+	f.engine.Register(handler)
+
+	resp, err := f.engine.Submit(context.Background(), pairingRequest())
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_APPROVE {
+		t.Fatalf("decision %v", resp.GetDecision())
+	}
+
+	shown := handler.lastRequest()
+	if shown == nil {
+		t.Fatal("the approver was never shown anything")
+	}
+
+	if shown.GrantMaxTTL != 0 || len(shown.GrantTTLs) != 0 {
+		t.Errorf("the pairing card was offered a promise: max %s, %d lengths",
+			shown.GrantMaxTTL, len(shown.GrantTTLs))
+	}
+
+	if resp.GetGrant() != nil || resp.GetDelegation() != nil {
+		t.Error("confirming a pairing made a standing promise")
+	}
+
+	grants, err := f.grants.Grants()
+	if err != nil {
+		t.Fatalf("read grants: %v", err)
+	}
+
+	if len(grants) != 0 {
+		t.Errorf("a pairing left %d grants behind", len(grants))
+	}
+}
+
+func pairingRequest() *ladulasv1.ApprovalRequest {
+	return &ladulasv1.ApprovalRequest{
+		RequestId: "pair-1",
+		Kind:      ladulasv1.RequestKind_REQUEST_KIND_PAIRING,
+		Requester: &ladulasv1.RequesterInfo{
+			InstanceId: "SHA256:thepeer", Name: "builder",
+		},
+		Operation: &ladulasv1.ApprovalRequest_Pairing{
+			Pairing: &ladulasv1.PairingRequest{
+				PeerName:         "builder",
+				PeerFingerprint:  "SHA256:thepeer",
+				PeerMayRequest:   true,
+				LocalName:        "desktop",
+				LocalFingerprint: "SHA256:ourselves",
+			},
+		},
+	}
+}
+
+// noApproverAnswer is what a peer with nobody to ask sends back: a well-formed
+// denial that says, in its source, that nothing was asked of anybody.
+func noApproverAnswer(peer string) *approval.Answer {
+	return &approval.Answer{
+		Decision: ladulasv1.Decision_DECISION_DENY,
+		Source:   ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER,
+		Reason:   peer + ": no approver is available to answer",
+	}
+}
+
+// TestAPeerWithNobodyToAskDoesNotSettleTheRequest is decision AC, and it is the
+// race the local human cannot win: the peer's answer is instant because nothing
+// was asked of anybody, and a desktop prompt takes as long as a person takes.
+// Pairing an instance that cannot approve was removing the only way to get an
+// answer rather than adding a second one.
+func TestAPeerWithNobodyToAskDoesNotSettleTheRequest(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	here := &localStub{stubHandler{
+		id:     "desktop",
+		answer: approveAnswer(),
+		delay:  50 * time.Millisecond,
+	}}
+
+	f.engine.Register(here)
+	f.engine.Register(&remoteStub{
+		stubHandler: stubHandler{id: "pietro", answer: noApproverAnswer("pietro")},
+		peer:        "SHA256:pietro",
+	})
+
+	resp, err := f.engine.Submit(context.Background(), gitSignRequest())
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_APPROVE {
+		t.Errorf("decision %v (%s), want the desktop's approval",
+			resp.GetDecision(), resp.GetReason())
+	}
+
+	if here.promptCount() != 1 {
+		t.Errorf("the desktop was asked %d times", here.promptCount())
+	}
+}
+
+// And when the peer is the only approver there is, its report is still the end
+// of the request: nothing is left to wait for, and the source says why.
+func TestAPeerWithNobodyToAskEndsARequestItIsAloneOn(t *testing.T) {
+	f := newEngine(t, approval.NewPolicy(&ladulasv1.PolicyDocument{
+		Defaults: &ladulasv1.Defaults{
+			SignTimeout: durationOf(30 * time.Second),
+		},
+	}))
+
+	f.engine.Register(&remoteStub{
+		stubHandler: stubHandler{id: "pietro", answer: noApproverAnswer("pietro")},
+		peer:        "SHA256:pietro",
+	})
+
+	start := time.Now()
+
+	resp, err := f.engine.Submit(context.Background(), gitSignRequest())
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("the engine waited %s for a peer that had already reported", elapsed)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_DENY {
+		t.Errorf("decision %v", resp.GetDecision())
+	}
+
+	if resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER {
+		t.Errorf("source %v, want no-approver", resp.GetSource())
+	}
+}
+
+// A peer's actual answer still wins the race, which is the other half of
+// decision AC: what is not a decision is NO_APPROVER, and not a peer that
+// answered.
+func TestAPeerThatAnsweredStillSettlesTheRequest(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	here := &localStub{stubHandler{
+		id:     "desktop",
+		answer: approveAnswer(),
+		delay:  time.Minute,
+	}}
+
+	f.engine.Register(here)
+	f.engine.Register(&remoteStub{
+		stubHandler: stubHandler{id: "pietro", answer: denyAnswer()},
+		peer:        "SHA256:pietro",
+	})
+
+	resp, err := f.engine.Submit(context.Background(), gitSignRequest())
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_DENY {
+		t.Errorf("decision %v, want the peer's refusal", resp.GetDecision())
+	}
+
+	if resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_USER {
+		t.Errorf("source %v, want a person's answer", resp.GetSource())
+	}
+}
+
 // TestPeerRequestsAreNotPassedOn: an instance decides what a peer asks it, and
 // never forwards it to a third instance. Two instances that each named the
 // other as an approver would otherwise bounce a request between them.

@@ -229,9 +229,13 @@ involved. That is the recovery path of last resort and it is deliberate.
    passphrase twice.
 3. **`ladulas keys generate <name>`** — or `keys import`. Add the public
    half wherever it needs to go; nothing does that for you.
-4. **`ladulas pair`** on both sides, then **`ladulas pairings approve`** if
-   the confirmation outlived the command. Pairing grants directions, never
-   keys.
+4. **`ladulas pair --listen --intent <approver|requester|mutual>`** on the
+   machine displaying the code and **`ladulas pair <host:port> --code
+   <code>`** on the other, then **`ladulas pairings approve`** if the
+   confirmation outlived the command. The intent is required and settles
+   both sides; the joining side has no direction flag of its own
+   ([decision AD](architecture.md#7-identity-pairing-and-trust)). Pairing
+   grants directions, never keys.
 5. **`ladulas peers allow <peer> --approve --key <label>`** (or
    `--all-keys`) — the separate decision that lends a key. Its flags
    describe the state wanted, so anything left out is withdrawn. A pairing
@@ -281,6 +285,18 @@ that has no local approver.
 send it at all: nothing retries that into working, and on a machine whose
 only approver is a phone it means the phone has no route and is not
 polling.
+
+**Not to be confused with the denial that names a peer.** Until 2026-08-19
+a refusal reading `<peer>: no approver is available to answer` was a
+different failure wearing the same source: the peer had answered, instantly,
+to say it had nobody to ask, and that answer won the fan-out against the
+local prompt before anybody could look at it. Every signature on the machine
+failed at once and deterministically, and unpairing the peer was the only
+cure. It is fixed — a peer's `no_approver` is a report and not a decision
+([decision AC](architecture.md#9-approval-engine-and-policies)) — so the
+tell is worth keeping: a `no_approver` denial that carries a peer's name
+and arrives instantly rather than after a wait is this, and means the
+binary predates the fix.
 
 ### A key that is on the phone is missing from `ssh-add -l`
 

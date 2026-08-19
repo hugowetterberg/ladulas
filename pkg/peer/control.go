@@ -277,9 +277,17 @@ func (n *Node) BeginPairing(
 	session := n.newSession(stream)
 	defer session.close()
 
-	window, secret, err := n.beginPairing(
-		req.Msg.GetPeerMayApprove(), req.Msg.GetPeerMayRequest())
+	intent := trust.IntentFromWire(req.Msg.GetIntent())
+
+	window, secret, err := n.beginPairing(intent)
 	if err != nil {
+		// A missing intent is the caller's omission and not a failure here
+		// (decision AD), and the surfaces have to be able to tell them apart:
+		// one is a usage message and the other is a daemon that broke.
+		if errors.Is(err, ErrNoIntent) {
+			return connect.NewError(connect.CodeInvalidArgument, err)
+		}
+
 		return connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -300,6 +308,7 @@ func (n *Node) BeginPairing(
 		FullCode:        full,
 		ExpiresAt:       timestamppb.New(window.expires),
 		ListenAddresses: addresses,
+		Intent:          trust.IntentToWire(intent),
 	})
 	if err != nil {
 		return err
@@ -332,8 +341,7 @@ func (n *Node) PairWithPeer(
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	pending, err := n.PairWith(ctx, req.Msg.GetAddress(), code,
-		req.Msg.GetPeerMayApprove(), req.Msg.GetPeerMayRequest())
+	pending, err := n.PairWith(ctx, req.Msg.GetAddress(), code)
 	if err != nil {
 		return session.send(&ladulasv1.PairingProgress{
 			Kind:    ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED,

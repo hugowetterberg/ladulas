@@ -30,10 +30,17 @@ export function renderPrompt(request, done) {
       .catch((error) => done(decision, error));
   }
 
-  const approve = el("button", "approve", "Approve once");
+  // A pairing is answered once and for good, so it is worded as what it does
+  // rather than as an approval with a length left off. There is no offer under
+  // it either — the core sends none for a kind nothing can be promised about
+  // (§9) — and "approve once" beside no "approve for a while" reads as a
+  // choice somebody made rather than the only answer there is.
+  const pairing = request.kind === "pairing";
+
+  const approve = el("button", "approve", pairing ? "Pair" : "Approve once");
   approve.onclick = () => answer("approve", 0);
 
-  const deny = el("button", "deny", "Deny");
+  const deny = el("button", "deny", pairing ? "Don’t pair" : "Deny");
   deny.onclick = () => answer("deny", 0);
 
   buttons.push(approve, deny);

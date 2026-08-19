@@ -222,12 +222,13 @@ message PendingPairing {
   repeated string addresses = 5;
   // What this side has decided to grant the peer if its user agrees. This is
   // the whole of what completing the pairing will write down.
+  //
+  // Both sides derive it from one declaration, made by whoever displayed the
+  // code (decision AD), so what the peer will write down is the mirror of this
+  // and needs no field of its own: a peer that may ask us to approve is a peer
+  // we approve for.
   bool may_approve = 6;
   bool may_request = 7;
-  // What the peer said it grants us. Shown on the prompt, believed by nobody,
-  // and never written into a record.
-  bool peer_may_approve = 8;
-  bool peer_may_request = 9;
   // Whether this side dialled the code or displayed it.
   bool we_dialled = 10;
   // Whether the peer's identity arrived inside the pairing code, which makes
@@ -244,6 +245,12 @@ message PendingPairing {
   // surface showing the prompt and a surface showing the pending list are
   // talking about the same thing.
   string confirmation_request_id = 17;
+
+  // 8 and 9 were what the peer said it would grant us, shown on the prompt and
+  // believed by nobody. There is nothing left for the peer to say (decision
+  // AD).
+  reserved 8, 9;
+  reserved "peer_may_approve", "peer_may_request";
 }
 
 // BorrowedKey is the public half of a key a paired peer offers this instance

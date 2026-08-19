@@ -28,6 +28,7 @@ import * as screens from "./screens.js";
 import { renderPrompt } from "./prompt.js";
 import { renderProject, renderProjectList } from "./projects.js";
 import { renderUnlock, lockControls } from "./lock.js";
+import { addMachine } from "./pairing.js";
 
 // How often the instance is re-read. It is the timer the countdowns and the
 // waiting-request count live on, and a poll that finds the same answer costs one
@@ -38,7 +39,15 @@ const REFRESH_MS = 4000;
 // and fetched — a document read from another machine, a request card, one
 // decision out of the log — and redrawing those would throw away what somebody is
 // looking at to show them the same thing again.
-const LIVE = new Set(["home", "keys", "activity", "settings"]);
+//
+// Keys is not among them any more, and the reason is the form on it: a key's
+// name is typed a character at a time, and any decision anywhere changes the
+// instance payload, so a poll four seconds later would empty the box somebody
+// was halfway through filling. What it costs is a key generated at the command
+// line not appearing until the screen is opened again, which is the same thing
+// every other screen that fetches its own state already does. A key made here
+// still appears at once: answering asks for a repaint of its own.
+const LIVE = new Set(["home", "activity", "settings"]);
 
 // The store states that leave nothing else worth drawing (§10). A locked store
 // still has its keys, still lists its peers and can still be approved for by a
@@ -212,6 +221,11 @@ class Shell {
       }
     }
 
+    // Adding one lives with the list of them, and is here rather than only on
+    // the home screen because an instance with no peers at all is exactly the
+    // one whose owner is looking for it (§7).
+    machines.append(this.navItem("pair", "Add a machine", "link"));
+
     const footer = el("div", "nav footer");
 
     footer.append(this.navItem("settings", "Settings", "gear"));
@@ -332,6 +346,8 @@ class Shell {
           : screens.activity(state, go);
       case "peer":
         return peerScreen(state, this.route.id, go);
+      case "pair":
+        return pairScreen(state);
       case "documents":
         return documentsScreen();
       case "settings":
@@ -367,6 +383,15 @@ async function decisionScreen(state, id) {
 
 async function peerScreen(state, fingerprint, go) {
   const screen = await screens.peer(state, fingerprint, go);
+
+  return { ...screen, back: { label: "Home", route: "home" } };
+}
+
+// pairScreen is starting a pairing (§7). It is not in LIVE: it holds a choice
+// somebody is halfway through making and a code they are halfway through
+// typing, and a poll that redrew it would take both away.
+async function pairScreen(state) {
+  const screen = await addMachine(state);
 
   return { ...screen, back: { label: "Home", route: "home" } };
 }
@@ -470,6 +495,7 @@ export function parseRoute() {
     case "documents":
     case "settings":
     case "peer":
+    case "pair":
     case "request":
       return { name, id };
     default:

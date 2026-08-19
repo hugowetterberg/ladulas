@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 )
 
@@ -110,6 +111,156 @@ type Directions struct {
 	AllowedKeys []string
 	// AllKeys covers every key the instance holds, now and later (§7).
 	AllKeys bool
+}
+
+// Intent is what a pairing is for, as the side displaying the code declares it
+// — decision AD.
+//
+// It is the same two flags Directions holds, asked as one question instead of
+// two. That is the whole of the change and it is not cosmetic: the two sides
+// used to declare a half each, independently, with nothing making the halves
+// agree, so "this machine may approve for me" was routinely written down about
+// an instance whose own user had never said it would answer anything. Pairing
+// one of those does not add a second way to get an answer, it takes the first
+// one away (decision AC).
+//
+// The names are from the point of view of the screen the code is on: the peer
+// is the machine about to join. Changing what a pairing is for means removing
+// the peer and pairing again, which is a deliberate limit — a direction that
+// can be widened later is a direction nobody has to think about now, and this
+// is the one question a pairing exists to ask.
+type Intent int
+
+const (
+	// IntentUnspecified is not an intent. It is what an unset field reads as,
+	// and it is refused rather than defaulted: guessing here is what decision
+	// AD exists to stop.
+	IntentUnspecified Intent = iota
+	// IntentPeerApproves: the machine that joins answers for this one. What
+	// somebody at a headless box wants when they pair a phone.
+	IntentPeerApproves
+	// IntentPeerRequests: this machine answers for the one that joins. The
+	// same pairing from the other end, and what somebody at a desktop wants
+	// when they display a code for a build box.
+	IntentPeerRequests
+	// IntentMutual: both directions.
+	IntentMutual
+)
+
+// ParseIntent reads the word somebody typed or clicked.
+func ParseIntent(text string) (Intent, error) {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "approver":
+		return IntentPeerApproves, nil
+	case "requester":
+		return IntentPeerRequests, nil
+	case "mutual", "both":
+		return IntentMutual, nil
+	default:
+		return IntentUnspecified, fmt.Errorf(
+			"trust: %q is not what a pairing can be for; "+
+				"use approver, requester or mutual", text)
+	}
+}
+
+// IntentOf reads an intent back out of the two flags a record holds.
+func IntentOf(mayApprove, mayRequest bool) Intent {
+	switch {
+	case mayApprove && mayRequest:
+		return IntentMutual
+	case mayApprove:
+		return IntentPeerApproves
+	case mayRequest:
+		return IntentPeerRequests
+	default:
+		return IntentUnspecified
+	}
+}
+
+// PeerMayApprove and PeerMayRequest are the intent as the declaring side writes
+// it down.
+func (i Intent) PeerMayApprove() bool {
+	return i == IntentPeerApproves || i == IntentMutual
+}
+
+// PeerMayRequest reports whether the peer may put requests to the declaring
+// side.
+func (i Intent) PeerMayRequest() bool {
+	return i == IntentPeerRequests || i == IntentMutual
+}
+
+// Mirror is the same pairing as the other side records it.
+//
+// A peer that may ask us to approve is a peer we approve for, so the mirror is
+// the two flags swapped — which is why one declaration settles both records and
+// the joining side has nothing to declare. A mutual pairing mirrors to itself.
+func (i Intent) Mirror() Intent {
+	switch i {
+	case IntentPeerApproves:
+		return IntentPeerRequests
+	case IntentPeerRequests:
+		return IntentPeerApproves
+	case IntentMutual, IntentUnspecified:
+		return i
+	}
+
+	return IntentUnspecified
+}
+
+// String is the word the command line and the API use.
+func (i Intent) String() string {
+	switch i {
+	case IntentPeerApproves:
+		return "approver"
+	case IntentPeerRequests:
+		return "requester"
+	case IntentMutual:
+		return "mutual"
+	case IntentUnspecified:
+	}
+
+	return "none"
+}
+
+// Describe says what the intent means in the words a prompt should use, which
+// are Describe's: an intent is two directions asked as one question, and the
+// sentence a person reads has to be the same either way.
+func (i Intent) Describe() string {
+	return Describe(i.PeerMayApprove(), i.PeerMayRequest())
+}
+
+// IntentFromWire and IntentToWire convert to the control API's enum.
+//
+// They live here rather than beside either caller for the reason DescribeState
+// does: there is one vocabulary for what a pairing is for, and a second mapping
+// of it somewhere else is a second thing to keep in step.
+func IntentFromWire(intent ladulasv1.PairingIntent) Intent {
+	switch intent {
+	case ladulasv1.PairingIntent_PAIRING_INTENT_PEER_APPROVES:
+		return IntentPeerApproves
+	case ladulasv1.PairingIntent_PAIRING_INTENT_PEER_REQUESTS:
+		return IntentPeerRequests
+	case ladulasv1.PairingIntent_PAIRING_INTENT_MUTUAL:
+		return IntentMutual
+	case ladulasv1.PairingIntent_PAIRING_INTENT_UNSPECIFIED:
+	}
+
+	return IntentUnspecified
+}
+
+// IntentToWire is the other direction.
+func IntentToWire(intent Intent) ladulasv1.PairingIntent {
+	switch intent {
+	case IntentPeerApproves:
+		return ladulasv1.PairingIntent_PAIRING_INTENT_PEER_APPROVES
+	case IntentPeerRequests:
+		return ladulasv1.PairingIntent_PAIRING_INTENT_PEER_REQUESTS
+	case IntentMutual:
+		return ladulasv1.PairingIntent_PAIRING_INTENT_MUTUAL
+	case IntentUnspecified:
+	}
+
+	return ladulasv1.PairingIntent_PAIRING_INTENT_UNSPECIFIED
 }
 
 // DirectionsOf reads the decisions back out of a record.

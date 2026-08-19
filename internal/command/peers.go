@@ -52,8 +52,10 @@ func peersListCommand() *cli.Command {
 			}
 
 			if len(peers) == 0 {
-				fmt.Println("No paired instances yet. `ladulas pair --listen`" +
-					" on one machine and `ladulas pair <host:port>` on the other.")
+				fmt.Println("No paired instances yet. " +
+					"`ladulas pair --listen --intent <approver|requester|mutual>`" +
+					" on one machine and `ladulas pair <host:port> --code <code>`" +
+					" on the other.")
 
 				return nil
 			}
@@ -323,11 +325,18 @@ func peersRevokeCommand() *cli.Command {
 	}
 }
 
+// The side that displays the code says what the pairing is for, and the side
+// that uses one says nothing (decision AD). Both records come out of that one
+// answer, which is why `--intent` is on `--listen` and is required there:
+// pairing used to be two independent declarations with nothing making them
+// agree, and the way that failed was an instance granting "may approve for me"
+// to a machine with nobody at it — a pairing that vetoed every request instead
+// of answering one (bugs/, decision AC).
 func pairCommand() *cli.Command {
 	return &cli.Command{
 		Name: "pair",
-		Usage: "pair with another instance: --listen to display a code, " +
-			"or give the other instance's host:port to use one",
+		Usage: "pair with another instance: --listen --intent <what for> to " +
+			"display a code, or give the other instance's host:port to use one",
 		ArgsUsage: "[host:port]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -340,10 +349,12 @@ func pairCommand() *cli.Command {
 					"or the full code it printed",
 			},
 			&cli.StringFlag{
-				Name: "role",
-				Usage: "what the peer may do: `approver` (it approves for this " +
-					"instance), `requester` (it asks this instance), or `both`",
-				Value: "both",
+				Name: "intent",
+				Usage: "what the pairing is for, on the side displaying the " +
+					"code: `approver` (the machine that joins approves for this " +
+					"one), `requester` (this machine approves for it), or " +
+					"`mutual`. It settles both sides; changing it later means " +
+					"removing the peer and pairing again",
 			},
 			&cli.BoolFlag{
 				Name:  "yes",
@@ -355,34 +366,43 @@ func pairCommand() *cli.Command {
 }
 
 func runPair(ctx context.Context, cmd *cli.Command) error {
-	mayApprove, mayRequest, err := parseRole(cmd.String("role"))
-	if err != nil {
-		return err
-	}
-
 	client := localapi.NewClient(cmd.String("control-socket"))
 	address := cmd.Args().First()
+	listening := cmd.Bool("listen")
 
-	var stream *connect.ServerStreamForClient[ladulasv1.PairingProgress]
+	if !listening && cmd.String("intent") != "" {
+		return cli.Exit(
+			"The machine displaying the code says what the pairing is for. "+
+				"Run `ladulas pair --listen --intent <approver|requester|mutual>` "+
+				"there; this side confirms what it chose.", 1)
+	}
+
+	var (
+		stream *connect.ServerStreamForClient[ladulasv1.PairingProgress]
+		err    error
+	)
 
 	switch {
-	case cmd.Bool("listen"):
+	case listening:
+		intent, parseErr := trust.ParseIntent(cmd.String("intent"))
+		if parseErr != nil {
+			return cli.Exit(pairIntentUsage, 1)
+		}
+
 		stream, err = client.Control().BeginPairing(ctx,
 			connect.NewRequest(&ladulasv1.BeginPairingRequest{
-				PeerMayApprove: mayApprove,
-				PeerMayRequest: mayRequest,
+				Intent: trust.IntentToWire(intent),
 			}))
 	case address != "" || cmd.String("code") != "":
 		stream, err = client.Control().PairWithPeer(ctx,
 			connect.NewRequest(&ladulasv1.PairWithPeerRequest{
-				Address:        address,
-				Code:           cmd.String("code"),
-				PeerMayApprove: mayApprove,
-				PeerMayRequest: mayRequest,
+				Address: address,
+				Code:    cmd.String("code"),
 			}))
 	default:
 		return cli.Exit(
-			"Usage: ladulas pair --listen, or ladulas pair <host:port> --code <code>", 1)
+			"Usage: ladulas pair --listen --intent <approver|requester|mutual>, "+
+				"or ladulas pair <host:port> --code <code>", 1)
 	}
 
 	if err != nil {
@@ -396,19 +416,17 @@ func runPair(ctx context.Context, cmd *cli.Command) error {
 	return followPairing(ctx, cmd, client, stream)
 }
 
-func parseRole(role string) (mayApprove, mayRequest bool, err error) {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case "", "both":
-		return true, true, nil
-	case "approver":
-		return true, false, nil
-	case "requester":
-		return false, true, nil
-	default:
-		return false, false, cli.Exit(fmt.Sprintf(
-			"Unknown role %q. Use approver, requester or both.", role), 1)
-	}
-}
+// pairIntentUsage is the question rather than a complaint about the answer: a
+// missing intent and a misspelled one are the same situation, which is somebody
+// who has not been told that this is the thing a pairing decides.
+const pairIntentUsage = `Say what the pairing is for:
+
+  --intent approver    the machine that joins approves for this one
+  --intent requester   this machine approves for the machine that joins
+  --intent mutual      both
+
+Whichever you choose settles both sides, so the machine that joins is not
+asked again. Changing it later means removing the peer and pairing again.`
 
 // followPairing prints the exchange as it happens and answers the confirmation.
 func followPairing(
@@ -458,6 +476,14 @@ func printPairingCode(progress *ladulasv1.PairingProgress) {
 	if expires := progress.GetExpiresAt(); expires != nil {
 		fmt.Printf("Valid until    %s\n",
 			expires.AsTime().Local().Format(time.Kitchen))
+	}
+
+	// What was chosen here, said back, because it is the whole of what the
+	// other machine is about to agree to and nobody there gets to change it
+	// (decision AD).
+	if intent := trust.IntentFromWire(
+		progress.GetIntent()); intent != trust.IntentUnspecified {
+		fmt.Printf("The machine that joins %s\n", intent.Describe())
 	}
 
 	fmt.Println()
@@ -520,8 +546,18 @@ func answerConfirmation(
 			"so it has already been checked.")
 	}
 
-	fmt.Printf("\n  It %s\n\n",
+	fmt.Printf("\n  It %s\n",
 		trust.Describe(pairing.GetPeerMayApprove(), pairing.GetPeerMayRequest()))
+
+	// The side that used a code did not choose this, and saying so is what
+	// makes the sentence above readable: it is not a summary of a flag typed
+	// here, it is what the machine displaying the code decided (decision AD).
+	if pairing.GetInitiatedLocally() {
+		fmt.Printf("  %s chose that when it displayed the code. "+
+			"Changing it means pairing again.\n", pairing.GetPeerName())
+	}
+
+	fmt.Println()
 
 	accepted := cmd.Bool("yes")
 

@@ -24,6 +24,7 @@ type stubHandler struct {
 
 	mu       sync.Mutex
 	prompts  []approval.Prompt
+	requests []*approval.Request
 	notified []*ladulasv1.ApprovalResponse
 	blocked  bool
 }
@@ -35,6 +36,7 @@ func (h *stubHandler) ID() string {
 func (h *stubHandler) Decide(ctx context.Context, req *approval.Request) (*approval.Answer, error) {
 	h.mu.Lock()
 	h.prompts = append(h.prompts, req.Prompt)
+	h.requests = append(h.requests, req)
 	h.mu.Unlock()
 
 	if h.shown != nil {
@@ -65,6 +67,19 @@ func (h *stubHandler) Notify(_ *approval.Request, resp *ladulasv1.ApprovalRespon
 	defer h.mu.Unlock()
 
 	h.notified = append(h.notified, resp)
+}
+
+// lastRequest is what the approver was actually handed, which is where the
+// offer to promise anything lives.
+func (h *stubHandler) lastRequest() *approval.Request {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.requests) == 0 {
+		return nil
+	}
+
+	return h.requests[len(h.requests)-1]
 }
 
 func (h *stubHandler) promptCount() int {

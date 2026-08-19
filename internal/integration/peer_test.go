@@ -254,10 +254,11 @@ func pairOverTheCommandLine(t *testing.T, cli string, approver, requester *peerI
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// The approver's side: display a code, and grant the other instance the
-	// right to ask this one for approvals.
+	// The approver's side: display a code, and say what the pairing is for —
+	// this instance approves for the machine that joins (decision AD). The
+	// dialling side is not asked, and records the mirror of it.
 	listen := exec.CommandContext(ctx, cli,
-		"pair", "--listen", "--role", "requester")
+		"pair", "--listen", "--intent", "requester")
 	listen.Env = append(os.Environ(), "LADULAS_SOCK="+approver.control)
 	listen.Stdin = strings.NewReader("y\n")
 
@@ -309,10 +310,10 @@ func pairOverTheCommandLine(t *testing.T, cli string, approver, requester *peerI
 		t.Fatalf("the listening side printed no pairing code\n%s", listenErr.String())
 	}
 
-	// The requester's side: use the code, and grant the other instance the
-	// right to approve for this one.
+	// The requester's side: use the code. What it grants is what the other
+	// machine already chose, which it sees on the confirmation.
 	dial := exec.CommandContext(ctx, cli,
-		"pair", approver.address, "--code", code, "--role", "approver")
+		"pair", approver.address, "--code", code)
 	dial.Env = append(os.Environ(), "LADULAS_SOCK="+requester.control)
 	dial.Stdin = strings.NewReader("y\n")
 

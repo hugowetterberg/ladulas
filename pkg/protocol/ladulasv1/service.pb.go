@@ -2207,13 +2207,6 @@ type PairRequest struct {
 	// connection it arrived on is a bug or an attack, and either way not
 	// something to pair with.
 	IdentityPublicKey []byte `protobuf:"bytes,3,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"`
-	// What the caller grants the listener: whether the listener may approve for
-	// the caller, and whether it may ask the caller to approve. Each side
-	// declares its own half; this is the caller telling the listener what it has
-	// written down, so the listener's prompt can say what the pairing means in
-	// both directions.
-	MayApprove bool `protobuf:"varint,4,opt,name=may_approve,json=mayApprove,proto3" json:"may_approve,omitempty"`
-	MayRequest bool `protobuf:"varint,5,opt,name=may_request,json=mayRequest,proto3" json:"may_request,omitempty"`
 	// Addresses the caller listens on, so the listener can dial back later.
 	ListenAddresses []string `protobuf:"bytes,6,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
 	unknownFields   protoimpl.UnknownFields
@@ -2271,20 +2264,6 @@ func (x *PairRequest) GetIdentityPublicKey() []byte {
 	return nil
 }
 
-func (x *PairRequest) GetMayApprove() bool {
-	if x != nil {
-		return x.MayApprove
-	}
-	return false
-}
-
-func (x *PairRequest) GetMayRequest() bool {
-	if x != nil {
-		return x.MayRequest
-	}
-	return false
-}
-
 func (x *PairRequest) GetListenAddresses() []string {
 	if x != nil {
 		return x.ListenAddresses
@@ -2302,7 +2281,11 @@ type PairResponse struct {
 	SessionId         string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	InstanceName      string `protobuf:"bytes,3,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
 	IdentityPublicKey []byte `protobuf:"bytes,4,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"`
-	// What the listener granted the caller, from the listener's own prompt.
+	// What the listener has written down about the caller, which is the pairing
+	// intent its user chose before the code was displayed (decision AD). The
+	// caller records the mirror of it — a peer that may ask us to approve is a
+	// peer we approve for — so both halves of the pairing come from one answer
+	// given on one screen.
 	MayApprove      bool     `protobuf:"varint,5,opt,name=may_approve,json=mayApprove,proto3" json:"may_approve,omitempty"`
 	MayRequest      bool     `protobuf:"varint,6,opt,name=may_request,json=mayRequest,proto3" json:"may_request,omitempty"`
 	ListenAddresses []string `protobuf:"bytes,7,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
@@ -2866,16 +2849,12 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\taddresses\x18\x04 \x03(\tR\taddresses\x12#\n" +
 	"\rinstance_name\x18\x05 \x01(\tR\finstanceName\x129\n" +
 	"\n" +
-	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xe5\x01\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc9\x01\n" +
 	"\vPairRequest\x12\x14\n" +
 	"\x05proof\x18\x01 \x01(\fR\x05proof\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12.\n" +
-	"\x13identity_public_key\x18\x03 \x01(\fR\x11identityPublicKey\x12\x1f\n" +
-	"\vmay_approve\x18\x04 \x01(\bR\n" +
-	"mayApprove\x12\x1f\n" +
-	"\vmay_request\x18\x05 \x01(\bR\n" +
-	"mayRequest\x12)\n" +
-	"\x10listen_addresses\x18\x06 \x03(\tR\x0flistenAddresses\"\xc7\x02\n" +
+	"\x13identity_public_key\x18\x03 \x01(\fR\x11identityPublicKey\x12)\n" +
+	"\x10listen_addresses\x18\x06 \x03(\tR\x0flistenAddressesJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\vmay_approveR\vmay_request\"\xc7\x02\n" +
 	"\fPairResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x1d\n" +
 	"\n" +

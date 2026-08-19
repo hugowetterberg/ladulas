@@ -163,12 +163,22 @@ works locally, which is the single-machine 1Password replacement.
 ### Pairing a second instance
 
 ```
-ladulas pair --listen                        # displays a code, waits
+ladulas pair --listen --intent approver      # displays a code, waits
 ladulas pair host:7373 --code <that code>    # on the other instance
 ladulas pairings list                        # if the confirmation outlived
                                              # the command that raised it
 ladulas peers allow <peer> --approve --key work
 ```
+
+**The side displaying the code says what the pairing is for**, and that
+settles both records (decision AD): `--intent approver` for a machine that
+will approve for this one, `--intent requester` for one this machine
+approves for, `--intent mutual` for both. The other side declares nothing
+and is shown the sentence on its confirmation. It is required, because the
+alternative was two independent guesses that routinely disagreed; changing
+it later means removing the peer and pairing again. On a desktop the same
+question, the same code and a QR are the **Add a machine** screen in the
+window.
 
 Pairing grants **directions**, never keys; `peers allow` is the separate
 decision that lends one, and its flags describe the state wanted rather
@@ -519,13 +529,6 @@ the shell rather than the design.
 agent (`\\.\pipe\openssh-ssh-agent`, the takeover 1Password does) and DPAPI
 for the DEK; macOS needs nothing platform-specific written but has never
 been run, because there is no Apple hardware here.
-
-**Drawing a pairing QR on the requester.** The phone reads one and the code
-a QR carries has been specified since M3; nothing renders one. A headless
-box prints the code and the `qrencode` command to turn it into a QR. The
-viewer bundle has no dependencies by policy, so the options are taking the
-first one, writing an encoder, or leaving `qrencode` as the documented
-step — and that is an open decision rather than an oversight.
 
 **A request made in the first moments after pairing can be refused for no
 better reason than timing.** Pairing writes the trust record; the link that

@@ -74,6 +74,25 @@ export const bridge = {
   // for somebody at the other machine (§7).
   withdrawPairing: (session) =>
     call("POST", "/pairings/" + encodeURIComponent(session) + "/withdraw"),
+
+  // Forgetting a paired machine. This side alone decides and the machine is
+  // not asked, so there is nothing to wait for and nothing that can be
+  // half-done — which is why the screen asks twice before calling it.
+  revokePeer: (peer) => call("POST", "/peers/revoke", { peer }),
+
+  // Starting one. The intent is what the pairing is for and is required: the
+  // side displaying the code decides it for both sides (decision AD). A 404
+  // from `invitation` means no code is on display, which is a state and not a
+  // failure — the caller checks the status.
+  invitation: () => call("GET", "/pairings/invitation"),
+  invite: (intent) => call("POST", "/pairings/invite", { intent }),
+  stopPairing: () => call("POST", "/pairings/stop"),
+
+  // Making a key in the instance's store. Importing one is `ladulas keys
+  // import`: a key file is a file to pick and its passphrase is a secret to
+  // type, and neither belongs in a webview.
+  generateKey: (label, comment) =>
+    call("POST", "/keys", { label, comment: comment || "" }),
   reload: () => call("POST", "/reload"),
 
   // The two things that can be done to a promise already made (decision P):

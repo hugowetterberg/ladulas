@@ -37,6 +37,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/text v0.40.0 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )
 
 tool (

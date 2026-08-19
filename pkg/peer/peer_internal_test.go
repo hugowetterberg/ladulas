@@ -703,7 +703,7 @@ func pair(t *testing.T, approver, requester *instance) {
 
 	// What the approver grants the requester: it may ask, and it does not
 	// approve for us.
-	window, secret, err := approver.node.beginPairing(false, true)
+	window, secret, err := approver.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -718,7 +718,7 @@ func pair(t *testing.T, approver, requester *instance) {
 	defer cancel()
 
 	pending, err := requester.node.PairWith(
-		ctx, approver.address(), code, true, false)
+		ctx, approver.address(), code)
 	if err != nil {
 		t.Fatalf("pair: %v", err)
 	}
@@ -1113,7 +1113,7 @@ func TestWrongPairingCodeIsRefused(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	headless := newInstance(t, "headless")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1130,7 +1130,7 @@ func TestWrongPairingCodeIsRefused(t *testing.T) {
 
 	for range trust.MaxAttempts {
 		_, err := headless.node.PairWith(ctx, desktop.address(),
-			&ladulasv1.PairingCode{Version: 1, Secret: string(wrong)}, true, false)
+			&ladulasv1.PairingCode{Version: 1, Secret: string(wrong)})
 		if err == nil {
 			t.Fatal("a wrong code paired")
 		}
@@ -1143,7 +1143,7 @@ func TestWrongPairingCodeIsRefused(t *testing.T) {
 	// The window is gone, so even the right code no longer works. The person
 	// who was actually pairing displays a new one.
 	_, err = headless.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err == nil {
 		t.Fatal("the window survived too many wrong codes")
 	}
@@ -1164,7 +1164,7 @@ func TestUnpairedIdentityIsRefusedAtTheDoor(t *testing.T) {
 	}
 
 	_, err = stranger.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err == nil {
 		t.Fatal("a stranger reached an instance that was not pairing")
 	}
@@ -1181,7 +1181,7 @@ func TestDeclinedPairingLeavesNoRecord(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	headless := newInstance(t, "headless")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1195,8 +1195,7 @@ func TestDeclinedPairingLeavesNoRecord(t *testing.T) {
 	defer cancel()
 
 	if _, err := headless.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)},
-		true, false); err != nil {
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}); err != nil {
 		t.Fatalf("spend the code: %v", err)
 	}
 
@@ -1217,7 +1216,7 @@ func TestPairingIsRefusedAtTheListeningEnd(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	headless := newInstance(t, "headless")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1230,8 +1229,7 @@ func TestPairingIsRefusedAtTheListeningEnd(t *testing.T) {
 	defer cancel()
 
 	if _, err := headless.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)},
-		true, false); err != nil {
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}); err != nil {
 		t.Fatalf("spend the code: %v", err)
 	}
 
@@ -1281,7 +1279,7 @@ func TestAPairingSurvivesBothUsersTakingTheirTime(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	phone := newInstance(t, "phone")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1295,7 +1293,7 @@ func TestAPairingSurvivesBothUsersTakingTheirTime(t *testing.T) {
 	defer cancel()
 
 	pending, err := phone.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err != nil {
 		t.Fatalf("pair: %v", err)
 	}
@@ -1331,7 +1329,7 @@ func TestAPairingNobodyAnsweredIsStillThereLater(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	phone := newInstance(t, "phone")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1350,7 +1348,7 @@ func TestAPairingNobodyAnsweredIsStillThereLater(t *testing.T) {
 	defer cancel()
 
 	pending, err := phone.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err != nil {
 		t.Fatalf("spend the code: %v", err)
 	}
@@ -1414,7 +1412,7 @@ func TestARaisedPromptDoesNotWriteToWhatItWasGiven(t *testing.T) {
 	desktop := newInstance(t, "desktop")
 	phone := newInstance(t, "phone")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1434,7 +1432,7 @@ func TestARaisedPromptDoesNotWriteToWhatItWasGiven(t *testing.T) {
 	defer cancel()
 
 	pending, err := phone.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err != nil {
 		t.Fatalf("spend the code: %v", err)
 	}
@@ -1463,7 +1461,7 @@ func TestPeerRequestsAreNotForwarded(t *testing.T) {
 	second := newInstance(t, "second")
 
 	// Pair them both ways: each may approve for the other, and each may ask.
-	window, secret, err := second.node.beginPairing(true, true)
+	window, secret, err := second.node.beginPairing(trust.IntentMutual)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1472,8 +1470,7 @@ func TestPeerRequestsAreNotForwarded(t *testing.T) {
 	defer cancel()
 
 	if _, err := first.node.PairWith(ctx, second.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)},
-		true, true); err != nil {
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 
@@ -1577,7 +1574,7 @@ func TestAPairingSessionBelongsToOneIdentity(t *testing.T) {
 	phone := newInstance(t, "phone")
 	stranger := newInstance(t, "stranger")
 
-	window, secret, err := desktop.node.beginPairing(false, true)
+	window, secret, err := desktop.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -1593,7 +1590,7 @@ func TestAPairingSessionBelongsToOneIdentity(t *testing.T) {
 	defer cancel()
 
 	pending, err := phone.node.PairWith(ctx, desktop.address(),
-		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)}, true, false)
+		&ladulasv1.PairingCode{Version: 1, Secret: string(secret)})
 	if err != nil {
 		t.Fatalf("spend the code: %v", err)
 	}

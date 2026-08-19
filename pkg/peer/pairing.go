@@ -20,8 +20,8 @@ import (
 )
 
 // pairingWindow is an open invitation on the listening side: a displayed code,
-// the directions its user chose in advance, and the budget of wrong answers it
-// will tolerate.
+// the intent its user chose in advance, and the budget of wrong answers it will
+// tolerate.
 //
 // One window at a time. Pairing is a thing a person does deliberately at a
 // machine they are sitting at, and a second concurrent window would only make
@@ -31,10 +31,11 @@ import (
 // clock on it: five minutes, single use, five wrong answers (§7). What it
 // produces is a pending pairing, and the pending pairing does not expire.
 type pairingWindow struct {
-	secret     trust.Secret
-	expires    time.Time
-	mayApprove bool
-	mayRequest bool
+	secret  trust.Secret
+	expires time.Time
+	// intent is what this pairing is for, and it settles both sides' records
+	// rather than only this one's (decision AD).
+	intent trust.Intent
 	// arrived carries the session id of the pending pairing a proof produced,
 	// back to whoever is displaying the code.
 	arrived chan string
@@ -114,19 +115,35 @@ func (n *Node) openWindow() *pairingWindow {
 	return n.window
 }
 
+// ErrNoIntent is a pairing code asked for without saying what the pairing is
+// for. It is the caller's omission rather than a failure here, and the surfaces
+// answer it with a usage message (decision AD).
+var ErrNoIntent = errors.New(
+	"peer: say what the pairing is for: an approver for this instance, " +
+		"an instance to approve for, or both")
+
 // beginPairing opens the window and returns the code to display.
-func (n *Node) beginPairing(mayApprove, mayRequest bool) (*pairingWindow, trust.Secret, error) {
+//
+// An intent is required rather than defaulted (decision AD). A code displayed
+// without one would be an invitation to a pairing nobody had decided the shape
+// of, and the shape is the only thing a pairing decides.
+func (n *Node) beginPairing(
+	intent trust.Intent,
+) (*pairingWindow, trust.Secret, error) {
+	if intent == trust.IntentUnspecified {
+		return nil, "", ErrNoIntent
+	}
+
 	secret, err := trust.NewSecret()
 	if err != nil {
 		return nil, "", err
 	}
 
 	window := &pairingWindow{
-		secret:     secret,
-		expires:    time.Now().Add(trust.CodeValidity),
-		mayApprove: mayApprove,
-		mayRequest: mayRequest,
-		arrived:    make(chan string, 1),
+		secret:  secret,
+		expires: time.Now().Add(trust.CodeValidity),
+		intent:  intent,
+		arrived: make(chan string, 1),
 	}
 
 	n.mu.Lock()
@@ -211,10 +228,8 @@ func (s *peerService) Pair(
 		Name:              req.Msg.GetInstanceName(),
 		IdentityPublicKey: peer.PublicKey.Marshal(),
 		Addresses:         req.Msg.GetListenAddresses(),
-		MayApprove:        window.mayApprove,
-		MayRequest:        window.mayRequest,
-		PeerMayApprove:    req.Msg.GetMayApprove(),
-		PeerMayRequest:    req.Msg.GetMayRequest(),
+		MayApprove:        window.intent.PeerMayApprove(),
+		MayRequest:        window.intent.PeerMayRequest(),
 		RemoteAddress:     peer.RemoteAddr,
 		StartedAt:         timestamppb.Now(),
 	}
@@ -225,13 +240,16 @@ func (s *peerService) Pair(
 
 	window.settle(session)
 
+	// The answer carries the intent as this side wrote it down, and the caller
+	// records the mirror of it. That is the whole of how one answer on one
+	// screen settles both records (decision AD).
 	return connect.NewResponse(&ladulasv1.PairResponse{
 		Accepted:          true,
 		SessionId:         session,
 		InstanceName:      s.node.identity.Name(),
 		IdentityPublicKey: ours.Marshal(),
-		MayApprove:        window.mayApprove,
-		MayRequest:        window.mayRequest,
+		MayApprove:        window.intent.PeerMayApprove(),
+		MayRequest:        window.intent.PeerMayRequest(),
 		ListenAddresses:   s.node.Addresses(),
 		Confirmation:      trust.Confirmation(window.secret, ours, peer.PublicKey),
 	}), nil
@@ -341,9 +359,13 @@ func (n *Node) settleAgainst(
 // stops short of the last one — the user saying so themselves — because that
 // answer no longer belongs to this call. What it returns is a pending pairing,
 // written down on both sides.
+//
+// It declares no directions of its own (decision AD). What the pairing is for
+// was chosen on the screen the code is on, and this side learns it from the
+// answer and records the mirror — so the user here confirms a pairing whose
+// shape is already on the card, rather than choosing half of one blind.
 func (n *Node) PairWith(
 	ctx context.Context, address string, code *ladulasv1.PairingCode,
-	mayApprove, mayRequest bool,
 ) (*storepb.PendingPairing, error) {
 	secret, err := trust.ParseSecret(code.GetSecret())
 	if err != nil {
@@ -392,8 +414,6 @@ func (n *Node) PairWith(
 		Proof:             trust.Proof(secret, peer.PublicKey, ours),
 		InstanceName:      n.identity.Name(),
 		IdentityPublicKey: ours.Marshal(),
-		MayApprove:        mayApprove,
-		MayRequest:        mayRequest,
 		ListenAddresses:   n.Addresses(),
 	}))
 	if err != nil {
@@ -431,16 +451,25 @@ func (n *Node) PairWith(
 			"peer: the other instance named no pairing session")
 	}
 
+	// The intent as the other side wrote it down, mirrored into what this side
+	// writes down. A pairing that says the peer may do nothing is one whose
+	// shape was never chosen, and there is nothing to confirm about it.
+	intent := trust.IntentOf(
+		resp.Msg.GetMayApprove(), resp.Msg.GetMayRequest()).Mirror()
+
+	if intent == trust.IntentUnspecified {
+		return nil, errors.New(
+			"peer: the other instance did not say what the pairing is for")
+	}
+
 	pending := &storepb.PendingPairing{
 		SessionId:         resp.Msg.GetSessionId(),
 		Fingerprint:       peer.Fingerprint,
 		Name:              resp.Msg.GetInstanceName(),
 		IdentityPublicKey: peer.PublicKey.Marshal(),
 		Addresses:         peerAddresses(resp.Msg.GetListenAddresses(), address),
-		MayApprove:        mayApprove,
-		MayRequest:        mayRequest,
-		PeerMayApprove:    resp.Msg.GetMayApprove(),
-		PeerMayRequest:    resp.Msg.GetMayRequest(),
+		MayApprove:        intent.PeerMayApprove(),
+		MayRequest:        intent.PeerMayRequest(),
 		WeDialled:         true,
 		KeyFromCode:       expected != nil,
 		RemoteAddress:     peer.RemoteAddr,

@@ -35,7 +35,7 @@ func scanQR(t *testing.T, requester, phone *instance) *storepb.TrustRecord {
 	t.Helper()
 
 	// What the desktop grants: the phone approves for it, and does not ask it.
-	window, secret, err := requester.node.beginPairing(true, false)
+	window, secret, err := requester.node.beginPairing(trust.IntentPeerApproves)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
@@ -61,7 +61,7 @@ func scanQR(t *testing.T, requester, phone *instance) *storepb.TrustRecord {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, err := phone.node.PairWith(ctx, "", scanned, false, true); err != nil {
+	if _, err := phone.node.PairWith(ctx, "", scanned); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 

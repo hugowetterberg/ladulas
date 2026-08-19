@@ -776,12 +776,13 @@ type PendingPairing struct {
 	Addresses []string `protobuf:"bytes,5,rep,name=addresses,proto3" json:"addresses,omitempty"`
 	// What this side has decided to grant the peer if its user agrees. This is
 	// the whole of what completing the pairing will write down.
+	//
+	// Both sides derive it from one declaration, made by whoever displayed the
+	// code (decision AD), so what the peer will write down is the mirror of this
+	// and needs no field of its own: a peer that may ask us to approve is a peer
+	// we approve for.
 	MayApprove bool `protobuf:"varint,6,opt,name=may_approve,json=mayApprove,proto3" json:"may_approve,omitempty"`
 	MayRequest bool `protobuf:"varint,7,opt,name=may_request,json=mayRequest,proto3" json:"may_request,omitempty"`
-	// What the peer said it grants us. Shown on the prompt, believed by nobody,
-	// and never written into a record.
-	PeerMayApprove bool `protobuf:"varint,8,opt,name=peer_may_approve,json=peerMayApprove,proto3" json:"peer_may_approve,omitempty"`
-	PeerMayRequest bool `protobuf:"varint,9,opt,name=peer_may_request,json=peerMayRequest,proto3" json:"peer_may_request,omitempty"`
 	// Whether this side dialled the code or displayed it.
 	WeDialled bool `protobuf:"varint,10,opt,name=we_dialled,json=weDialled,proto3" json:"we_dialled,omitempty"`
 	// Whether the peer's identity arrived inside the pairing code, which makes
@@ -877,20 +878,6 @@ func (x *PendingPairing) GetMayApprove() bool {
 func (x *PendingPairing) GetMayRequest() bool {
 	if x != nil {
 		return x.MayRequest
-	}
-	return false
-}
-
-func (x *PendingPairing) GetPeerMayApprove() bool {
-	if x != nil {
-		return x.PeerMayApprove
-	}
-	return false
-}
-
-func (x *PendingPairing) GetPeerMayRequest() bool {
-	if x != nil {
-		return x.PeerMayRequest
 	}
 	return false
 }
@@ -1612,7 +1599,7 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"\x12pairing_session_id\x18\f \x01(\tR\x10pairingSessionId\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdb\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb7\x05\n" +
 	"\x0ePendingPairing\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12 \n" +
@@ -1623,9 +1610,7 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"\vmay_approve\x18\x06 \x01(\bR\n" +
 	"mayApprove\x12\x1f\n" +
 	"\vmay_request\x18\a \x01(\bR\n" +
-	"mayRequest\x12(\n" +
-	"\x10peer_may_approve\x18\b \x01(\bR\x0epeerMayApprove\x12(\n" +
-	"\x10peer_may_request\x18\t \x01(\bR\x0epeerMayRequest\x12\x1d\n" +
+	"mayRequest\x12\x1d\n" +
 	"\n" +
 	"we_dialled\x18\n" +
 	" \x01(\bR\tweDialled\x12\"\n" +
@@ -1638,7 +1623,8 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"started_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vanswered_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"answeredAt\x126\n" +
-	"\x17confirmation_request_id\x18\x11 \x01(\tR\x15confirmationRequestId\"\x9c\x01\n" +
+	"\x17confirmation_request_id\x18\x11 \x01(\tR\x15confirmationRequestIdJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"R\x10peer_may_approveR\x10peer_may_request\"\x9c\x01\n" +
 	"\vBorrowedKey\x12)\n" +
 	"\x10peer_fingerprint\x18\x01 \x01(\tR\x0fpeerFingerprint\x12$\n" +
 	"\x03key\x18\x02 \x01(\v2\x12.ladulas.v1.KeyRefR\x03key\x12<\n" +

@@ -767,10 +767,40 @@ message RevokeGrantResponse {
   string detail = 3;
 }
 
+// PairingIntent is what a pairing is for, declared by the side that displays
+// the code and settling both records (decision AD).
+//
+// It used to be two independent declarations, one per side, and a pairing whose
+// two halves did not agree was the ordinary result rather than an error: the
+// side that granted "may approve for me" to an instance with nobody at it had
+// paired with a veto (`bugs/`, decision AC). One person answers one question
+// now, on the screen the code is on, and the other side records the mirror of
+// it.
+//
+// The names are from the point of view of that screen: "peer" is the machine
+// that will join, and the intents are the three things somebody sitting at a
+// machine wants — an approver, somebody to approve for, or both.
+enum PairingIntent {
+  PAIRING_INTENT_UNSPECIFIED = 0;
+  // The joining machine approves for this one. It is asked about this
+  // machine's signatures, and gets nothing to ask about.
+  PAIRING_INTENT_PEER_APPROVES = 1;
+  // This machine approves for the joining one, which is the same pairing seen
+  // from the other end: a laptop displaying the code so a build box can ask it.
+  PAIRING_INTENT_PEER_REQUESTS = 2;
+  // Both directions.
+  PAIRING_INTENT_MUTUAL = 3;
+}
+
 message BeginPairingRequest {
-  // What the arriving peer will be granted, subject to the confirmation.
-  bool peer_may_approve = 1;
-  bool peer_may_request = 2;
+  // What the pairing is for. Required: a pairing with no direction is a peer
+  // that can do nothing, and one that guessed is how an instance ends up
+  // trusting a machine to approve for it that has nobody to ask.
+  PairingIntent intent = 3;
+
+  // 1 and 2 were the two direction flags this side declared on its own.
+  reserved 1, 2;
+  reserved "peer_may_approve", "peer_may_request";
 }
 
 message PairWithPeerRequest {
@@ -780,8 +810,12 @@ message PairWithPeerRequest {
   // The code as it was displayed: either the short typed secret or the full
   // string a QR would carry.
   string code = 2;
-  bool peer_may_approve = 3;
-  bool peer_may_request = 4;
+
+  // 3 and 4 were this side's own directions. The code's owner declares them
+  // for both sides (decision AD), and this side learns what it agreed to on
+  // the confirmation card rather than choosing it in advance.
+  reserved 3, 4;
+  reserved "peer_may_approve", "peer_may_request";
 }
 
 // PairingProgressKind is where a pairing exchange has got to.
@@ -817,6 +851,9 @@ message PairingProgress {
   // Set on DONE.
   PeerStatus peer = 7;
   string message = 8;
+  // What the pairing on offer is for, on CODE, so that the surface displaying
+  // the code can go on saying what somebody chose (decision AD).
+  PairingIntent intent = 9;
 }
 
 message AnswerPairingRequest {

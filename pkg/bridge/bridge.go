@@ -30,6 +30,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/avatar"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 	"github.com/hugowetterberg/ladulas/viewer"
 )
 
@@ -107,6 +108,57 @@ type Location struct {
 	Path  string
 }
 
+// Invitation is a pairing code on display: what to type, what a camera reads,
+// where to dial, and what the pairing it opens is for (§7).
+//
+// It is the code half of a pairing and the only half with a clock on it —
+// `trust.CodeValidity`, single use, five wrong answers — which is why Expires
+// is here and why nothing that draws one may cache it.
+type Invitation struct {
+	// Code is the ten characters somebody types, in the two groups they are
+	// displayed in.
+	Code string
+	// FullCode is the string a QR carries: the same secret plus the identity
+	// key and the addresses, so a camera pins before it connects.
+	FullCode string
+	// Addresses are where the other machine dials.
+	Addresses []string
+	Expires   time.Time
+	// Intent is what the pairing this opens will be for, on both sides
+	// (decision AD).
+	Intent trust.Intent
+}
+
+// Pairing is the half of §7 that a window has to be able to drive: putting a
+// code on screen, saying what the pairing it opens is for, and calling it off.
+//
+// Answering one is not here, because answering one is a card and a card is a
+// request like any other. What is here is the part that has no card — the
+// invitation somebody is looking at while they walk to the other machine.
+//
+// It is an interface rather than three function fields for the reason Lock is
+// one: a host either drives pairing or does not, and a host that half does is
+// not a state worth being able to express.
+type Pairing interface {
+	// Invite opens a window and returns the code to display. An intent is
+	// required (decision AD); ErrNoIntent is what a host reports when it is
+	// missing, and the surfaces answer that with the question rather than an
+	// error.
+	Invite(ctx context.Context, intent trust.Intent) (Invitation, error)
+	// Invitation is the code on display, and whether there is one. A window
+	// reopened while a code is still live shows that code rather than spending
+	// another one.
+	Invitation() (Invitation, bool)
+	// Stop takes the code off display. Calling it with nothing on display is
+	// not an error: it is the state the caller wanted.
+	Stop()
+}
+
+// ErrNoIntent is a pairing asked for without saying what it is for. It is the
+// caller's omission rather than a failure, and the surfaces put the question
+// back rather than reporting that something went wrong (decision AD).
+var ErrNoIntent = errors.New("bridge: say what the pairing is for")
+
 // Delegation is one standing permission this instance holds and applies itself
 // (decision P), as a host reports it.
 //
@@ -135,6 +187,16 @@ type Options struct {
 	Locations []Location
 	// Keys lists the keys the instance holds. Optional.
 	Keys func() []*ladulasv1.KeyRef
+	// GenerateKey makes a new one. Optional and separate from Keys: a host can
+	// show what an instance holds without being a place a key is made.
+	//
+	// It is generation and not import. A key file to import is a file to pick,
+	// and the passphrase that protects it is one more secret to type into a
+	// webview than this window has any business asking for — `ladulas keys
+	// import` is where that belongs, and it says so on the screen.
+	GenerateKey func(
+		ctx context.Context, label, comment string,
+	) (*ladulasv1.KeyRef, error)
 	// Borrowed lists the keys paired instances offer, reachable or not (§10,
 	// decision N). Optional: an instance with peering off borrows nothing.
 	Borrowed func() []*ladulasv1.BorrowedKeyStatus
@@ -169,6 +231,13 @@ type Options struct {
 	// Peers lists the paired instances and whether they can be reached.
 	// Optional: an instance with peering off has none to list.
 	Peers func() []PeerView
+	// RevokePeer forgets one and drops the connection it is holding.
+	// Optional, and it is deliberately the one destructive thing on the peer
+	// screen: this side alone decides and the peer is never asked, so there is
+	// nothing to fail and nothing to wait for. What it costs is everything that
+	// pairing bought — the keys it lends, the promises it holds, the route that
+	// wakes it — which is why the surface asks twice.
+	RevokePeer func(ctx context.Context, peer string) error
 	// Pairings lists the pairings under way, and Withdraw calls one off (§7).
 	// Optional together: a host without them shows no pairings section, which
 	// is right for an instance with no peer channel.
@@ -178,6 +247,10 @@ type Options struct {
 	// the pairing this side has already agreed to and the other side has not.
 	Pairings func() []PairingSummaryView
 	Withdraw func(session string) error
+	// Pairing is how a window starts one (§7, decision AD). Optional: a host
+	// without it lists what is under way and cannot open a new one, which is
+	// what every host did until there was a screen for it.
+	Pairing Pairing
 	// Projects is the documentation paired instances have published here (§6).
 	// Optional.
 	Projects Projects
@@ -709,6 +782,18 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/requests/{id}/answer", s.handleAnswer)
 	mux.HandleFunc("POST /api/v1/requests/{id}/diff", s.handleRequestDiff)
 	mux.HandleFunc("GET /api/v1/activity/{id}", s.handleActivity)
+	// The peer is named in the body rather than in the path, for the reason the
+	// browsing calls put it in the query: a fingerprint carries slashes.
+	mux.HandleFunc("POST /api/v1/peers/revoke", s.handleRevokePeer)
+	mux.HandleFunc("GET /api/v1/pairings/invitation", s.handleInvitation)
+	mux.HandleFunc("POST /api/v1/pairings/invite", s.handleInvite)
+	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
+	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
+	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
+	// {session} is last of the /pairings/ routes by convention rather than by
+	// necessity — ServeMux prefers the more specific pattern — but a reader
+	// checking that "invite" cannot be read as a session id should not have to
+	// know that.
 	mux.HandleFunc("POST /api/v1/pairings/{session}/withdraw", s.handleWithdraw)
 	mux.HandleFunc("POST /api/v1/grants/{id}/revoke", s.handleRevokeGrant)
 	mux.HandleFunc("POST /api/v1/grants/{id}/extend", s.handleExtendGrant)
@@ -966,6 +1051,168 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleRevokePeer forgets a paired machine.
+//
+// It is the one thing on the peer screen that takes something away, and it
+// takes away everything at once: the direction, the keys the pairing lent, the
+// promises made under it and the connection it is holding. The window asks
+// twice before it gets here (§12) — nothing else does, because nothing else on
+// these screens cannot be undone by doing it again.
+func (s *Session) handleRevokePeer(w http.ResponseWriter, r *http.Request) {
+	if s.opts.RevokePeer == nil {
+		writeError(w, http.StatusNotImplemented, "this host cannot revoke a peer")
+
+		return
+	}
+
+	var body struct {
+		Peer string `json:"peer"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Peer) == "" {
+		writeError(w, http.StatusBadRequest, "no machine to forget")
+
+		return
+	}
+
+	if err := s.opts.RevokePeer(r.Context(), body.Peer); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleInvitation is the code on display, if there is one.
+//
+// A window that was closed and reopened while a code is still live gets that
+// code back rather than spending a second one: a code is single use and five
+// minutes long, and two on two screens is one somebody will type the wrong one
+// of (§7).
+func (s *Session) handleInvitation(w http.ResponseWriter, _ *http.Request) {
+	if s.opts.Pairing == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot start a pairing")
+
+		return
+	}
+
+	invitation, ok := s.opts.Pairing.Invitation()
+	if !ok {
+		writeError(w, http.StatusNotFound, "no pairing code is on display")
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, invitationView(invitation))
+}
+
+// handleInvite puts a code on screen.
+func (s *Session) handleInvite(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Pairing == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot start a pairing")
+
+		return
+	}
+
+	var body struct {
+		Intent string `json:"intent"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	intent, err := trust.ParseIntent(body.Intent)
+	if err != nil {
+		// The question again, not a complaint about the answer: what a pairing
+		// is for is the thing a pairing decides, and a surface that got here
+		// without one has not asked it (decision AD).
+		writeError(w, http.StatusBadRequest, ErrNoIntent.Error())
+
+		return
+	}
+
+	invitation, err := s.opts.Pairing.Invite(r.Context(), intent)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, ErrNoIntent) {
+			status = http.StatusBadRequest
+		}
+
+		writeError(w, status, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, invitationView(invitation))
+}
+
+// handleStopInviting takes the code off display, which is what leaving the
+// screen means: an invitation nobody is looking at is one nobody meant to leave
+// open.
+func (s *Session) handleStopInviting(w http.ResponseWriter, _ *http.Request) {
+	if s.opts.Pairing == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot start a pairing")
+
+		return
+	}
+
+	s.opts.Pairing.Stop()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGenerateKey makes a key in the instance's store.
+func (s *Session) handleGenerateKey(w http.ResponseWriter, r *http.Request) {
+	if s.opts.GenerateKey == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot generate a key")
+
+		return
+	}
+
+	var body struct {
+		Label   string `json:"label"`
+		Comment string `json:"comment"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	key, err := s.opts.GenerateKey(
+		r.Context(), strings.TrimSpace(body.Label), strings.TrimSpace(body.Comment))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, KeyView{
+		Label:       key.GetLabel(),
+		Fingerprint: key.GetFingerprint(),
+		Algorithm:   key.GetAlgorithm(),
+		Comment:     key.GetComment(),
+	})
 }
 
 // handleWithdraw calls a pairing off from the viewer.

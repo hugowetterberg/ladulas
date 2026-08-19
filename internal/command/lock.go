@@ -223,7 +223,7 @@ func keyringCommand() *cli.Command {
 		Name:  "keyring",
 		Usage: "unlock this instance at login, using the platform keychain",
 		Description: "Ladulås wraps the store with a passphrase, and asks for " +
-			"it once per boot (decision I). Enrolling the platform keychain " +
+			"it once per boot. Enrolling the platform keychain " +
 			"puts a second copy of the store key there, so the daemon starts " +
 			"unsealed with nothing typed — and so that any process running as " +
 			"this user can read the key out of the keychain with one call. " +

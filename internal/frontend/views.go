@@ -340,6 +340,24 @@ func (f *Frontend) withdrawPairing(session string) error {
 // not a failure to withdraw.
 const pairingWithdrawTimeout = 15 * time.Second
 
+// revokePeer forgets a paired machine and drops what it is holding.
+//
+// Unlike withdrawing a pairing, nothing here waits on the peer: revoking is
+// unilateral and the peer is not asked, so this is a short local call like the
+// rest of them (§7).
+func (f *Frontend) revokePeer(ctx context.Context, peer string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	_, err := f.client.RevokePeer(ctx,
+		connect.NewRequest(&ladulasv1.RevokePeerRequest{Peer: peer}))
+	if err != nil {
+		return fmt.Errorf("revoke the pairing: %w", err)
+	}
+
+	return nil
+}
+
 // fetchDiff asks the daemon to ask the requester (§5). The request is named by
 // its identifier: the connection to whoever asked is the daemon's, and this
 // process has never had one.

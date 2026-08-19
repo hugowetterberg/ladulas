@@ -2,10 +2,16 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/hugowetterberg/ladulas/internal/frontend"
@@ -13,6 +19,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/bridge"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // The desktop application answering over the control socket (decision Z).
@@ -333,5 +340,158 @@ func TestAnUnansweredRequestIsWithdrawnFromTheScreen(t *testing.T) {
 
 	if len(host.gone()) == 0 {
 		t.Error("the card was left on the screen after the request ran out")
+	}
+}
+
+// TestADesktopStartsAPairingAndAnswersIt is the whole of the window's half of
+// §7, end to end: the intent is chosen here, the code goes out, another machine
+// uses it, and the card that comes back is an ordinary approval card.
+//
+// The thing it would be easy to get wrong and impossible to notice in a unit
+// test is that displaying a code is a *stream*: the pairing window at the
+// daemon lives for exactly as long as the front end holds it open. A front end
+// that made the call and returned would hand somebody a code that had already
+// stopped working, and this test would be the only thing that said so.
+func TestADesktopStartsAPairingAndAnswersIt(t *testing.T) {
+	desk := startPeerInstance(t, "desktop")
+	joiner := startPeerInstance(t, "laptop")
+
+	host := newScreen(&approval.Answer{
+		Decision: ladulasv1.Decision_DECISION_APPROVE,
+		Reason:   "confirmed at the desktop",
+	})
+
+	front := attach(t, desk.control, host)
+
+	window := httptest.NewServer(front.Session().Handler())
+	t.Cleanup(window.Close)
+
+	view := invite(t, window, `{"intent":"approver"}`)
+
+	if view.Code == "" || view.FullCode == "" || view.QR == "" {
+		t.Fatalf("the invitation is missing a way in: %+v", view)
+	}
+
+	// The other machine reads what the QR carries, which is the code with this
+	// instance's identity and addresses in it.
+	code, err := trust.DecodeCode(view.FullCode)
+	if err != nil {
+		t.Fatalf("decode the code the window displayed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pending, err := joiner.app.Peer().PairWith(ctx, "", code)
+	if err != nil {
+		t.Fatalf("use the code the window displayed: %v", err)
+	}
+
+	// It declared no direction of its own and wrote down the mirror of what was
+	// chosen here: the desktop's approver becomes, on that side, a machine it
+	// may ask.
+	if pending.GetMayApprove() || !pending.GetMayRequest() {
+		t.Errorf("the joining side recorded approve=%v request=%v",
+			pending.GetMayApprove(), pending.GetMayRequest())
+	}
+
+	// Both users answer: the joining side over its own control socket, and the
+	// desktop by being shown a card, which is what the screen does with
+	// anything it is presented.
+	answerPending(t, ctx, joiner, desk.app.Vault().Identity().Fingerprint())
+
+	waitFor(t, "the desktop pairs", func() bool {
+		_, ok := desk.app.Vault().Peer(
+			joiner.app.Vault().Identity().Fingerprint())
+
+		return ok
+	})
+
+	record, _ := desk.app.Vault().Peer(
+		joiner.app.Vault().Identity().Fingerprint())
+
+	if !record.GetMayApprove() || record.GetMayRequest() {
+		t.Errorf("the desktop recorded approve=%v request=%v, want the intent "+
+			"it chose", record.GetMayApprove(), record.GetMayRequest())
+	}
+
+	// And the card it was shown was a one-shot: a pairing carries no offer to
+	// approve anything for a while, because there is nothing a promise about it
+	// could ever cover.
+	var confirmed *bridge.PendingRequest
+
+	for _, card := range host.cards() {
+		if card.Request.Msg.GetKind() ==
+			ladulasv1.RequestKind_REQUEST_KIND_PAIRING {
+			confirmed = card
+		}
+	}
+
+	if confirmed == nil {
+		t.Fatal("the desktop was never shown the pairing")
+	}
+
+	if confirmed.Request.GrantMaxTTL != 0 ||
+		len(confirmed.Request.GrantTTLs) != 0 {
+		t.Errorf("the pairing card offered a promise: %s",
+			confirmed.Request.GrantMaxTTL)
+	}
+}
+
+func invite(
+	t *testing.T, window *httptest.Server, body string,
+) bridge.InvitationView {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		window.URL+"/api/v1/pairings/invite", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := window.Client().Do(req)
+	if err != nil {
+		t.Fatalf("ask the window for a code: %v", err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp.Body)
+
+		t.Fatalf("the window would not display a code: %d %s",
+			resp.StatusCode, out)
+	}
+
+	var view bridge.InvitationView
+
+	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
+		t.Fatalf("read the invitation: %v", err)
+	}
+
+	return view
+}
+
+// answerPending says yes on the side that has no screen in this test, over the
+// same control call `ladulas pairings approve` makes.
+func answerPending(
+	t *testing.T, ctx context.Context, box *peerInstance, peer string,
+) {
+	t.Helper()
+
+	client := localapi.NewClient(box.control)
+
+	_, err := client.Control().AnswerPendingPairing(ctx,
+		connect.NewRequest(&ladulasv1.AnswerPendingPairingRequest{
+			Pairing:  peer,
+			Accepted: true,
+			Reason:   "answered in a test",
+		}))
+	if err != nil {
+		t.Fatalf("answer the pairing on %s: %v", box.name, err)
 	}
 }

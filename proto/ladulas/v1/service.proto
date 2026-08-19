@@ -592,15 +592,15 @@ message PairRequest {
   // connection it arrived on is a bug or an attack, and either way not
   // something to pair with.
   bytes identity_public_key = 3;
-  // What the caller grants the listener: whether the listener may approve for
-  // the caller, and whether it may ask the caller to approve. Each side
-  // declares its own half; this is the caller telling the listener what it has
-  // written down, so the listener's prompt can say what the pairing means in
-  // both directions.
-  bool may_approve = 4;
-  bool may_request = 5;
   // Addresses the caller listens on, so the listener can dial back later.
   repeated string listen_addresses = 6;
+
+  // 4 and 5 were what the caller granted the listener, each side declaring its
+  // own half. The side displaying the code declares the whole of it now
+  // (decision AD): the caller has nothing to say here, because it has not been
+  // told what the pairing is for until the answer comes back.
+  reserved 4, 5;
+  reserved "may_approve", "may_request";
 }
 
 message PairResponse {
@@ -612,7 +612,11 @@ message PairResponse {
   string session_id = 2;
   string instance_name = 3;
   bytes identity_public_key = 4;
-  // What the listener granted the caller, from the listener's own prompt.
+  // What the listener has written down about the caller, which is the pairing
+  // intent its user chose before the code was displayed (decision AD). The
+  // caller records the mirror of it — a peer that may ask us to approve is a
+  // peer we approve for — so both halves of the pairing come from one answer
+  // given on one screen.
   bool may_approve = 5;
   bool may_request = 6;
   repeated string listen_addresses = 7;

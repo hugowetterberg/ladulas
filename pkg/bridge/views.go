@@ -2,11 +2,13 @@ package bridge
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // The view types are the bridge contract. They are hand-written rather than
@@ -252,11 +254,17 @@ type OpaqueView struct {
 // of fingerprints and their users agree they match; a card showing only the
 // other side's would leave nothing to compare it against (§7).
 type PairingView struct {
-	Name             string `json:"name,omitempty"`
-	Fingerprint      string `json:"fingerprint,omitempty"`
-	Address          string `json:"address,omitempty"`
-	MayApprove       bool   `json:"mayApprove,omitempty"`
-	MayRequest       bool   `json:"mayRequest,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Address     string `json:"address,omitempty"`
+	MayApprove  bool   `json:"mayApprove,omitempty"`
+	MayRequest  bool   `json:"mayRequest,omitempty"`
+	// Direction is those two flags as the sentence every surface words them
+	// with (trust.Describe), because what a pairing is for is one decision
+	// somebody made on one screen and not two checkboxes to read off
+	// (decision AD). It is rendered here for the reason PeerView's is: a card
+	// that worded it itself would be a second wording to keep in step.
+	Direction        string `json:"direction,omitempty"`
 	LocalName        string `json:"localName,omitempty"`
 	LocalFingerprint string `json:"localFingerprint,omitempty"`
 	InitiatedLocally bool   `json:"initiatedLocally,omitempty"`
@@ -299,6 +307,67 @@ type PeerView struct {
 	// wants a countdown has State for that, and a screen that wants to know
 	// whether a phone has been near this machine today wants the clock.
 	LastSeen string `json:"lastSeen,omitempty"`
+}
+
+// InvitationView is a pairing code as a screen shows it (§7, decision AD).
+//
+// The three ways in are all here because they are one invitation seen by three
+// kinds of machine: a terminal somewhere types the command, a window somewhere
+// else pastes the full code, and a phone points a camera at the QR. Every one
+// of them carries the same secret, and which is easiest depends on what the
+// person is holding rather than on anything this instance knows.
+type InvitationView struct {
+	// Code is what somebody types, in the two groups it is displayed in.
+	Code string `json:"code"`
+	// FullCode is the string behind the QR, and the one to paste into another
+	// window. It carries the identity key, so a side that has it pins before
+	// it connects and has nothing left to compare by hand.
+	FullCode string `json:"fullCode,omitempty"`
+	// QR is where to fetch the picture of FullCode. It is a URL rather than
+	// markup because the bundle builds every node itself and injects none.
+	QR        string   `json:"qr,omitempty"`
+	Addresses []string `json:"addresses,omitempty"`
+	// ExpiresAt is when the code stops working, for a countdown. The pairing it
+	// opens has no clock on it at all (decision M) — this is the other half.
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	// Intent is the word, for a surface that shows which of the three was
+	// chosen, and Direction is the sentence it means.
+	Intent    string `json:"intent"`
+	Direction string `json:"direction"`
+	// Join is the command line to run on the other machine, ready to be copied
+	// — the address that is most likely to work and the code in it.
+	Join string `json:"join,omitempty"`
+}
+
+func invitationView(invitation Invitation) InvitationView {
+	view := InvitationView{
+		Code:      invitation.Code,
+		FullCode:  invitation.FullCode,
+		Addresses: invitation.Addresses,
+		Intent:    invitation.Intent.String(),
+		Direction: invitation.Intent.Describe(),
+	}
+
+	if invitation.FullCode != "" {
+		view.QR = "/api/v1/pairings/qr?code=" +
+			url.QueryEscape(invitation.FullCode)
+	}
+
+	if !invitation.Expires.IsZero() {
+		view.ExpiresAt = invitation.Expires.Format(time.RFC3339)
+	}
+
+	// The first address is the one the instance itself puts first, which is the
+	// one it thinks is most likely to be reachable. A person with a machine
+	// this does not suit has the whole list beside it.
+	address := "<host:port>"
+	if len(invitation.Addresses) > 0 {
+		address = invitation.Addresses[0]
+	}
+
+	view.Join = fmt.Sprintf("ladulas pair %s --code %s", address, invitation.Code)
+
+	return view
 }
 
 // PairingSummaryView is a pairing under way, in the status pane.
@@ -782,11 +851,13 @@ func attachOperation(view *RequestView, msg *ladulasv1.ApprovalRequest) {
 		pairing := msg.GetPairing()
 
 		view.Pairing = &PairingView{
-			Name:             pairing.GetPeerName(),
-			Fingerprint:      pairing.GetPeerFingerprint(),
-			Address:          pairing.GetRemoteAddress(),
-			MayApprove:       pairing.GetPeerMayApprove(),
-			MayRequest:       pairing.GetPeerMayRequest(),
+			Name:        pairing.GetPeerName(),
+			Fingerprint: pairing.GetPeerFingerprint(),
+			Address:     pairing.GetRemoteAddress(),
+			MayApprove:  pairing.GetPeerMayApprove(),
+			MayRequest:  pairing.GetPeerMayRequest(),
+			Direction: trust.Describe(
+				pairing.GetPeerMayApprove(), pairing.GetPeerMayRequest()),
 			LocalName:        pairing.GetLocalName(),
 			LocalFingerprint: pairing.GetLocalFingerprint(),
 			InitiatedLocally: pairing.GetInitiatedLocally(),

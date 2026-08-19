@@ -274,12 +274,18 @@ type listening struct {
 	stdin io.WriteCloser
 	out   *lockedBuffer
 	done  chan struct{}
+	// printed closes once the whole block the command prints around the code
+	// has arrived. The code is on the first line and everything a test wants to
+	// read about it — the address, the clock, what the pairing is for — comes
+	// after, so a test that read the output the moment it had the code was
+	// reading a block that was still being written.
+	printed chan struct{}
 }
 
-func startListening(t *testing.T, box *pairingBox, role string) *listening {
+func startListening(t *testing.T, box *pairingBox, intent string) *listening {
 	t.Helper()
 
-	cmd := box.command("pair", "--listen", "--role", role)
+	cmd := box.command("pair", "--listen", "--intent", intent)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -292,11 +298,12 @@ func startListening(t *testing.T, box *pairingBox, role string) *listening {
 	}
 
 	session := &listening{
-		t:     t,
-		cmd:   cmd,
-		stdin: stdin,
-		out:   &lockedBuffer{},
-		done:  make(chan struct{}),
+		t:       t,
+		cmd:     cmd,
+		stdin:   stdin,
+		out:     &lockedBuffer{},
+		done:    make(chan struct{}),
+		printed: make(chan struct{}),
 	}
 
 	cmd.Stderr = session.out
@@ -310,6 +317,10 @@ func startListening(t *testing.T, box *pairingBox, role string) *listening {
 	go func() {
 		defer close(session.done)
 
+		// Closed whether or not the last line ever arrives, so that a command
+		// killed mid-block leaves nothing waiting on it.
+		defer session.finishedPrinting()
+
 		scanner := bufio.NewScanner(stdout)
 
 		for scanner.Scan() {
@@ -320,6 +331,12 @@ func startListening(t *testing.T, box *pairingBox, role string) *listening {
 
 			if match := codePattern.FindStringSubmatch(scanner.Text()); match != nil {
 				codes <- match[1]
+			}
+
+			// The last line of the block, and the command's way of saying it
+			// has nothing left to say until somebody arrives.
+			if strings.Contains(scanner.Text(), "Waiting") {
+				session.finishedPrinting()
 			}
 		}
 
@@ -339,9 +356,26 @@ func startListening(t *testing.T, box *pairingBox, role string) *listening {
 		t.Fatalf("the listening side printed no pairing code\n%s", session.text())
 	}
 
+	select {
+	case <-session.printed:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the listening side stopped part way through its code:\n%s",
+			session.text())
+	}
+
 	t.Cleanup(session.kill)
 
 	return session
+}
+
+// finishedPrinting is idempotent: the block ends either by saying so or by the
+// command going away.
+func (l *listening) finishedPrinting() {
+	select {
+	case <-l.printed:
+	default:
+		close(l.printed)
+	}
 }
 
 func (l *listening) text() string {
@@ -373,22 +407,22 @@ type dialling struct {
 }
 
 func startDialling(
-	t *testing.T, box *pairingBox, address, code, role string,
+	t *testing.T, box *pairingBox, address, code string,
 ) *dialling {
 	t.Helper()
 
 	return dial(t, box, box.command(
-		"pair", address, "--code", code, "--role", role, "--yes"))
+		"pair", address, "--code", code, "--yes"))
 }
 
 // startDiallingUnanswered spends the code and then shows a confirmation nobody
 // answers, which is the other half of a pairing left on two screens.
 func startDiallingUnanswered(
-	t *testing.T, box *pairingBox, address, code, role string,
+	t *testing.T, box *pairingBox, address, code string,
 ) *dialling {
 	t.Helper()
 
-	cmd := box.command("pair", address, "--code", code, "--role", role)
+	cmd := box.command("pair", address, "--code", code)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -545,6 +579,118 @@ func requirePairedBothWays(t *testing.T, first, second *pairingBox) {
 	waitNoPairings(t, first, second)
 }
 
+// TestThePairingIntentSettlesBothSides is decision AD, end to end.
+//
+// One person answers one question, on the machine displaying the code, and both
+// records come out of it. The dialling side is given no flag at all — the whole
+// failure this replaces is that it used to have one of its own, so a pairing's
+// two halves could say different things and routinely did: granting "may
+// approve for me" to a machine with nobody at it is a pairing that vetoes every
+// request rather than answering one (decision AC).
+func TestThePairingIntentSettlesBothSides(t *testing.T) {
+	cli := buildCLI(t)
+
+	// What the side displaying the code writes down about the side that joins.
+	// The other side's record is the mirror, which is the property being
+	// checked rather than a second thing to configure.
+	for _, intent := range []struct {
+		word       string
+		mayApprove bool
+		mayRequest bool
+	}{
+		{word: "approver", mayApprove: true},
+		{word: "requester", mayRequest: true},
+		{word: "mutual", mayApprove: true, mayRequest: true},
+	} {
+		t.Run(intent.word, func(t *testing.T) {
+			desk := startPairingBox(t, cli, "desk")
+			phone := startPairingBox(t, cli, "phone")
+
+			listen := startListening(t, desk, intent.word)
+
+			// The code says what somebody chose, so that the person who typed
+			// it can see it is the pairing they meant before anybody else does.
+			if !strings.Contains(listen.text(), "The machine that joins ") {
+				t.Errorf("the displayed code does not say what the pairing "+
+					"is for:\n%s", listen.text())
+			}
+
+			dial := startDialling(t, phone, desk.address, listen.code)
+
+			waitPairing(t, desk, anyPairing)
+			waitPairing(t, phone, answeredHere)
+
+			listen.kill()
+			waitPairing(t, desk, unanswered)
+
+			desk.mustRun("pairings", "approve", phone.fingerprint())
+			requirePairedBothWays(t, desk, phone)
+
+			here, ok := desk.instance().Vault().Peer(phone.fingerprint())
+			if !ok {
+				t.Fatal("the desk kept no record")
+			}
+
+			if here.GetMayApprove() != intent.mayApprove ||
+				here.GetMayRequest() != intent.mayRequest {
+				t.Errorf("the desk recorded approve=%v request=%v, want %v and %v",
+					here.GetMayApprove(), here.GetMayRequest(),
+					intent.mayApprove, intent.mayRequest)
+			}
+
+			there, ok := phone.instance().Vault().Peer(desk.fingerprint())
+			if !ok {
+				t.Fatal("the phone kept no record")
+			}
+
+			// The mirror: a peer that may ask us to approve is a peer we
+			// approve for.
+			if there.GetMayApprove() != intent.mayRequest ||
+				there.GetMayRequest() != intent.mayApprove {
+				t.Errorf("the phone recorded approve=%v request=%v, "+
+					"which is not the mirror of %v and %v",
+					there.GetMayApprove(), there.GetMayRequest(),
+					intent.mayApprove, intent.mayRequest)
+			}
+
+			if out, err := dial.wait(); err != nil {
+				t.Fatalf("the dialling side failed: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+// And a code displayed without saying what the pairing is for is not displayed
+// at all: guessing here is what decision AD exists to stop, so the command asks
+// rather than defaulting to the widest pairing there is.
+func TestDisplayingACodeSaysWhatThePairingIsFor(t *testing.T) {
+	cli := buildCLI(t)
+	desk := startPairingBox(t, cli, "desk")
+
+	out, err := desk.run("pair", "--listen")
+	if err == nil {
+		t.Fatalf("a code was displayed with no intent:\n%s", out)
+	}
+
+	for _, word := range []string{"approver", "requester", "mutual"} {
+		if !strings.Contains(out, word) {
+			t.Errorf("the refusal does not offer %q:\n%s", word, out)
+		}
+	}
+
+	// And the side that uses a code is told where the decision is made rather
+	// than being allowed a half of it.
+	out, err = desk.run("pair", "somewhere:7373", "--code", "abcde-fghjk",
+		"--intent", "mutual")
+	if err == nil {
+		t.Fatalf("the dialling side accepted an intent:\n%s", out)
+	}
+
+	if !strings.Contains(out, "displaying the code") {
+		t.Errorf("the refusal does not say who decides:\n%s", out)
+	}
+}
+
 // TestAPairingIsAnsweredLongAfterTheCommandThatRaisedItIsGone is the M6 failure
 // with the timing left in.
 //
@@ -564,7 +710,7 @@ func TestAPairingIsAnsweredLongAfterTheCommandThatRaisedItIsGone(t *testing.T) {
 	phone := startPairingBox(t, cli, "phone")
 
 	listen := startListening(t, desk, "requester")
-	dial := startDialling(t, phone, desk.address, listen.code, "approver")
+	dial := startDialling(t, phone, desk.address, listen.code)
 
 	// The exchange has happened: the code is spent and both sides have written
 	// the pairing down.
@@ -626,7 +772,7 @@ func TestAPairingSurvivesADaemonRestartOnEitherSide(t *testing.T) {
 	phone := startPairingBox(t, cli, "phone")
 
 	listen := startListening(t, desk, "requester")
-	dial := startDialling(t, phone, desk.address, listen.code, "approver")
+	dial := startDialling(t, phone, desk.address, listen.code)
 
 	waitPairing(t, desk, anyPairing)
 	waitPairing(t, phone, answeredHere)
@@ -677,7 +823,7 @@ func TestAnAnswerConvergesAfterThePeerWasUnreachable(t *testing.T) {
 	phone := startPairingBox(t, cli, "phone")
 
 	listen := startListening(t, desk, "requester")
-	startDiallingUnanswered(t, phone, desk.address, listen.code, "approver")
+	startDiallingUnanswered(t, phone, desk.address, listen.code)
 
 	// Neither user has answered yet, and both machines are holding the pairing.
 	waitPairing(t, desk, unanswered)
@@ -725,7 +871,7 @@ func TestWithdrawingFromEitherSideClearsBoth(t *testing.T) {
 			phone := startPairingBox(t, cli, "phone")
 
 			listen := startListening(t, desk, "requester")
-			dial := startDialling(t, phone, desk.address, listen.code, "approver")
+			dial := startDialling(t, phone, desk.address, listen.code)
 
 			waitPairing(t, desk, anyPairing)
 			waitPairing(t, phone, answeredHere)
@@ -775,7 +921,7 @@ func TestAPairingCodeThatDoesNotMatchIsAnError(t *testing.T) {
 	wrong := wrongCode(listen.code)
 
 	out, err := phone.run("pair", desk.address,
-		"--code", wrong, "--role", "approver", "--yes")
+		"--code", wrong, "--yes")
 	if err == nil {
 		t.Fatalf("a wrong code paired:\n%s", out)
 	}
@@ -826,7 +972,7 @@ func TestPairingsAreBoundedAndRefusedWhileSealed(t *testing.T) {
 	phone := startPairingBox(t, cli, "phone")
 
 	listen := startListening(t, desk, "requester")
-	startDialling(t, phone, desk.address, listen.code, "approver")
+	startDialling(t, phone, desk.address, listen.code)
 
 	waitPairing(t, desk, anyPairing)
 	listen.kill()
@@ -865,7 +1011,7 @@ func TestASecondAttemptFromOneMachineReplacesTheFirst(t *testing.T) {
 	phone := startPairingBox(t, cli, "phone")
 
 	first := startListening(t, desk, "requester")
-	startDialling(t, phone, desk.address, first.code, "approver")
+	startDialling(t, phone, desk.address, first.code)
 
 	one := waitPairing(t, desk, anyPairing)
 
@@ -874,7 +1020,7 @@ func TestASecondAttemptFromOneMachineReplacesTheFirst(t *testing.T) {
 	// The same two machines start again, which is what somebody does when they
 	// walked away from the first attempt.
 	second := startListening(t, desk, "requester")
-	startDialling(t, phone, desk.address, second.code, "approver")
+	startDialling(t, phone, desk.address, second.code)
 
 	waitPairing(t, desk, func(pairing *ladulasv1.PendingPairingStatus) bool {
 		return pairing.GetSessionId() != one.GetSessionId()

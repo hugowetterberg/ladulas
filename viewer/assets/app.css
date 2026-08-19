@@ -1318,3 +1318,95 @@ button.danger:hover:not(:disabled) {
   align-items: flex-start;
   gap: 11px;
 }
+
+/* Adding a machine, and adding a key --------------------------------------
+
+   The pairing screen is the one place in the window where somebody is copying
+   something out of it by hand, so the code is set at a size to be read across a
+   desk and the strings beside it are selectable. Everything here is furniture
+   for that: a choice that stays visibly chosen, a string with a button beside
+   it, and a picture a camera can find. */
+
+.row.intent[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--control);
+}
+
+.card.pairing-code { text-align: center; }
+
+.card.pairing-code .code {
+  font-family: var(--mono);
+  font-size: 30px;
+  letter-spacing: .09em;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.card.pairing-code .hint { margin-top: 6px; }
+
+.copyable {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.copyable code {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.copyable button { flex: 0 0 auto; }
+
+.card.qr-card { display: flex; flex-direction: column; align-items: center; }
+
+/* White under the picture whatever the window's appearance is: the quiet zone
+   is part of the symbol, and a QR that inverted with the theme is one no camera
+   would read. */
+.qr {
+  width: 220px;
+  height: 220px;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 6px;
+}
+
+.address { color: var(--text-dim); padding: 2px 0; }
+
+.field { display: block; margin-top: 9px; }
+
+.field-label {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin-bottom: 3px;
+}
+
+.field input {
+  font: inherit;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--field-bg);
+  color: var(--text);
+}
+
+.field input:focus { outline: 2px solid var(--border-strong); }
+
+.card.new-key .section-label:first-child { margin-top: 0; }
+
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.primary:hover:not(:disabled) { background: var(--control-hover); }

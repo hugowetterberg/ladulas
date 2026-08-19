@@ -100,8 +100,10 @@ From the initial discussion:
   foreground service). No hosted component is ever load-bearing.
 * **Policies + prompt** — per-key/per-peer rules (auto-approve, TTL
   grants), everything audited.
-* **First response wins** — requests fan out to all eligible approvers;
-  the first approve/deny settles it and other prompts are cancelled.
+* **First decision wins** — requests fan out to all eligible approvers;
+  the first approve/deny settles it and other prompts are cancelled. A peer
+  reporting that it has nobody to ask is not one of those, and does not
+  settle anything (decision AC, §9).
 * **iOS first** (the Apple developer account is in place; everything
   builds Mac-less on macOS CI runners), Android later on the same core.
 * **A rich signer binary** — `ladulas-sign` replaces `ssh-keygen` as
@@ -535,9 +537,32 @@ it, and the pairing confirmation still shows both fingerprints in full
 ### Pairing (trust on first use)
 
 Pairing establishes a mutual record: peer identity key, name, and the
-**approval direction** — each side independently declares whether the other
-may approve for it, may request approval from it, both, or (for key use)
-which of its keys the peer may request signatures with.
+**approval direction** — whether the other may approve for it, may request
+approval from it, or both.
+
+**The direction is one answer, given on the side displaying the code** —
+decision AD. Somebody there says what the pairing is for, in the three
+shapes there are: an approver for this instance, an instance to approve
+for, or both. The side that uses the code declares nothing; it is shown
+what was chosen, on its own confirmation, and either agrees to that pairing
+or does not. What each side writes down is that one answer and its mirror,
+because a peer that may ask us to approve is a peer we approve for.
+
+It was two independent declarations until 2026-08-19, one per side, with
+nothing making them agree — and the ordinary result was a pairing whose two
+halves said different things, because the flag defaulted to "both" at each
+end and nobody was ever shown what the other had chosen. The way that
+failed is [`bugs/a-peer-that-cannot-approve-vetoes-every-request.md`](../bugs/a-peer-that-cannot-approve-vetoes-every-request.md):
+an instance recorded "this machine may approve for me" about a box with no
+approver at all, and every request it made was then answered by that box
+saying it had nobody to ask (decision AC is the other half of that fix).
+The direction is not a preference to be tuned afterwards, either —
+**changing what a pairing is for means removing the peer and pairing
+again**, which is a limit and is meant to be one: a direction that can be
+widened later is a direction nobody has to think about now, and this is the
+question a pairing exists to ask. `ladulas peers allow` still adjusts an
+existing record, which is the escape hatch for somebody who knows exactly
+what they are doing.
 
 Key access is a third decision, taken separately: pairing grants directions,
 never keys, and `ladulas peers allow --key <label>` (or `--all-keys`) is what
@@ -546,12 +571,22 @@ ask this instance to approve is not thereby allowed to borrow its keys — and
 the all-keys flag exists because a list of everything held today silently fails
 to cover a key generated tomorrow.
 
-Flow: instance A displays a pairing code (and QR on desktop→mobile — the
-Krypton pattern; the QR carries A's identity public key so B can seal its
-response to it, making the visual channel the integrity root). B connects
-to A's `host:port`, both sides display both fingerprints, and *each side's
-user confirms on that side*. Trust records live in the encrypted local
-store (§10) and are revocable unilaterally.
+Flow: instance A says what the pairing is for and displays a pairing code
+(and a QR — the Krypton pattern; the QR carries A's identity public key so
+B can seal its response to it, making the visual channel the integrity
+root). B connects to A's `host:port`, both sides display both fingerprints
+and the same sentence about what the pairing does, and *each side's user
+confirms on that side*. Trust records live in the encrypted local store
+(§10) and are revocable unilaterally.
+
+**The QR is drawn** since 2026-08-19 — decision AE. A desktop shows it
+beside the typed code and the command line, on the same screen the intent
+was chosen on; a headless box still prints the string and the `qrencode`
+invocation, because a terminal is not somewhere Ladulås gets to choose the
+pixels. It is one route on the bridge (`/api/v1/pairings/qr`), drawn from
+`rsc.io/qr` and rendered to SVG here, and it is the one response the bridge
+serves with `Cache-Control: no-store`: the string behind it is a secret
+with five minutes to live.
 
 **A pairing is in two halves that keep different time** (decision M). The
 first half is the code: `trust.CodeValidity` (5 minutes), single use, five
@@ -625,6 +660,11 @@ socket (§14), the same list and the same cards in the shared viewer on the
 tray and the phone (§12), and `ladulas pair` reporting that the pairing is
 recorded and giving the terminal back once its own user has answered —
 because nothing is waiting on that terminal any more.
+
+**Starting one is a surface too**, and was a command line and nothing else
+until 2026-08-19 (§12). The window now asks the intent and displays the
+code; the window holding a code is what holds the pairing window open, so
+closing the screen takes the code off both.
 
 What this replaces: a model in which nothing survived an unanswered
 attempt. The pending record was in the memory of the process running the
@@ -821,10 +861,40 @@ approval is simply an approver that happens to share the process.
 policy evaluation → if a rule auto-approves (or auto-denies), done, logged
 → otherwise fan out to eligible approvers: local GUI if present (and the
 store not locked, §10), connected peers with approval rights, wake-ups for
-reachable-but-sleeping mobile approvers. First response wins; everyone else gets a cancellation. Timeout
+reachable-but-sleeping mobile approvers. First decision wins; everyone else gets a cancellation. Timeout
 default ~90 s for SSH auth (the far server's `LoginGraceTime` is typically
 120 s) and generous (minutes) for git signing, since `ssh-keygen`/git block
 happily.
+
+**A peer saying it has nobody to ask is not a decision** — decision AC. It
+is a report about the peer, and it goes where an approver that could not be
+reached goes: the request is denied only when every eligible approver has
+gone that way, and until then the prompts that are up stay up. The
+distinction is not academic. A peer runs this same engine, and a peer with
+no approver of its own denies with `NO_APPROVER` the instant it is asked,
+because nothing was asked of anybody — so under "first response wins" it
+took the race against a desktop prompt waiting on a human, every time.
+Pairing an instance that could not approve stopped being a second way to
+get an answer and became a veto on the first, deterministically, for every
+signature on the machine. That is
+[`bugs/a-peer-that-cannot-approve-vetoes-every-request.md`](../bugs/a-peer-that-cannot-approve-vetoes-every-request.md),
+and decision AD is the other half of the fix: a pairing like that is now
+harder to create by accident.
+
+Only `NO_APPROVER`, and only from a peer. A peer's timeout means somebody
+was asked and did not answer, which is a fact about the request; a policy
+denial, a hard rule and a human saying no are all decisions. An approval is
+never discarded whatever it says about its source.
+
+**A pairing confirmation is offered no promise.** "Approve for a while" is a
+scope and a clock over signing with a key, and a pairing has no key, happens
+once, and always prompts — so a grant over one could never be spent, and
+the offer was three buttons and a clock under a question whose whole content
+is "is this the machine on the other screen". The engine sizes the offer
+from the policy for kinds that can carry one and sends none for the kinds
+that cannot (pairing, and a key listing, which is the same shape of
+nothing); an answer that asks for a promise anyway is answering a question
+it was not shown, and gets none.
 
 **A pairing confirmation has no timeout at all** (decision M). Every other
 kind is waited for by something that cannot wait — a handshake with a grace
@@ -2078,6 +2148,46 @@ already running. It also registers a second approver on the control socket, so
 prompts arrive twice. A second launch now hands over: the running instance
 raises its window and the new process exits.
 
+**Two things the window can start rather than only watch**, since
+2026-08-19: adding a machine, and making a key. Both were command lines and
+nothing else, on a surface whose whole premise is that somebody is sitting
+in front of it, and both are one call the daemon already served (§14).
+
+*Add a machine* is a screen in two states and never both. First the
+question decision AD says belongs on this side — what the pairing is for,
+as three rows worded as what each does rather than as which flag it sets.
+Then the invitation: the code, and the three ways into it, which are one
+secret seen by three kinds of machine. A terminal types the command line;
+another window pastes the full code, which carries the identity key and so
+leaves that side nothing to compare by hand; a phone points a camera at the
+QR (decision AE). The screen holds the pairing window open — the control
+call that displays a code is a stream whose lifetime *is* the window's — so
+leaving takes the code off both, and coming back shows the code already on
+display rather than spending a second one. What arrives when the other
+machine uses it is an ordinary approval card, drawn by the renderer that
+draws every other one.
+
+*Make a key* is a name, a comment and a button on the Keys screen, and
+generation only: importing one is a file to pick and a passphrase to type
+into a webview, and `ladulas keys import` is where both belong. The Keys
+screen left the set of screens the poll may redraw when it grew that form —
+a name is typed a character at a time, any decision anywhere changes the
+instance payload, and a repaint four seconds later would empty the box.
+
+**Ending one is on the peer screen**, and it asks twice. The screen used to
+say, in as many words, that revoking was `ladulas peers revoke` and that a
+window able to do it is a window a stray click can unpair a machine from.
+The premise was right and the conclusion was not: a machine somebody wants
+rid of — a lost phone, a rebuilt laptop — is exactly the case where the
+person is looking at the window and the terminal is the thing they have to
+go and find. What answers the stray click is the second press. The first
+turns the button into the sentence it would carry out, naming the machine;
+only the second calls anything. It is the one action on any of these
+screens that cannot be undone by doing it again — it drops the direction,
+the borrowed keys, the promises made under the pairing and the connection
+it is holding — and it is the only one that asks twice, which is what keeps
+the asking meaningful.
+
 **Three rules the sidebar screens follow, all three learned on the phone.**
 A poll that found nothing new redraws nothing: the instance is re-read every
 few seconds to keep a countdown honest, and a pane rebuilt under somebody's
@@ -2265,8 +2375,11 @@ The surface (existing pieces from M2/M3 plus planned):
   there. `keyring enrol|forget|status` is the "unlock at login" opt-down
   of decision I, and says what it gives up before it does it — enrolling
   copies the DEK into the keychain, so it is the daemon's to do;
-* pairing — `ladulas pair …` starts one, listening or dialling, and gives
-  the terminal back once this side's user has answered. `ladulas pairings
+* pairing — `ladulas pair --listen --intent <approver|requester|mutual>`
+  starts one and says what it is for, which settles both sides (decision
+  AD); `ladulas pair <host:port> --code <code>` uses one and declares
+  nothing. Either gives the terminal back once this side's user has
+  answered. `ladulas pairings
   list|approve|reject|withdraw` is everything after that: a pairing does
   not expire and the command that raised it is usually gone, so the list
   is where one is found and answered. `ladulas pairings approve
@@ -2778,6 +2891,9 @@ Added 2026-08-19:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AB | Whether the packages a mobile core binds are public | **they are, and nothing about them is promised.** A phone is a full Ladulås node — a keystore, an agent, an approval engine, a peer link and the viewer bundle — and not a client of one, so a `gomobile` bind surface reaches very nearly everything that is not the desktop. Seventeen packages are in `pkg/` rather than `internal/` for that reason alone, and not one of them carries a compatibility guarantee; the shell that binds them, and the version pin naming the commit it was built from, belong to the consumer, and this module depends on nothing of theirs. Rejected: building `Mobile.xcframework` here and publishing it as a versioned binary artifact, which would have kept every package `internal/`. It puts a macOS runner in the middle of this repository's release path, and it makes every change a consumer needs wait on a release of this module before anything can be built against it at all. Two things follow. Nothing here compiles the bind surface, so a change that breaks `gomobile`'s type rules is green here and fails where it is bound. And `pkg/` is a published import path, which §18 would rather it were not. Rationale in §21 |
+| AC | What a peer's "nobody to ask" counts as | **a report, not a decision: first *decision* wins.** An answer of `NO_APPROVER` from a paired peer goes where an approver that could not be reached goes — the request is denied only once every eligible approver has gone that way, and the prompts that are up stay up. It qualifies §2's "first response wins", which was flat and wrong in one case that turned out to be ordinary: a peer runs this same engine, and one with no approver of its own answers instantly because nothing was asked of anybody, so it won every race against a desktop prompt waiting on a person. An instance paired to a box like that had every signature and every SSH login denied, deterministically, with the peer's name on the refusal — pairing had removed the only way to get an answer instead of adding a second one. Narrow deliberately: only `NO_APPROVER`, only from a peer, and never an approval. A peer's timeout means somebody was asked and did not answer; a policy denial, a hard rule and a human saying no are decisions and settle the request as they always did. Rejected: excluding a peer with no approver from the eligible set up front, which is cheaper but needs the peer to keep advertising a fact that changes when somebody closes a laptop lid, and would still need this rule for the moment in between. Rationale in §9; the report is in `bugs/` |
+| AD | Who decides what a pairing is for | **the side displaying the code, once, for both sides.** `ladulas pair --listen --intent approver\|requester\|mutual` — an approver for this instance, an instance to approve for, or both — and the side that uses the code declares nothing: it is shown the sentence on its own confirmation and either agrees to that pairing or does not. Each record is that one answer and its mirror, because a peer that may ask us to approve is a peer we approve for. It replaces two independent declarations, one per side, each defaulting to "both", with nothing making them agree and neither side ever shown what the other had chosen — which is how an instance came to record "may approve for me" about a box with nobody at it and hand decision AC its veto. The intent is required rather than defaulted: guessing here is the thing being fixed. Changing what a pairing is for means removing the peer and pairing again, which is a limit and is meant to be one; `ladulas peers allow` still edits a record for somebody who knows exactly what they are doing. On the wire the joining side's direction fields are reserved rather than reused, and the answer it gets carries the intent it is agreeing to. Rationale in §7 |
+| AE | Where the pairing QR comes from | **a Go dependency, drawn by the bridge.** `rsc.io/qr` encodes and this repository renders the matrix to SVG, served on `/api/v1/pairings/qr` the way `pkg/avatar` serves a face — so the viewer bundle keeps its no-dependencies rule, which its own tests assert, and the phone gets the picture for nothing by being the other host of the same handler. It settles open question 6, which had been "the viewer takes its first dependency, or somebody writes an encoder, or `qrencode` stays the documented step" since M3, with the phone able to read a QR nothing here could draw. `qrencode` stays the documented step for a headless box, where the terminal's pixels are not Ladulås's to choose. The one response the bridge serves `no-store`: the string behind the picture is a five-minute single-use secret. Rejected: writing the encoder, which is Reed–Solomon over GF(256) plus four tables to be got exactly right, against a dependency that is 700 lines, unchanged since 2015 and read in an afternoon |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
@@ -3261,10 +3377,15 @@ Still open, to resolve during early implementation:
 5. ~~Viewer bridge API shape~~ — settled by M2 and confirmed by M6 on a
    third host: one `http.Handler`, and each host differs only in how a
    method, a path and a body reach it.
-6. **Drawing a pairing QR on the requester.** The code a QR carries is
+6. ~~**Drawing a pairing QR on the requester.** The code a QR carries is
    specified and the phone reads one; what is missing is something that
    renders one. Either the viewer takes its first dependency, or a QR
-   encoder is written, or `qrencode` stays the documented step (§12).
+   encoder is written, or `qrencode` stays the documented step (§12).~~ —
+   settled by **decision AE**: the dependency is Go's rather than the
+   bundle's. `rsc.io/qr` encodes, this repository renders the matrix to
+   SVG, and the bridge serves it on a route beside the avatar's. `qrencode`
+   remains what a headless box prints, which was never the part that was
+   missing.
 
 ## 20. Milestones
 
