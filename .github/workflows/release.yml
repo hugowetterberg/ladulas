@@ -73,6 +73,27 @@ jobs:
           go build -tags gui,gtk3 -o /dev/null ./cmd/ladulas
           go build -tags gui -o /dev/null ./cmd/ladulas
 
+      # contrib/ladulas.desktop is what draws the menu entry, the autostart
+      # entry and — because GTK 4 has no API that takes an icon as bytes — the
+      # window's own icon. Nothing compiles it, so a typo in a key name is a
+      # file that installs fine and then does none of those three, silently: a
+      # desktop entry with an unparseable line is skipped, not reported. This is
+      # the only thing that reads it before somebody's session does.
+      #
+      # Any output at all is a failure, which is stricter than the exit status:
+      # desktop-file-validate exits 0 for a "hint", and the hints are the ones
+      # about menu categories — an unpaired Additional Category leaves a menu
+      # free to file the entry nowhere, which is the entry not working while the
+      # check passed.
+      - name: Validate the desktop entry
+        run: |
+          sudo apt-get install --no-install-recommends -y desktop-file-utils
+          output="$(desktop-file-validate contrib/ladulas.desktop 2>&1)"
+          if [ -n "${output}" ]; then
+            echo "${output}"
+            exit 1
+          fi
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"

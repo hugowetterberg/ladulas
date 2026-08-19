@@ -282,12 +282,14 @@ the failure waits for the first `ladulas gui`. It needs the release job to
 build inside an Arch container so the sonames are Arch's, which does not exist
 yet.
 
-Because this repository is private, `makepkg` cannot fetch the release
-artifacts itself; `./pull` in the packaging repository seeds them with `gh`
-first, and the `PKGBUILD` it hands to `makepkg` is unmodified. That repository's
-README has the detail, including what has to change before any of this can go
-to the AUR — starting with the fact that there is **no license in this tree**,
-so the packages currently say `custom:unlicensed`.
+All three are `makepkg -si` and nothing else: the release assets are reachable
+over plain HTTPS, which is all a `PKGBUILD` needs. The licence is **MIT**, in
+[`LICENSE`](LICENSE), which every package names and installs.
+
+What is still left before any of this can go to the AUR is in that repository's
+[README](https://github.com/hugowetterberg/ladulas-aur#becoming-a-real-aur-repository):
+three AUR remotes, an account with a key on it, and a `.SRCINFO` worth reading
+before the first push.
 
 ### The units, and the desktop entry
 
@@ -327,6 +329,19 @@ right for `make install` and wrong for a package, so `package()` rewrites it to
 `make install-desktop` does it for `$HOME`. Without them the entry has no icon
 and the window has none either — see "The icon, and the menu entry" below for
 why that file is the only mechanism there is.
+
+**Refreshing the caches those feed is pacman's job, and the packages leave it
+alone.** `update-desktop-database.hook` fires on
+`usr/share/applications/*.desktop` and `gtk-update-icon-cache.hook` on
+`usr/share/icons/*/`, both after the transaction and on install, upgrade and
+remove alike, so the entry and the icon are live without an `install=`
+scriptlet. Those hooks come from `desktop-file-utils` and
+`gtk-update-icon-cache`, which are hard dependencies of both `gtk3` and `gtk4`
+— so a machine that can install either GTK package has them, and a scriptlet
+running the same two commands would only rebuild both caches a second time.
+`make install-desktop` does run them, because it writes under `$HOME` where no
+hook is watching. `ladulas-headless-bin` installs neither file and so needs
+neither refresh.
 
 ## The desktop application
 

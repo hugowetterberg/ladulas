@@ -25,7 +25,14 @@ Exec=/usr/bin/ladulas gui
 # or a window manager has no way to tell that this entry describes that window.
 Icon=ladulas
 Terminal=false
-Categories=Utility;Security;
+# Exactly one Main Category and one Additional Category, which is the shape the
+# menu spec asks for and the only shape desktop-file-validate is silent about.
+# `Security` is an Additional Category — it says nothing on its own about where
+# an entry belongs, and unpaired it leaves a menu free to file this nowhere.
+# `System` is the pairing the spec names for it and the truthful one: this is the
+# front end of a background agent rather than an accessory. A second Main
+# Category would not add information, only a second menu to appear in.
+Categories=System;Security;
 Keywords=ssh;git;signing;approval;agent;
 StartupNotify=false
 # X-GNOME-Autostart-enabled is what the GNOME and Cinnamon startup-applications

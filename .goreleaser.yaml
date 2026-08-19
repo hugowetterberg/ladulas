@@ -100,6 +100,7 @@ archives:
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
+      - LICENSE
       - README.md
       - docs/*.md
       - contrib/*.service
@@ -136,9 +137,9 @@ changelog:
       - "^test:"
 
 release:
-  # The repository is private, so this release and its assets are private with
-  # it — which is the whole reason ../ladulas-aur carries a `pull` script
-  # instead of makepkg fetching these itself. makepkg cannot authenticate.
+  # These assets are reachable over plain HTTPS by anybody, which is the whole
+  # requirement the three PKGBUILDs below place on a release: makepkg fetches a
+  # source by URL with curl and has no credential to offer.
   draft: false
   prerelease: auto
 
@@ -172,7 +173,11 @@ aurs:
   - name: ladulas-headless-bin
     ids: [linux]
     homepage: &homepage "https://github.com/hugowetterberg/ladulas"
-    license: &license "custom:unlicensed"
+    # Naming it here is not enough, so every package() below also installs the
+    # LICENSE file to /usr/share/licenses/${pkgname}/. Arch's `licenses` package
+    # ships shared texts under /usr/share/licenses/spdx/ and MIT is not among
+    # them — it carries a copyright line, so there is no one text to share.
+    license: &license "MIT"
     maintainers: &maintainers
       - "Hugo Wetterberg <hugo at wetterberg dot nu>"
     optdepends: &optdepends
@@ -221,7 +226,10 @@ aurs:
 
       # No desktop entry: this package has no GUI compiled in, so an autostart
       # entry would start a binary at login whose only answer is that it was
-      # built without one.
+      # built without one. Nothing to refresh here either, for the same reason —
+      # no .desktop file and no icon means no cache that could go stale.
+
+      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
       install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
 
@@ -302,6 +310,21 @@ aur_sources:
       # a menu entry to launch it, and an autostart entry so a desktop starts
       # it at login. Both are the same file, which is why it is installed
       # twice rather than written twice.
+      #
+      # Refreshing the caches those two feed is pacman's, not this package's.
+      # /usr/share/libalpm/hooks/update-desktop-database.hook fires on
+      # usr/share/applications/*.desktop and gtk-update-icon-cache.hook on
+      # usr/share/icons/*/, both PostTransaction, on install, upgrade and
+      # remove alike — so the menu entry and the icon below are picked up
+      # without an install= scriptlet. That is not luck: the hooks come from
+      # desktop-file-utils and gtk-update-icon-cache, and both are hard
+      # dependencies of the gtk3 and gtk4 in depends, so a machine that can
+      # install this package is a machine that has them. A scriptlet doing the
+      # same two commands would rebuild both caches a second time per
+      # transaction and is what an AUR reviewer asks to have removed.
+      #
+      # /etc/xdg/autostart needs no refresh at all: a session reads that
+      # directory at login rather than a cache built from it.
       install -Dm644 contrib/ladulas.desktop \
         "${pkgdir}/usr/share/applications/ladulas.desktop"
       install -Dm644 contrib/ladulas.desktop \
@@ -321,6 +344,8 @@ aur_sources:
         install -Dm644 "icon-${size}.png" \
           "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/ladulas.png"
       done
+
+      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
       install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
 
