@@ -352,6 +352,36 @@ export function keys(state) {
       ui.fingerprint(key.fingerprint, true)));
   }
 
+  // What other holders of a key have promised about a machine, and what this
+  // instance is therefore signing without asking (decision AG).
+  //
+  // Listed whether or not this instance acts on it, and the reason it does not
+  // is a line on the row rather than a reason to leave the row out. An
+  // endorsement is carried by the requester and honoured by any holder, so a
+  // screen that showed only the live ones would be a window unable to answer
+  // "what is this machine signing under" — and a promise nobody can see is a
+  // promise nobody can take back.
+  const endorsements = instance.endorsements || [];
+  const retractions = instance.retractions || [];
+
+  if (endorsements.length || retractions.length) {
+    body.push(ui.heading("Promises about these keys", endorsements.length));
+
+    if (!endorsements.length) {
+      body.push(ui.empty("Nothing standing",
+        "Everything promised about these keys has been taken back or has run "
+        + "out."));
+    }
+
+    for (const item of endorsements) {
+      body.push(endorsementCard(item, state));
+    }
+
+    for (const item of retractions) {
+      body.push(retractionCard(item));
+    }
+  }
+
   // Every key a peer offers is listed whether or not its holder is there, which
   // is the whole point of remembering them: a phone is out of reach most of the
   // time by construction, and a list that showed only what could be signed with
@@ -387,6 +417,160 @@ export function keys(state) {
     actions: [ui.action("plus", "Make a new key", () => newKeySheet(state))],
     body,
   };
+}
+
+// endorsementCard is one promise another holder of a key has made about a
+// machine (decision AG).
+//
+// It leads with who promised what to whom, because those are the three facts
+// somebody reading this screen is checking — and it carries the reason this
+// instance would not act on it, when it would not, since a copy carried to
+// present elsewhere and a promise being kept here look identical otherwise.
+function endorsementCard(item, state) {
+  // A promise this instance does not act on is not a warning and is not drawn
+  // as one: a copy carried to present elsewhere is inert here by construction,
+  // and the pill already says which it is.
+  const root = ui.card("grant-card");
+
+  append(root, append(el("div", "card-head"),
+    ui.icon("taken", "kind"),
+    ui.stack(
+      ui.title(item.description || "A promise about a key"),
+      ui.sub(item.expires + " · from " + item.issuer
+        + " · for " + item.requester)),
+    item.useCount ? el("span", "count", String(item.useCount)) : null,
+    ui.pill(item.live ? "signing" : "not applied here")));
+
+  root.append(ui.fingerprint(item.key, true));
+
+  if (!item.live) {
+    root.append(ui.note(capitalise(item.inertBecause) + "."));
+  } else if (!item.published) {
+    // Worth saying out loud. A promise that arrived on the request that spent
+    // it was never visible before it was spent, which is the state publishing
+    // exists to avoid and cannot always reach.
+    root.append(ui.note("This arrived with a request rather than being "
+      + "published ahead of one, so it was first seen as it was first used."));
+  }
+
+  if (item.unreported) {
+    root.append(ui.note(item.unreported + " of those have not been reported "
+      + "to " + item.issuer + " yet."));
+  }
+
+  root.append(append(el("div", "card-actions"), retractButton(item, state)));
+
+  return root;
+}
+
+// retractButton takes one back, and asks twice.
+//
+// Twice for the reason revoking a pairing does: what it cannot do is reach the
+// holders it could not reach, so a retraction is a thing that half-happens and
+// then has to be understood. It is not the press that is dangerous — it is
+// believing it finished.
+function retractButton(item, state) {
+  const button = el("button", "danger small", "Take it back");
+
+  let asked = false;
+
+  button.onclick = () => {
+    if (!asked) {
+      asked = true;
+      button.textContent = "Take it back from every holder that answers";
+
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Telling the holders…";
+
+    bridge
+      .retractEndorsement(item.id, item.key, "taken back at the desktop")
+      .then((result) => {
+        state.refresh();
+        retractionResult(item, result, state);
+      })
+      .catch((error) => {
+        button.disabled = false;
+        asked = false;
+        button.textContent = "Take it back";
+        state.complain(error.message);
+      });
+  };
+
+  return button;
+}
+
+// retractionResult says what actually happened, which is not always what was
+// asked for.
+//
+// A holder that could not be reached goes on honouring the promise until it
+// expires or until somebody gets through — and it is told by any holder that
+// has the retraction, not only by this one, because retractions gossip. Saying
+// "done" over that would be the one wrong claim available here.
+function retractionResult(item, result, state) {
+  const told = (result && result.told) || [];
+  const unreached = (result && result.unreached) || [];
+
+  const sheet = ui.sheet("Taken back",
+    ui.note("It is gone from this machine, and " + item.requester
+      + " cannot spend it here again whatever it presents."));
+
+  const body = sheet.querySelector(".sheet-body");
+
+  if (told.length) {
+    body.append(ui.heading("Told", told.length));
+
+    for (const holder of told) {
+      body.append(ui.card(null, ui.fingerprint(holder, true)));
+    }
+  }
+
+  if (unreached.length) {
+    body.append(ui.heading("Could not be reached", unreached.length));
+
+    for (const holder of unreached) {
+      body.append(ui.card(null, ui.fingerprint(holder, true)));
+    }
+
+    body.append(ui.warning("Those are still honouring it. The retraction "
+      + "reaches them when they are next in touch — with this machine or with "
+      + "any other holder that has it — and the promise runs out on its own "
+      + "whether or not anybody gets through.", true));
+  }
+
+  if (!told.length && !unreached.length) {
+    body.append(ui.note("No other holder of that key is known here, so there "
+      + "was nobody to tell."));
+  }
+
+  state.refresh();
+}
+
+// retractionCard is a promise that has been taken back, kept on screen until
+// what it took back would have expired anyway.
+//
+// It is on this screen rather than tidied away because an endorsement is
+// carried by the requester: the machine will present the promise again, and the
+// only reason that presentation does nothing is this record.
+function retractionCard(item) {
+  return ui.card("grant-card",
+    append(el("div", "card-head"),
+      ui.icon("denied", "kind bad"),
+      ui.stack(
+        ui.title("Taken back: " + item.target),
+        ui.sub("by " + item.issuer + (item.reason ? " — " + item.reason : ""))),
+      ui.pill("retracted")),
+    ui.fingerprint(item.key, true),
+    ui.note("Remembered until " + item.until + ", so that a copy presented "
+      + "after this is refused rather than honoured."));
+}
+
+function capitalise(text) {
+  const value = String(text || "");
+
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 // offerRow is one key waiting to be answered, and answering it is a sheet

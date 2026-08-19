@@ -55,6 +55,11 @@ type parked struct {
 	// the answer.
 	payload    []byte
 	wrapSSHSIG bool
+	// endorsement is the promise this instance holds for the key, presented to
+	// whichever holder comes and collects (decision AG). It travels the parked
+	// road for the same reason it travels a dialled one: a phone that has to be
+	// woken is the holder most worth not waking.
+	endorsement *ladulasv1.SignedEndorsement
 
 	answer chan *collectedAnswer
 	once   sync.Once
@@ -382,6 +387,7 @@ func (n *Node) pendingApprovals(fingerprint string) []*ladulasv1.PendingApproval
 			WaitingSince: timestamppb.New(entry.since),
 			Payload:      entry.payload,
 			WrapSshsig:   entry.wrapSSHSIG,
+			Endorsement:  entry.endorsement,
 		}
 
 		if !entry.deadline.IsZero() {

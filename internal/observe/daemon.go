@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/hugowetterberg/ladulas/internal/app"
+	"github.com/hugowetterberg/ladulas/pkg/keystore"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 )
 
@@ -160,15 +161,16 @@ type daemonState struct {
 	instance *app.App
 	log      *slog.Logger
 
-	lockState  *prometheus.Desc
-	stateSince *prometheus.Desc
-	keys       *prometheus.Desc
-	grants     *prometheus.Desc
-	offers     *prometheus.Desc
-	borrowed   *prometheus.Desc
-	peers      *prometheus.Desc
-	pairings   *prometheus.Desc
-	listeners  *prometheus.Desc
+	lockState    *prometheus.Desc
+	stateSince   *prometheus.Desc
+	keys         *prometheus.Desc
+	grants       *prometheus.Desc
+	offers       *prometheus.Desc
+	endorsements *prometheus.Desc
+	borrowed     *prometheus.Desc
+	peers        *prometheus.Desc
+	pairings     *prometheus.Desc
+	listeners    *prometheus.Desc
 }
 
 var _ prometheus.Collector = (*daemonState)(nil)
@@ -199,6 +201,12 @@ func newDaemonState(instance *app.App) *daemonState {
 		offers: prometheus.NewDesc(name("key_offers"),
 			"Keys a peer has handed over that are waiting for somebody here to "+
 				"accept or refuse them.", nil, nil),
+		endorsements: prometheus.NewDesc(name("endorsements"),
+			"Promises other holders of a key have made about a machine, by "+
+				"whether this instance signs under them. carried is a copy "+
+				"this instance presents elsewhere and never acts on; inert is "+
+				"one it holds and will not apply.",
+			[]string{labelState}, nil),
 		borrowed: prometheus.NewDesc(name("borrowed_keys"),
 			"Keys that live on a paired peer, by whether they can be used right "+
 				"now. unreachable is the ordinary state of a key on a phone in a "+
@@ -223,6 +231,7 @@ func (s *daemonState) Describe(ch chan<- *prometheus.Desc) {
 	ch <- s.keys
 	ch <- s.grants
 	ch <- s.offers
+	ch <- s.endorsements
 	ch <- s.borrowed
 	ch <- s.peers
 	ch <- s.pairings
@@ -284,6 +293,49 @@ func (s *daemonState) collectStore(ch chan<- prometheus.Metric) {
 
 	ch <- prometheus.MustNewConstMetric(s.grants, prometheus.GaugeValue,
 		float64(len(grants)))
+
+	s.collectEndorsements(ch, vault)
+}
+
+// collectEndorsements counts the promises other holders of a key have made
+// about a machine, split by whether this instance is acting on them
+// (decision AG).
+//
+// The split is the whole of what the number is for. A live one is this instance
+// signing without asking anybody, which is a thing to be able to see on a box
+// nobody is sitting at; a carried one is a copy this instance presents when it
+// borrows and never acts on; an inert one is a promise it holds and will not
+// apply, which is usually a pairing that has been revoked since.
+func (s *daemonState) collectEndorsements(
+	ch chan<- prometheus.Metric, vault *keystore.Vault,
+) {
+	held, err := vault.Endorsements()
+	if err != nil {
+		s.log.Warn("could not count the endorsements for the metrics port",
+			"error", err.Error())
+
+		return
+	}
+
+	states := map[string]int{"live": 0, "carried": 0, "inert": 0}
+
+	for _, item := range held {
+		e := item.GetEndorsement()
+
+		switch {
+		case vault.InertBecause(e) == "":
+			states["live"]++
+		case !vault.HoldsKey(e.GetKeyFingerprint()):
+			states["carried"]++
+		default:
+			states["inert"]++
+		}
+	}
+
+	for state, count := range states {
+		ch <- prometheus.MustNewConstMetric(s.endorsements,
+			prometheus.GaugeValue, float64(count), state)
+	}
 }
 
 // collectPeers is everything the peer channel knows. It is silent with peering

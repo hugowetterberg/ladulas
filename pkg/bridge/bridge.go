@@ -159,6 +159,34 @@ type Pairing interface {
 // back rather than reporting that something went wrong (decision AD).
 var ErrNoIntent = errors.New("bridge: say what the pairing is for")
 
+// Endorsement is one promise another holder of a key has made about a machine
+// (decision AG), as a host reports it.
+//
+// A type of this package's own rather than the store's record, for the reason
+// Delegation is: a host may be a front end that has never opened a store, and
+// what reaches it over a socket is an account of a promise. The signed artifact
+// is not among them — a listing answers which promise is being acted on and why
+// it would not be, not what the bytes were.
+type Endorsement struct {
+	Endorsement *ladulasv1.Endorsement
+	ReceivedAt  time.Time
+	// Published says a holder was told before the promise could be spent.
+	Published bool
+	// InertBecause is why this instance would not answer under it, empty when
+	// it would. It is carried rather than filtered on, because a promise this
+	// machine is merely carrying and one it has never heard of must not look
+	// the same in a list.
+	InertBecause string
+	UseCount     int
+	Unreported   int
+}
+
+// Retraction is one promise taken back, as a host reports it.
+type Retraction struct {
+	Retraction *ladulasv1.Retraction
+	ReceivedAt time.Time
+}
+
 // Delegation is one standing permission this instance holds and applies itself
 // (decision P), as a host reports it.
 //
@@ -242,6 +270,26 @@ type Options struct {
 	// applies itself (decision P). Optional, and there is no revoking one from
 	// here: a promise made elsewhere is stopped where it was made.
 	Delegations func() ([]Delegation, error)
+	// Endorsements lists the promises other holders of a key have made about a
+	// machine, and the retractions this instance remembers (decision AG).
+	// Optional; an instance with peering off has none.
+	//
+	// It is deliberately not filtered to the ones this instance acts on. An
+	// endorsement is carried by the requester and works whether or not anybody
+	// here was told, so a surface that could not show the whole set would be a
+	// machine unable to say what it is signing under.
+	Endorsements func() ([]Endorsement, []Retraction, error)
+	// RetractEndorsement takes one back and tells the holders that can be
+	// reached. Optional and separate from Endorsements: a host can show what a
+	// machine is honouring without being where it is stopped.
+	//
+	// The holders that could not be told come back in the second slice, and a
+	// surface has to say so — they are still honouring the promise, and a
+	// retraction reported as done when half of it was not delivered is the one
+	// thing this must not report.
+	RetractEndorsement func(
+		ctx context.Context, endorsementID, keyFingerprint, reason string,
+	) (told, unreached []string, err error)
 	// Peers lists the paired instances and whether they can be reached.
 	// Optional: an instance with peering off has none to list.
 	Peers func() []PeerView
@@ -805,6 +853,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
 	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
 	mux.HandleFunc("POST /api/v1/keys/offers/{id}/answer", s.handleAnswerKeyOffer)
+	mux.HandleFunc("POST /api/v1/endorsements/retract", s.handleRetractEndorsement)
 	// {session} is last of the /pairings/ routes by convention rather than by
 	// necessity — ServeMux prefers the more specific pattern — but a reader
 	// checking that "invite" cannot be read as a session id should not have to
@@ -1059,6 +1108,23 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	if s.opts.Endorsements != nil {
+		endorsements, retractions, err := s.opts.Endorsements()
+		if err != nil {
+			view.Error = err.Error()
+		}
+
+		for _, item := range endorsements {
+			view.Endorsements = append(
+				view.Endorsements, endorsementSummary(item))
+		}
+
+		for _, item := range retractions {
+			view.Retractions = append(
+				view.Retractions, retractionSummary(item))
+		}
+	}
+
 	if s.opts.Peers != nil {
 		view.Peers = s.opts.Peers()
 	}
@@ -1277,6 +1343,52 @@ func (s *Session) handleAnswerKeyOffer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleRetractEndorsement takes back a promise another holder of a key made
+// about a machine (decision AG).
+//
+// The answer says who was told and who could not be, and the second list is the
+// half a surface has to show: an endorsement is honoured by a holder that was
+// never told about it, so a holder that could not be reached is one that goes
+// on keeping the promise. Reporting this as done when half of it was not
+// delivered is the specific wrong claim to avoid, and it is the same one
+// `revoke_pending` exists for on the other half of decision P.
+func (s *Session) handleRetractEndorsement(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if s.opts.RetractEndorsement == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot retract an endorsement")
+
+		return
+	}
+
+	var body struct {
+		ID     string `json:"id"`
+		Key    string `json:"key"`
+		Reason string `json:"reason"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	told, unreached, err := s.opts.RetractEndorsement(
+		r.Context(), body.ID, body.Key, strings.TrimSpace(body.Reason))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"told":      told,
+		"unreached": unreached,
+	})
 }
 
 // handleWithdraw calls a pairing off from the viewer.

@@ -233,6 +233,12 @@ message PendingApproval {
   // re-classified there rather than believed (§5, §8).
   bytes payload = 5;
   bool wrap_sshsig = 6;
+  // The endorsement the requester holds for the key, if it has one
+  // (decision AG). It means what RemoteSignRequest.endorsement means and is
+  // checked by the same code on the holder: a promise is presented down
+  // whichever road reaches a holder, because a phone that collects rather than
+  // being dialled is exactly the holder most worth not waking twice.
+  SignedEndorsement endorsement = 7;
 }
 
 message AnswerPendingRequest {
@@ -305,6 +311,66 @@ service KeyService {
   // saying which of its keys exist and may be offered to an agent, and every
   // signature made with one is still decided where the key is.
   rpc AnnounceKeys(AnnounceKeysRequest) returns (AnnounceKeysResponse);
+
+  // PublishEndorsement tells a fellow holder of a key that a requester has been
+  // promised unattended use of it (decision AG).
+  //
+  // It is on KeyService because it is about a key rather than about a pairing,
+  // the same reason OfferKey is. Any paired peer may make the call: what
+  // decides whether the endorsement is honoured is the pair of checks inside
+  // it — signed by the key, from an issuer this instance would have taken a
+  // live approval from — and not who carried it here.
+  //
+  // **This call is not how an endorsement reaches the holder that acts on it.**
+  // The requester carries a copy and presents it with the request, which is
+  // what makes the promise work while the issuer and this instance have never
+  // been awake at the same time. What the call adds is that a holder finds out
+  // before the promise is spent rather than after — which is the whole of being
+  // able to retract one. A promise nobody was told about is a silent one, and
+  // an unretractable promise is what that amounts to.
+  rpc PublishEndorsement(PublishEndorsementRequest) returns (PublishEndorsementResponse);
+
+  // PublishRetraction takes one back, and is honoured from any holder of the
+  // key whatever the trust records say (decision AG).
+  //
+  // A retraction gossips: an instance that learns one passes it to every holder
+  // it can reach. That is not tidiness — the requester is the party carrying
+  // the endorsement and is exactly the party that will not helpfully stop
+  // presenting it, so what takes a promise back must never travel by the same
+  // road as the promise.
+  rpc PublishRetraction(PublishRetractionRequest) returns (PublishRetractionResponse);
+}
+
+message PublishEndorsementRequest {
+  SignedEndorsement endorsement = 1;
+}
+
+message PublishEndorsementResponse {
+  // False when this instance kept none of it, with the reason — it holds no
+  // such key, the issuer is not one it would take an approval from, the promise
+  // runs longer than it will honour. A publisher that is told so can say it on
+  // a screen, and the alternative is an issuer believing a holder has been
+  // warned when it has not.
+  bool accepted = 1;
+  string reason = 2;
+  // Retractions this instance already holds for the key, so that a publisher
+  // learns at once that somebody has taken this back — the answer to the
+  // endorsement is where a holder can say "that key is retracted here" without
+  // a call of its own.
+  repeated SignedRetraction retractions = 3;
+}
+
+message PublishRetractionRequest {
+  SignedRetraction retraction = 1;
+}
+
+message PublishRetractionResponse {
+  // False only when the artifact did not verify. A retraction for a key this
+  // instance does not hold, or for an endorsement it never had, is accepted and
+  // remembered: it may hold that key tomorrow, and the endorsement may arrive
+  // after the retraction that kills it.
+  bool accepted = 1;
+  string reason = 2;
 }
 
 message ListKeysRequest {}
@@ -335,6 +401,17 @@ message RemoteSignRequest {
   // True when payload is a raw message that must be SSHSIG wrapped before
   // signing, false when it is the exact blob to sign.
   bool wrap_sshsig = 3;
+  // The endorsement this requester holds for the key, if it has one
+  // (decision AG): a holder's signed statement that this requester may borrow
+  // this key unattended until it expires.
+  //
+  // It is presented rather than relied on. The holder checks it against the
+  // identity of this channel, against its own trust records and against its own
+  // ceiling on how long it will honour a promise, so a requester that sends
+  // somebody else's endorsement, an expired one, or one from a machine this
+  // holder does not take approvals from has sent an ordinary request that will
+  // raise an ordinary prompt.
+  SignedEndorsement endorsement = 4;
 }
 
 message RemoteSignResponse {

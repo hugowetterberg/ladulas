@@ -202,6 +202,15 @@ type Options struct {
 	// this instance (decision P). Optional; without one, this instance simply
 	// asks every time, which is what it did before delegations existed.
 	Delegations DelegationStore
+	// Endorsements holds the promises other holders of a key have made about a
+	// requester (decision AG). Optional; without one this instance asks about
+	// every borrowed signature, which is what it did before endorsements
+	// existed.
+	Endorsements EndorsementStore
+	// KeySigner is how a promise about a key gets signed with that key, which
+	// is what lets the other holders check it (decision AG). Optional; without
+	// one a promise is kept here and endorsed to nobody.
+	KeySigner KeySigner
 	// GrantUses is where an approver writes down what its promises covered.
 	// Optional; keystore.Vault implements it, and without one a grant's count
 	// stays at nothing.
@@ -216,10 +225,12 @@ type Options struct {
 
 // Engine decides requests.
 type Engine struct {
-	identity    *identity.Identity
-	grants      GrantStore
-	delegations DelegationStore
-	grantUses   GrantUses
+	identity     *identity.Identity
+	grants       GrantStore
+	delegations  DelegationStore
+	endorsements EndorsementStore
+	keySigner    KeySigner
+	grantUses    GrantUses
 	// reportUse is how a requester tells an approver it can reach what it has
 	// just done under a delegation, and renewDelegation is how an approver
 	// hands over a promise it has extended. Both are set after construction,
@@ -228,6 +239,9 @@ type Engine struct {
 	reportUse       func(approverFingerprint string)
 	renewDelegation func(ctx context.Context, holder string,
 		signed *ladulasv1.SignedDelegation) error
+	// publishEndorsement tells the other holders of a key about a promise made
+	// here, and is set after construction for the same reason (decision AG).
+	publishEndorsement func(ctx context.Context, signed *ladulasv1.SignedEndorsement)
 
 	audit *AuditLog
 	log   *slog.Logger
@@ -263,14 +277,16 @@ func New(opts Options) (*Engine, error) {
 	}
 
 	return &Engine{
-		identity:    opts.Identity,
-		grants:      opts.Grants,
-		delegations: opts.Delegations,
-		grantUses:   opts.GrantUses,
-		audit:       opts.Audit,
-		log:         log,
-		now:         now,
-		policy:      policy,
+		identity:     opts.Identity,
+		grants:       opts.Grants,
+		delegations:  opts.Delegations,
+		endorsements: opts.Endorsements,
+		keySigner:    opts.KeySigner,
+		grantUses:    opts.GrantUses,
+		audit:        opts.Audit,
+		log:          log,
+		now:          now,
+		policy:       policy,
 	}, nil
 }
 
@@ -616,6 +632,25 @@ func (e *Engine) decide(
 				return resp, nil
 			}
 		}
+
+		// An endorsement is a promise another holder of this key made about the
+		// machine that is asking (decision AG). It only ever answers a borrowed
+		// signature: a request that came for a decision belongs to a peer that
+		// holds the key itself, and one made here is this instance's own to
+		// decide from its own grants.
+		if req.Origin == OriginPeerSigning {
+			if en := e.matchEndorsement(req, policy); en != nil {
+				resp := approve(
+					ladulasv1.DecisionSource_DECISION_SOURCE_GRANT,
+					en.GetDescription())
+				resp.NotifyOnly = true
+
+				e.recordEndorsedUse(msg, en)
+				e.notify(req, resp)
+
+				return resp, nil
+			}
+		}
 	} else if eval.Action == ladulasv1.Action_ACTION_APPROVE {
 		req.Prompt.Warnings = append(req.Prompt.Warnings,
 			fmt.Sprintf("policy would auto-approve this, but %s", mustPrompt))
@@ -895,6 +930,16 @@ func (e *Engine) answerToResponse(
 		} else {
 			resp.Grant = e.createGrant(
 				req.Msg, answer.GrantTTL, answer.GrantReach)
+
+			// A promise about a portable key is also written down for the other
+			// machines that hold it, so that the requester does not have to come
+			// back to this one for every signature (decision AG). It is an
+			// addition to the grant rather than an alternative to it: this
+			// instance holds the key too and goes on answering from the record
+			// exactly as before.
+			if e.shouldEndorse(req) {
+				resp.Endorsement = e.endorse(req.Msg, resp.Grant)
+			}
 		}
 	}
 

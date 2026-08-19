@@ -649,3 +649,87 @@ func (p *projects) Cached(fingerprint, projectID string) (*project.Overview, boo
 
 	return project.OverviewFromWire(resp.Msg.GetProject()), true
 }
+
+// endorsements and retractEndorsement are decision AG over the socket: the
+// promises other holders of a key have made about a machine, and taking one
+// back.
+//
+// The listing is not filtered here and must not be. An endorsement is carried
+// by the requester and honoured whether or not this instance was told, so a
+// window that showed only the live ones would be a machine unable to say what
+// it is signing under — and a promise nobody can see is a promise nobody can
+// retract.
+func (f *Frontend) endorsements() ([]bridge.Endorsement, []bridge.Retraction, error) {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := f.client.ListEndorsements(ctx,
+		connect.NewRequest(&ladulasv1.ListEndorsementsRequest{}))
+	if err != nil {
+		// A sealed instance has nothing to list rather than a failure to
+		// report, which is what every other listing here answers.
+		return nil, nil, nil //nolint:nilerr // see above
+	}
+
+	held := resp.Msg.GetEndorsements()
+	out := make([]bridge.Endorsement, 0, len(held))
+
+	for _, item := range held {
+		view := bridge.Endorsement{
+			Endorsement:  item.GetEndorsement(),
+			Published:    item.GetPublished(),
+			InertBecause: item.GetInertBecause(),
+			UseCount:     int(item.GetUseCount()),
+			Unreported:   int(item.GetUnreportedUses()),
+		}
+
+		if received := item.GetReceivedAt(); received != nil {
+			view.ReceivedAt = received.AsTime()
+		}
+
+		out = append(out, view)
+	}
+
+	taken := resp.Msg.GetRetractions()
+	back := make([]bridge.Retraction, 0, len(taken))
+
+	for _, item := range taken {
+		view := bridge.Retraction{Retraction: item.GetRetraction()}
+
+		if received := item.GetReceivedAt(); received != nil {
+			view.ReceivedAt = received.AsTime()
+		}
+
+		back = append(back, view)
+	}
+
+	return out, back, nil
+}
+
+func (f *Frontend) retractEndorsement(
+	ctx context.Context, endorsementID, keyFingerprint, reason string,
+) (told, unreached []string, err error) {
+	// Longer than an ordinary call: retracting means dialling every holder that
+	// can be reached, and the point of the answer is which of them were. It is
+	// the same reason withdrawing a pairing waits longer than a screen
+	// ordinarily should.
+	ctx, cancel := context.WithTimeout(ctx, retractTimeout)
+	defer cancel()
+
+	resp, err := f.client.RetractEndorsement(ctx, connect.NewRequest(
+		&ladulasv1.RetractEndorsementRequest{
+			EndorsementId:  endorsementID,
+			KeyFingerprint: keyFingerprint,
+			Reason:         reason,
+		}))
+	if err != nil {
+		return nil, nil, fmt.Errorf("retract the endorsement: %w", err)
+	}
+
+	return resp.Msg.GetTold(), resp.Msg.GetUnreached(), nil
+}
+
+// retractTimeout bounds telling the holders. Failing to tell one is not a
+// failure to retract — the promise is dropped here whatever happened on the
+// wire, and the holders that were not reached come back in the answer.
+const retractTimeout = 30 * time.Second

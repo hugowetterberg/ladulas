@@ -200,6 +200,21 @@ service ControlService {
   // using, or the promise is one nobody here can audit.
   rpc ListDelegations(ListDelegationsRequest) returns (ListDelegationsResponse);
 
+  // ListEndorsements reports the endorsements this instance holds and the
+  // retractions it remembers (decision AG): promises other holders of a key
+  // have made about a requester, which this instance may be acting on.
+  rpc ListEndorsements(ListEndorsementsRequest) returns (ListEndorsementsResponse);
+
+  // RetractEndorsement takes one back, and publishes the retraction to every
+  // holder this instance can reach (decision AG).
+  //
+  // Any holder of the key may issue one, including a holder that did not make
+  // the promise — which is the point: the machine that sees an endorsement it
+  // did not expect is very often not the machine that made it. It needs the
+  // store passphrase for nothing; what stands in for authorization is holding
+  // the key, and the retraction is signed with it.
+  rpc RetractEndorsement(RetractEndorsementRequest) returns (RetractEndorsementResponse);
+
   // BeginPairing displays a pairing code and waits for a peer to arrive. The
   // stream carries the code first and then the exchange as it happens; the
   // caller answers the confirmation with AnswerPairing.
@@ -750,6 +765,59 @@ message HeldDelegationInfo {
   // out of touch rather than a fault, and reads as one.
   uint32 use_count = 3;
   uint32 unreported_uses = 4;
+}
+
+message ListEndorsementsRequest {}
+
+message ListEndorsementsResponse {
+  repeated HeldEndorsementInfo endorsements = 1;
+  repeated RetractionInfo retractions = 2;
+}
+
+// HeldEndorsementInfo is one endorsement this instance holds, as a reader needs
+// it. The signed artifact is not here, for the reason HeldDelegationInfo does
+// not carry one either.
+message HeldEndorsementInfo {
+  Endorsement endorsement = 1;
+  google.protobuf.Timestamp received_at = 2;
+  // Whether a holder was told about this before it could be spent, or whether
+  // it arrived on the request that spent it.
+  bool published = 3;
+  // True when this instance holds the key and would act on this — which is the
+  // difference between a promise being kept here and a copy being carried to
+  // present somewhere else.
+  bool actionable = 4;
+  // Why it would not be acted on, when it would not: the key is not here, the
+  // issuer is not an approver for this instance, it runs longer than this
+  // instance will honour, it has been retracted. Empty when it is live.
+  string inert_because = 5;
+  uint32 use_count = 6;
+  uint32 unreported_uses = 7;
+}
+
+message RetractionInfo {
+  Retraction retraction = 1;
+  google.protobuf.Timestamp received_at = 2;
+}
+
+message RetractEndorsementRequest {
+  // One endorsement by identifier, or every endorsement of a key issued up to
+  // now — which is what somebody reaches for when they think the key has
+  // leaked. Exactly one.
+  string endorsement_id = 1;
+  string key_fingerprint = 2;
+  string reason = 3;
+}
+
+message RetractEndorsementResponse {
+  // The holders that were told, and the ones that could not be reached. The
+  // second list is the honest half: a retraction is a delivery, and a holder
+  // that was not reached goes on honouring the promise until it expires or
+  // until somebody gets through.
+  repeated string told = 1;
+  repeated string unreached = 2;
+  // How many endorsements this instance dropped locally.
+  uint32 dropped = 3;
 }
 
 message RevokeGrantRequest {

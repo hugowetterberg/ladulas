@@ -101,6 +101,16 @@ export const bridge = {
       accept: Boolean(accept),
       label: label || "",
     }),
+  // Taking back a promise another holder of a key made about a machine
+  // (decision AG). The answer says who was told and who could not be, and the
+  // second list is the half the screen has to show: a holder that was not
+  // reached is still honouring it.
+  retractEndorsement: (id, key, reason) =>
+    call("POST", "/endorsements/retract", {
+      id: id || "",
+      key: key || "",
+      reason: reason || "",
+    }),
   reload: () => call("POST", "/reload"),
 
   // The two things that can be done to a promise already made (decision P):

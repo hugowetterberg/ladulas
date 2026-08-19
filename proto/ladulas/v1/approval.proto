@@ -545,6 +545,23 @@ message Grant {
   // next reconciliation renews a promise somebody has already taken back.
   bool revoke_pending = 12;
   google.protobuf.Timestamp revoke_requested_at = 13;
+
+  // Set when the promise was endorsed as well as kept (decision AG): the key
+  // is a portable one other instances hold, so a signed statement went to the
+  // requester and to every holder this instance could reach, and any of them
+  // may act on it without asking anybody.
+  //
+  // It is not an alternative to keeping the grant, the way `delegated` is. The
+  // issuer holds the key too and answers with this record exactly as before;
+  // what the endorsement adds is that the other holders may answer as well.
+  bool endorsed = 15;
+  // The holders this instance managed to tell, and the ones it could not. The
+  // second list is the reason both are here: an endorsement is honoured by a
+  // holder that was told nothing about it, because the requester carries a
+  // copy — so a holder that could not be reached is a holder that will honour
+  // the promise and cannot yet be told to stop (decision AG).
+  repeated string published_to = 16;
+  repeated string unreached_holders = 17;
 }
 
 // GrantUse is one signature a requester made under a delegation and then told
@@ -631,6 +648,12 @@ message ApprovalResponse {
   // the requester's own (decision P). The requester stores it and applies it
   // itself, so the promise survives the approver being asleep.
   SignedDelegation delegation = 10;
+  // A grant the approver endorsed rather than only kept, because the key is a
+  // portable one that other instances hold too (decision AG). The requester
+  // stores it and presents it to whichever holder it borrows from next, so the
+  // promise survives this approver being asleep without the requester ever
+  // being able to widen it.
+  SignedEndorsement endorsement = 11;
   // Whether the approver's UI should show a passive notification rather than a
   // prompt, for auto-approved requests (§9).
   bool notify_only = 9;
@@ -654,4 +677,133 @@ message SignedApproval {
   // ssh.Marshal of an ssh.Signature over
   // "ladulas-approval-v1" || 0x00 || response.
   bytes signature = 5;
+}
+
+// Endorsement is a key holder's standing statement that one named requester may
+// borrow one named key without further approval, until it expires — and that
+// any other holder of that key may act on it (decision AG).
+//
+// It fills the case decision P leaves open. A grant follows the key: one over a
+// key the requester holds is delegated, and one over a key that lives only in
+// an approver's hardware cannot be. A **portable key held by several instances**
+// (decision S) is neither — the requester holds no copy, so nothing is
+// delegated, and the private half has very much moved, so the second branch's
+// reasoning does not apply. Without this the promise stays on the machine that
+// made it and every borrowed signature wakes it, which is the exact cost
+// decision P exists to remove.
+//
+// It is signed twice and each signature does work the other cannot. Read
+// SignedEndorsement for which is which.
+message Endorsement {
+  // The same identifier as the issuer's own Grant record, so that a use
+  // reported back can be filed against the right promise without the issuer
+  // having to guess — the shape GrantUse already has for delegations.
+  string endorsement_id = 1;
+  // The same scope an approver-side grant uses, matched the same strict way.
+  // Its key_fingerprint is the key this is about and its requester_instance_id
+  // is the machine it is about, and both are checked again on the way in.
+  GrantScope scope = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string origin_request_id = 5;
+  // Human readable rendering of the scope, as shown when the promise was made.
+  string description = 6;
+  // The instance that issued it, which is a holder of the key.
+  string issuer_fingerprint = 7;
+  string issuer_name = 8;
+  // The instance it is about: the one that may borrow without being asked
+  // about again. A holder checks this against the identity of the channel the
+  // request arrived on, never against anything in the message, so a copy of an
+  // endorsement is of no use to anybody but the machine it names.
+  string requester_fingerprint = 9;
+  string requester_name = 11;
+  // The key. Repeated from the scope because this is what the key signature is
+  // checked against, and the two must agree.
+  string key_fingerprint = 10;
+}
+
+// SignedEndorsement is an Endorsement under two signatures (decision AG).
+//
+// As with SignedApproval and SignedDelegation the serialized endorsement is
+// authoritative — protobuf is not canonical, so re-marshalling could produce
+// bytes neither signature covers. Verify first, unmarshal second.
+//
+// **The identity signature says who.** Without it the key signature proves that
+// some holder wrote this and not which one, and a holder could issue in another
+// holder's name — which matters because the receiving side checks the issuer
+// against its own trust records.
+//
+// **The key signature says that the issuer held the key**, and it is what makes
+// the whole mechanism safe: a holder promising unattended use of a key promises
+// nothing it could not do itself. Without it an approver that holds no copy
+// could write standing cheques on somebody else's key.
+//
+// It is an SSHSIG under the namespace "endorsement@ladulas" rather than a raw
+// signature with a prefix, because this is a *user* key signing and SSHSIG's
+// own preamble and namespace are what keep it from being confusable with a git
+// commit signature or an SSH authentication blob (§5).
+message SignedEndorsement {
+  // Serialized Endorsement. Authoritative.
+  bytes endorsement = 1;
+  // The issuing instance's identity public key in SSH wire format.
+  bytes issuer_public_key = 2;
+  string issuer_fingerprint = 3;
+  string signature_algorithm = 4;
+  // ssh.Marshal of an ssh.Signature over
+  // "ladulas-endorsement-v1" || 0x00 || endorsement.
+  bytes signature = 5;
+  // sshsig.Signature.Marshal() over the same endorsement bytes, made with the
+  // endorsed key's private half. It carries its own public key, so the
+  // fingerprint it was made under is checked rather than believed.
+  bytes key_signature = 6;
+}
+
+// Retraction takes an endorsement back, and any holder of the key may issue one
+// (decision AG).
+//
+// Granting is narrow and taking back is wide, deliberately: an endorsement is
+// honoured only from an issuer this instance would have accepted a live
+// approval from, and a retraction is honoured from any holder of the key
+// whatever the trust records say. Honouring a retraction nobody wanted costs a
+// prompt; ignoring one that was meant costs a signature.
+message Retraction {
+  string retraction_id = 1;
+  // The key the retracted endorsements are about. A retraction is signed with
+  // this key's private half, which is the whole of the issuer's standing to
+  // make one.
+  string key_fingerprint = 2;
+  // What it takes back. Exactly one is set: one endorsement by identifier, or
+  // every endorsement of this key issued at or before a time — the second is
+  // the button for a key somebody thinks has leaked.
+  string endorsement_id = 3;
+  google.protobuf.Timestamp issued_before = 4;
+  google.protobuf.Timestamp issued_at = 5;
+  // When this may be forgotten: the expiry of what it takes back, or the
+  // longest promise anybody could have made past `issued_before`. A retraction
+  // has to outlive its target and no longer, which is what keeps the memory of
+  // them bounded on a machine that has been running for a year.
+  google.protobuf.Timestamp remember_until = 6;
+  string issuer_fingerprint = 7;
+  string issuer_name = 8;
+  string reason = 9;
+}
+
+// SignedRetraction is a Retraction under the same two signatures a
+// SignedEndorsement carries, and for the same reasons.
+//
+// The identity signature is what a list of retractions shows as "who", and it
+// is not what authorizes one: the key signature is. A retraction whose identity
+// half names an instance nothing here has heard of is still honoured.
+message SignedRetraction {
+  // Serialized Retraction. Authoritative.
+  bytes retraction = 1;
+  bytes issuer_public_key = 2;
+  string issuer_fingerprint = 3;
+  string signature_algorithm = 4;
+  // ssh.Marshal of an ssh.Signature over
+  // "ladulas-retraction-v1" || 0x00 || retraction.
+  bytes signature = 5;
+  // sshsig.Signature.Marshal() over the same retraction bytes, namespace
+  // "retraction@ladulas", made with the key's private half.
+  bytes key_signature = 6;
 }

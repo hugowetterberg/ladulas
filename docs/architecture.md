@@ -955,6 +955,73 @@ each time, which is the exact cost decision P exists to remove. **A key
 being here says nothing about whether it is also there**, and the
 holds-it test must not come back.
 
+**A promise about a portable key several machines hold travels with the
+key** — decision AG. Decision P has two branches and there is a third case
+that falls through both. A portable key handed from a phone to a laptop
+(decision S) is held by both; a machine that holds no copy and borrows it
+can be delegated nothing, and "the private half never moves, so the holder
+is in the loop per signature" is a statement about hardware keys and not
+about this one. So the promise stayed on the machine that made it and every
+borrowed signature woke that machine — the cost decision P exists to remove,
+in the shape decision S created.
+
+An **endorsement** is that promise written down so the other holders can act
+on it: a holder's signed statement that one named requester may borrow one
+named key, within a scope, until a time. It is honoured under two conditions
+that do different work, and each closes a hole the other does not.
+
+* **It is signed with the key it is about**, as an SSHSIG under the
+  namespace `endorsement@ladulas`. That proves the issuer held the key, and
+  it is what makes the mechanism safe rather than merely authenticated: a
+  holder promising unattended use of a key promises nothing it could not do
+  itself. Without it an approver holding no copy could write a standing
+  cheque on somebody else's key.
+* **It is signed with the issuing instance's identity key too**, and honoured
+  only from a peer this instance would have taken a live approval from. The
+  key signature alone proves that *some* holder wrote it and not which, and
+  possession of a key is not the same thing as being trusted to decide — a
+  key sold with an old laptop, or shared with a colleague, would otherwise
+  commandeer every other holder's willingness to sign unattended.
+
+Together they reduce the security argument to one sentence worth keeping in
+view: **an endorsement can produce no outcome that a live conversation with
+the same approver could not have produced.** What it removes is the round
+trip, not the trust decision.
+
+Three more checks are made where the promise is spent, and each answers a
+way it could go wrong quietly. The requester is checked against **the
+identity the channel authenticated**, never against anything in the message
+— `signForPeer` has already replaced the requester field with it before the
+engine sees the request — so a copy presented by anybody else names somebody
+else and matches nothing. The scope is matched by the same strict `covers()`
+a grant uses. And the promise is refused if it runs longer than **this
+instance's own `grant_ttl_options` maximum**, which is the one bound nobody
+else can raise: an issuer that wrote itself a month is refused by a holder
+that tops out at eight hours, and the request raises an ordinary prompt.
+
+**Which way each half travels is the design.** The endorsement goes back to
+the requester with its answer and is presented to whichever holder it
+borrows from next, because that is the only road that works when the issuer
+and the acting holder have never been awake at the same time. The
+**retraction** never travels that road — the requester is precisely the
+party with no reason to stop presenting a promise — so it is pushed between
+holders and gossiped onward by every instance that learns one, is honoured
+from **any** holder of the key whatever the trust records say, and is
+remembered until what it takes back would have expired anyway. Honouring a
+retraction nobody wanted costs a prompt; ignoring one that was meant costs a
+signature.
+
+**And an endorsement is published as well as carried**, to every holder this
+instance knows of — a peer that advertises the key (decision N), a peer it
+was handed to, the peer it came from (decision S). Not because publishing is
+what makes it work, but because a holder that was never told has a promise
+it will honour and cannot see, and **a promise nobody can see is a promise
+nobody can retract.** Which holders could not be told is written onto the
+grant rather than smoothed over, for the reason a revocation nobody could
+deliver is. What publishing cannot reach is a holder further down a chain of
+handovers this instance was not part of, which is the honest limit of it and
+the reason the requester carrying its own copy is the mechanism.
+
 **A grant is made to whoever asked, and "whoever" is a session** — decision
 U. A scope has always held the key, the kind, the destination and the
 repository; it now also holds the session the request came from, so
@@ -2930,6 +2997,7 @@ Added 2026-08-19:
 | AD | Who decides what a pairing is for | **the side displaying the code, once, for both sides.** `ladulas pair --listen --intent approver\|requester\|mutual` — an approver for this instance, an instance to approve for, or both — and the side that uses the code declares nothing: it is shown the sentence on its own confirmation and either agrees to that pairing or does not. Each record is that one answer and its mirror, because a peer that may ask us to approve is a peer we approve for. It replaces two independent declarations, one per side, each defaulting to "both", with nothing making them agree and neither side ever shown what the other had chosen — which is how an instance came to record "may approve for me" about a box with nobody at it and hand decision AC its veto. The intent is required rather than defaulted: guessing here is the thing being fixed. Changing what a pairing is for means removing the peer and pairing again, which is a limit and is meant to be one; `ladulas peers allow` still edits a record for somebody who knows exactly what they are doing. On the wire the joining side's direction fields are reserved rather than reused, and the answer it gets carries the intent it is agreeing to. Rationale in §7 |
 | AE | Where the pairing QR comes from | **a Go dependency, drawn by the bridge.** `rsc.io/qr` encodes and this repository renders the matrix to SVG, served on `/api/v1/pairings/qr` the way `pkg/avatar` serves a face — so the viewer bundle keeps its no-dependencies rule, which its own tests assert, and the phone gets the picture for nothing by being the other host of the same handler. It settles open question 6, which had been "the viewer takes its first dependency, or somebody writes an encoder, or `qrencode` stays the documented step" since M3, with the phone able to read a QR nothing here could draw. `qrencode` stays the documented step for a headless box, where the terminal's pixels are not Ladulås's to choose. The one response the bridge serves `no-store`: the string behind the picture is a five-minute single-use secret. Rejected: writing the encoder, which is Reed–Solomon over GF(256) plus four tables to be got exactly right, against a dependency that is 700 lines, unchanged since 2015 and read in an afternoon |
 | AF | Where a screen puts what it can start, and what it can take apart | **an icon in the pane's title bar, and a modal sheet behind it.** A screen in this window lists what is true; a form is neither a fact nor a list, and a screen that leads with one is a screen whose first line is not what somebody opened it for — the Keys pane greeted a reader with an empty text box above the keys they had come to look at, and the peer screen kept the pairing's own facts and the button that ends it below everything the peer is *for*. So: a **+** on Keys opens "make a new key", a **cog** on a machine opens the pairing and the way to end it, and both are `dialog` elements shown with `showModal`. Three things come with that and none of them is decoration. Escape closes a sheet and the window behind it is inert while one is up, neither of which this bundle has to implement. A sheet lives outside the pane, so the four-second poll cannot repaint a box somebody is typing into — which is what took the Keys screen out of the redrawn set when the form was on it, and what puts it back now the form is not (decision AA). And a sheet is thrown away when it closes, so reopening one starts again, which is the right answer for a form and would be the wrong one for a screen. The rule it sets: what a screen can *do* goes in the title bar, what a screen *is* stays in the pane, and a text field is never drawn into a screen the poll repaints. Rejected: a disclosure inside the pane, which is the same box on the same screen one click further away; and a route of its own per form, which the shell can carry — a fingerprint is base64 and the router takes everything after the first slash as the identifier, so `peer/<fp>/settings` is a peer named `<fp>/settings`. Extends decision AA; the sheets themselves are `ui.sheet` in the viewer bundle. Rationale in §12 |
+| AG | Where a TTL grant lives when several machines hold the key | **it travels with the key, signed by it.** Decision P follows the key and has two branches; a portable key held by several instances (decision S) falls through both — the requester holds no copy so nothing is delegated, and the private half has very much moved so the hardware branch's reasoning does not apply. The promise stayed on the machine that made it and every borrowed signature woke it, which is the cost decision P exists to remove. An **endorsement** is a holder's signed statement that one named requester may borrow one named key within a scope until a time, and any other holder of that key honours it. Two signatures, each closing a hole the other does not: **the key's** (SSHSIG, namespace `endorsement@ladulas`) proves the issuer held the key, so the promise adds no authority — a holder promises only what it could do itself, and an approver holding no copy cannot write a cheque on somebody else's key; **the issuer's identity key's** says which holder, because the receiving side honours one only from a peer it would have taken a live approval from. Possession-only was rejected: a key sold with an old laptop, or shared with a colleague, would make every holder an approver for every other with nobody having decided it. The security argument is then one sentence — an endorsement can produce no outcome that a live conversation with the same approver could not have produced, and what it removes is the round trip rather than the trust decision. Three checks at the point of spending: the requester against the identity the channel authenticated and never against the message, the scope by the same `covers()` a grant uses, and the expiry against **this** instance's own `grant_ttl_options` maximum, which is a ceiling nobody else can raise. **The asymmetry is the design.** The promise travels with the requester, which is the only road that works when the issuer and the acting holder are never awake at once; the retraction never does — the requester is precisely the party with no reason to stop presenting one — so it is pushed and gossiped between holders, honoured from any holder of the key whatever the trust records say, and remembered until its target would have expired. Honouring a retraction nobody wanted costs a prompt; ignoring one that was meant costs a signature. And an endorsement is **published** to every holder this instance knows of as well as carried — not because publishing is what makes it work, but because a promise nobody was told about is one a holder will keep and cannot see, and a promise nobody can see is a promise nobody can retract; the holders that could not be told are named on the grant rather than smoothed over. Extends decision P and qualifies decision V's wording, which now has to say the promise reaches anywhere the key is held. Rationale in §9 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

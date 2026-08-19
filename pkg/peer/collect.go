@@ -540,6 +540,10 @@ func (n *Node) decideFor(
 	// RemoteSign would have gone through — this is the same function — and the
 	// only difference is which side dialled.
 	if len(item.GetPayload()) > 0 {
+		// The same statement a dialled requester presents, checked by the same
+		// code before anything is decided (decision AG).
+		n.acceptPresented(record.GetFingerprint(), item.GetEndorsement())
+
 		signed, signature, err := n.signForPeer(ctx, record, requester, &msg,
 			body, item.GetPayload(), item.GetWrapSshsig())
 		if err != nil {

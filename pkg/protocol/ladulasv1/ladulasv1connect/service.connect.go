@@ -75,6 +75,12 @@ const (
 	KeyServiceCollectKeyOffersProcedure = "/ladulas.v1.KeyService/CollectKeyOffers"
 	// KeyServiceAnnounceKeysProcedure is the fully-qualified name of the KeyService's AnnounceKeys RPC.
 	KeyServiceAnnounceKeysProcedure = "/ladulas.v1.KeyService/AnnounceKeys"
+	// KeyServicePublishEndorsementProcedure is the fully-qualified name of the KeyService's
+	// PublishEndorsement RPC.
+	KeyServicePublishEndorsementProcedure = "/ladulas.v1.KeyService/PublishEndorsement"
+	// KeyServicePublishRetractionProcedure is the fully-qualified name of the KeyService's
+	// PublishRetraction RPC.
+	KeyServicePublishRetractionProcedure = "/ladulas.v1.KeyService/PublishRetraction"
 	// ProjectServiceListProjectsProcedure is the fully-qualified name of the ProjectService's
 	// ListProjects RPC.
 	ProjectServiceListProjectsProcedure = "/ladulas.v1.ProjectService/ListProjects"
@@ -513,6 +519,32 @@ type KeyServiceClient interface {
 	// saying which of its keys exist and may be offered to an agent, and every
 	// signature made with one is still decided where the key is.
 	AnnounceKeys(context.Context, *connect.Request[ladulasv1.AnnounceKeysRequest]) (*connect.Response[ladulasv1.AnnounceKeysResponse], error)
+	// PublishEndorsement tells a fellow holder of a key that a requester has been
+	// promised unattended use of it (decision AG).
+	//
+	// It is on KeyService because it is about a key rather than about a pairing,
+	// the same reason OfferKey is. Any paired peer may make the call: what
+	// decides whether the endorsement is honoured is the pair of checks inside
+	// it — signed by the key, from an issuer this instance would have taken a
+	// live approval from — and not who carried it here.
+	//
+	// **This call is not how an endorsement reaches the holder that acts on it.**
+	// The requester carries a copy and presents it with the request, which is
+	// what makes the promise work while the issuer and this instance have never
+	// been awake at the same time. What the call adds is that a holder finds out
+	// before the promise is spent rather than after — which is the whole of being
+	// able to retract one. A promise nobody was told about is a silent one, and
+	// an unretractable promise is what that amounts to.
+	PublishEndorsement(context.Context, *connect.Request[ladulasv1.PublishEndorsementRequest]) (*connect.Response[ladulasv1.PublishEndorsementResponse], error)
+	// PublishRetraction takes one back, and is honoured from any holder of the
+	// key whatever the trust records say (decision AG).
+	//
+	// A retraction gossips: an instance that learns one passes it to every holder
+	// it can reach. That is not tidiness — the requester is the party carrying
+	// the endorsement and is exactly the party that will not helpfully stop
+	// presenting it, so what takes a promise back must never travel by the same
+	// road as the promise.
+	PublishRetraction(context.Context, *connect.Request[ladulasv1.PublishRetractionRequest]) (*connect.Response[ladulasv1.PublishRetractionResponse], error)
 }
 
 // NewKeyServiceClient constructs a client for the ladulas.v1.KeyService service. By default, it
@@ -556,16 +588,30 @@ func NewKeyServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...
 			connect.WithSchema(keyServiceMethods.ByName("AnnounceKeys")),
 			connect.WithClientOptions(opts...),
 		),
+		publishEndorsement: connect.NewClient[ladulasv1.PublishEndorsementRequest, ladulasv1.PublishEndorsementResponse](
+			httpClient,
+			baseURL+KeyServicePublishEndorsementProcedure,
+			connect.WithSchema(keyServiceMethods.ByName("PublishEndorsement")),
+			connect.WithClientOptions(opts...),
+		),
+		publishRetraction: connect.NewClient[ladulasv1.PublishRetractionRequest, ladulasv1.PublishRetractionResponse](
+			httpClient,
+			baseURL+KeyServicePublishRetractionProcedure,
+			connect.WithSchema(keyServiceMethods.ByName("PublishRetraction")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // keyServiceClient implements KeyServiceClient.
 type keyServiceClient struct {
-	listKeys         *connect.Client[ladulasv1.ListKeysRequest, ladulasv1.ListKeysResponse]
-	remoteSign       *connect.Client[ladulasv1.RemoteSignRequest, ladulasv1.RemoteSignResponse]
-	offerKey         *connect.Client[ladulasv1.OfferKeyRequest, ladulasv1.OfferKeyResponse]
-	collectKeyOffers *connect.Client[ladulasv1.CollectKeyOffersRequest, ladulasv1.CollectKeyOffersResponse]
-	announceKeys     *connect.Client[ladulasv1.AnnounceKeysRequest, ladulasv1.AnnounceKeysResponse]
+	listKeys           *connect.Client[ladulasv1.ListKeysRequest, ladulasv1.ListKeysResponse]
+	remoteSign         *connect.Client[ladulasv1.RemoteSignRequest, ladulasv1.RemoteSignResponse]
+	offerKey           *connect.Client[ladulasv1.OfferKeyRequest, ladulasv1.OfferKeyResponse]
+	collectKeyOffers   *connect.Client[ladulasv1.CollectKeyOffersRequest, ladulasv1.CollectKeyOffersResponse]
+	announceKeys       *connect.Client[ladulasv1.AnnounceKeysRequest, ladulasv1.AnnounceKeysResponse]
+	publishEndorsement *connect.Client[ladulasv1.PublishEndorsementRequest, ladulasv1.PublishEndorsementResponse]
+	publishRetraction  *connect.Client[ladulasv1.PublishRetractionRequest, ladulasv1.PublishRetractionResponse]
 }
 
 // ListKeys calls ladulas.v1.KeyService.ListKeys.
@@ -591,6 +637,16 @@ func (c *keyServiceClient) CollectKeyOffers(ctx context.Context, req *connect.Re
 // AnnounceKeys calls ladulas.v1.KeyService.AnnounceKeys.
 func (c *keyServiceClient) AnnounceKeys(ctx context.Context, req *connect.Request[ladulasv1.AnnounceKeysRequest]) (*connect.Response[ladulasv1.AnnounceKeysResponse], error) {
 	return c.announceKeys.CallUnary(ctx, req)
+}
+
+// PublishEndorsement calls ladulas.v1.KeyService.PublishEndorsement.
+func (c *keyServiceClient) PublishEndorsement(ctx context.Context, req *connect.Request[ladulasv1.PublishEndorsementRequest]) (*connect.Response[ladulasv1.PublishEndorsementResponse], error) {
+	return c.publishEndorsement.CallUnary(ctx, req)
+}
+
+// PublishRetraction calls ladulas.v1.KeyService.PublishRetraction.
+func (c *keyServiceClient) PublishRetraction(ctx context.Context, req *connect.Request[ladulasv1.PublishRetractionRequest]) (*connect.Response[ladulasv1.PublishRetractionResponse], error) {
+	return c.publishRetraction.CallUnary(ctx, req)
 }
 
 // KeyServiceHandler is an implementation of the ladulas.v1.KeyService service.
@@ -642,6 +698,32 @@ type KeyServiceHandler interface {
 	// saying which of its keys exist and may be offered to an agent, and every
 	// signature made with one is still decided where the key is.
 	AnnounceKeys(context.Context, *connect.Request[ladulasv1.AnnounceKeysRequest]) (*connect.Response[ladulasv1.AnnounceKeysResponse], error)
+	// PublishEndorsement tells a fellow holder of a key that a requester has been
+	// promised unattended use of it (decision AG).
+	//
+	// It is on KeyService because it is about a key rather than about a pairing,
+	// the same reason OfferKey is. Any paired peer may make the call: what
+	// decides whether the endorsement is honoured is the pair of checks inside
+	// it — signed by the key, from an issuer this instance would have taken a
+	// live approval from — and not who carried it here.
+	//
+	// **This call is not how an endorsement reaches the holder that acts on it.**
+	// The requester carries a copy and presents it with the request, which is
+	// what makes the promise work while the issuer and this instance have never
+	// been awake at the same time. What the call adds is that a holder finds out
+	// before the promise is spent rather than after — which is the whole of being
+	// able to retract one. A promise nobody was told about is a silent one, and
+	// an unretractable promise is what that amounts to.
+	PublishEndorsement(context.Context, *connect.Request[ladulasv1.PublishEndorsementRequest]) (*connect.Response[ladulasv1.PublishEndorsementResponse], error)
+	// PublishRetraction takes one back, and is honoured from any holder of the
+	// key whatever the trust records say (decision AG).
+	//
+	// A retraction gossips: an instance that learns one passes it to every holder
+	// it can reach. That is not tidiness — the requester is the party carrying
+	// the endorsement and is exactly the party that will not helpfully stop
+	// presenting it, so what takes a promise back must never travel by the same
+	// road as the promise.
+	PublishRetraction(context.Context, *connect.Request[ladulasv1.PublishRetractionRequest]) (*connect.Response[ladulasv1.PublishRetractionResponse], error)
 }
 
 // NewKeyServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -681,6 +763,18 @@ func NewKeyServiceHandler(svc KeyServiceHandler, opts ...connect.HandlerOption) 
 		connect.WithSchema(keyServiceMethods.ByName("AnnounceKeys")),
 		connect.WithHandlerOptions(opts...),
 	)
+	keyServicePublishEndorsementHandler := connect.NewUnaryHandler(
+		KeyServicePublishEndorsementProcedure,
+		svc.PublishEndorsement,
+		connect.WithSchema(keyServiceMethods.ByName("PublishEndorsement")),
+		connect.WithHandlerOptions(opts...),
+	)
+	keyServicePublishRetractionHandler := connect.NewUnaryHandler(
+		KeyServicePublishRetractionProcedure,
+		svc.PublishRetraction,
+		connect.WithSchema(keyServiceMethods.ByName("PublishRetraction")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ladulas.v1.KeyService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case KeyServiceListKeysProcedure:
@@ -693,6 +787,10 @@ func NewKeyServiceHandler(svc KeyServiceHandler, opts ...connect.HandlerOption) 
 			keyServiceCollectKeyOffersHandler.ServeHTTP(w, r)
 		case KeyServiceAnnounceKeysProcedure:
 			keyServiceAnnounceKeysHandler.ServeHTTP(w, r)
+		case KeyServicePublishEndorsementProcedure:
+			keyServicePublishEndorsementHandler.ServeHTTP(w, r)
+		case KeyServicePublishRetractionProcedure:
+			keyServicePublishRetractionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -720,6 +818,14 @@ func (UnimplementedKeyServiceHandler) CollectKeyOffers(context.Context, *connect
 
 func (UnimplementedKeyServiceHandler) AnnounceKeys(context.Context, *connect.Request[ladulasv1.AnnounceKeysRequest]) (*connect.Response[ladulasv1.AnnounceKeysResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.KeyService.AnnounceKeys is not implemented"))
+}
+
+func (UnimplementedKeyServiceHandler) PublishEndorsement(context.Context, *connect.Request[ladulasv1.PublishEndorsementRequest]) (*connect.Response[ladulasv1.PublishEndorsementResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.KeyService.PublishEndorsement is not implemented"))
+}
+
+func (UnimplementedKeyServiceHandler) PublishRetraction(context.Context, *connect.Request[ladulasv1.PublishRetractionRequest]) (*connect.Response[ladulasv1.PublishRetractionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.KeyService.PublishRetraction is not implemented"))
 }
 
 // ProjectServiceClient is a client for the ladulas.v1.ProjectService service.

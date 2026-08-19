@@ -392,13 +392,15 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 	}
 
 	engine, err := approval.New(approval.Options{
-		Identity:    vault.Identity(),
-		Policy:      policy,
-		Grants:      vault,
-		Delegations: vault,
-		GrantUses:   vault,
-		Audit:       a.Audit,
-		Logger:      cfg.Logger,
+		Identity:     vault.Identity(),
+		Policy:       policy,
+		Grants:       vault,
+		Delegations:  vault,
+		Endorsements: vault,
+		KeySigner:    vault,
+		GrantUses:    vault,
+		Audit:        a.Audit,
+		Logger:       cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -417,18 +419,19 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 	}
 
 	built.peer, err = peer.New(peer.Options{
-		Identity:    vault.Identity(),
-		Trust:       vault,
-		Engine:      engine,
-		Keys:        vault,
-		Projects:    projects,
-		Delegations: vault,
-		Wakeups:     vault,
-		Handovers:   vault,
-		Listen:      cfg.PeerListen,
-		AllowPublic: cfg.PeerAllowPublic,
-		Headless:    cfg.Headless,
-		Logger:      cfg.Logger,
+		Identity:     vault.Identity(),
+		Trust:        vault,
+		Engine:       engine,
+		Keys:         vault,
+		Projects:     projects,
+		Delegations:  vault,
+		Wakeups:      vault,
+		Handovers:    vault,
+		Endorsements: vault,
+		Listen:       cfg.PeerListen,
+		AllowPublic:  cfg.PeerAllowPublic,
+		Headless:     cfg.Headless,
+		Logger:       cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -439,6 +442,10 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 	// introduced (decision P).
 	engine.ReportDelegatedUse(built.peer.PushGrantActivity)
 	engine.RenewDelegations(built.peer.RenewDelegation)
+
+	// And a promise about a portable key has to reach the other machines that
+	// hold it, or it is one they will keep and cannot see (decision AG).
+	engine.PublishEndorsements(built.peer.PublishEndorsement)
 
 	return built, nil
 }

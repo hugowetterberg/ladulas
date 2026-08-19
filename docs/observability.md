@@ -139,6 +139,18 @@ touches no disk; they are as cheap as the scrape interval makes them.
   ([decision S](architecture.md#10-keys-and-key-storage)). A non-zero
   `key_offers` needs a person: nothing else will ever mention it on a box
   nobody is sitting at, and it stays until it is answered.
+* **`ladulas_endorsements{state}`** — promises other holders of a key have
+  made about a machine
+  ([decision AG](architecture.md#9-approval-engine-and-policies)), by what
+  this instance does with them. `live` is the one to watch: it is this
+  instance signing for a paired machine **without asking anybody**, which is
+  the number that answers "is this box auto-signing, and under whose
+  promise" on a machine nobody is sitting at. `carried` is a copy it
+  presents when it borrows and never acts on, and is the ordinary state on a
+  keyless requester. `inert` is one it holds and will not apply, which is
+  usually a pairing revoked since the promise was made. A `live` count that
+  is not zero and that nobody expected is what `ladulas endorsements list`
+  is for.
 * **`ladulas_borrowed_keys{state}`** — keys that live on a paired peer, by
   whether they can be used right now: `usable`, `unreachable`, or
   `held_here` for one this instance also holds its own copy of.

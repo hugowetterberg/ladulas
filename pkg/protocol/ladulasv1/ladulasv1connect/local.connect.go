@@ -99,6 +99,12 @@ const (
 	// ControlServiceListDelegationsProcedure is the fully-qualified name of the ControlService's
 	// ListDelegations RPC.
 	ControlServiceListDelegationsProcedure = "/ladulas.v1.ControlService/ListDelegations"
+	// ControlServiceListEndorsementsProcedure is the fully-qualified name of the ControlService's
+	// ListEndorsements RPC.
+	ControlServiceListEndorsementsProcedure = "/ladulas.v1.ControlService/ListEndorsements"
+	// ControlServiceRetractEndorsementProcedure is the fully-qualified name of the ControlService's
+	// RetractEndorsement RPC.
+	ControlServiceRetractEndorsementProcedure = "/ladulas.v1.ControlService/RetractEndorsement"
 	// ControlServiceBeginPairingProcedure is the fully-qualified name of the ControlService's
 	// BeginPairing RPC.
 	ControlServiceBeginPairingProcedure = "/ladulas.v1.ControlService/BeginPairing"
@@ -351,6 +357,19 @@ type ControlServiceClient interface {
 	// self-approves for an hour has to be able to say which promise it is
 	// using, or the promise is one nobody here can audit.
 	ListDelegations(context.Context, *connect.Request[ladulasv1.ListDelegationsRequest]) (*connect.Response[ladulasv1.ListDelegationsResponse], error)
+	// ListEndorsements reports the endorsements this instance holds and the
+	// retractions it remembers (decision AG): promises other holders of a key
+	// have made about a requester, which this instance may be acting on.
+	ListEndorsements(context.Context, *connect.Request[ladulasv1.ListEndorsementsRequest]) (*connect.Response[ladulasv1.ListEndorsementsResponse], error)
+	// RetractEndorsement takes one back, and publishes the retraction to every
+	// holder this instance can reach (decision AG).
+	//
+	// Any holder of the key may issue one, including a holder that did not make
+	// the promise — which is the point: the machine that sees an endorsement it
+	// did not expect is very often not the machine that made it. It needs the
+	// store passphrase for nothing; what stands in for authorization is holding
+	// the key, and the retraction is signed with it.
+	RetractEndorsement(context.Context, *connect.Request[ladulasv1.RetractEndorsementRequest]) (*connect.Response[ladulasv1.RetractEndorsementResponse], error)
 	// BeginPairing displays a pairing code and waits for a peer to arrive. The
 	// stream carries the code first and then the exchange as it happens; the
 	// caller answers the confirmation with AnswerPairing.
@@ -582,6 +601,18 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("ListDelegations")),
 			connect.WithClientOptions(opts...),
 		),
+		listEndorsements: connect.NewClient[ladulasv1.ListEndorsementsRequest, ladulasv1.ListEndorsementsResponse](
+			httpClient,
+			baseURL+ControlServiceListEndorsementsProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("ListEndorsements")),
+			connect.WithClientOptions(opts...),
+		),
+		retractEndorsement: connect.NewClient[ladulasv1.RetractEndorsementRequest, ladulasv1.RetractEndorsementResponse](
+			httpClient,
+			baseURL+ControlServiceRetractEndorsementProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("RetractEndorsement")),
+			connect.WithClientOptions(opts...),
+		),
 		beginPairing: connect.NewClient[ladulasv1.BeginPairingRequest, ladulasv1.PairingProgress](
 			httpClient,
 			baseURL+ControlServiceBeginPairingProcedure,
@@ -739,6 +770,8 @@ type controlServiceClient struct {
 	revokeGrant          *connect.Client[ladulasv1.RevokeGrantRequest, ladulasv1.RevokeGrantResponse]
 	extendGrant          *connect.Client[ladulasv1.ExtendGrantRequest, ladulasv1.ExtendGrantResponse]
 	listDelegations      *connect.Client[ladulasv1.ListDelegationsRequest, ladulasv1.ListDelegationsResponse]
+	listEndorsements     *connect.Client[ladulasv1.ListEndorsementsRequest, ladulasv1.ListEndorsementsResponse]
+	retractEndorsement   *connect.Client[ladulasv1.RetractEndorsementRequest, ladulasv1.RetractEndorsementResponse]
 	beginPairing         *connect.Client[ladulasv1.BeginPairingRequest, ladulasv1.PairingProgress]
 	pairWithPeer         *connect.Client[ladulasv1.PairWithPeerRequest, ladulasv1.PairingProgress]
 	answerPairing        *connect.Client[ladulasv1.AnswerPairingRequest, ladulasv1.AnswerPairingResponse]
@@ -861,6 +894,16 @@ func (c *controlServiceClient) ExtendGrant(ctx context.Context, req *connect.Req
 // ListDelegations calls ladulas.v1.ControlService.ListDelegations.
 func (c *controlServiceClient) ListDelegations(ctx context.Context, req *connect.Request[ladulasv1.ListDelegationsRequest]) (*connect.Response[ladulasv1.ListDelegationsResponse], error) {
 	return c.listDelegations.CallUnary(ctx, req)
+}
+
+// ListEndorsements calls ladulas.v1.ControlService.ListEndorsements.
+func (c *controlServiceClient) ListEndorsements(ctx context.Context, req *connect.Request[ladulasv1.ListEndorsementsRequest]) (*connect.Response[ladulasv1.ListEndorsementsResponse], error) {
+	return c.listEndorsements.CallUnary(ctx, req)
+}
+
+// RetractEndorsement calls ladulas.v1.ControlService.RetractEndorsement.
+func (c *controlServiceClient) RetractEndorsement(ctx context.Context, req *connect.Request[ladulasv1.RetractEndorsementRequest]) (*connect.Response[ladulasv1.RetractEndorsementResponse], error) {
+	return c.retractEndorsement.CallUnary(ctx, req)
 }
 
 // BeginPairing calls ladulas.v1.ControlService.BeginPairing.
@@ -1072,6 +1115,19 @@ type ControlServiceHandler interface {
 	// self-approves for an hour has to be able to say which promise it is
 	// using, or the promise is one nobody here can audit.
 	ListDelegations(context.Context, *connect.Request[ladulasv1.ListDelegationsRequest]) (*connect.Response[ladulasv1.ListDelegationsResponse], error)
+	// ListEndorsements reports the endorsements this instance holds and the
+	// retractions it remembers (decision AG): promises other holders of a key
+	// have made about a requester, which this instance may be acting on.
+	ListEndorsements(context.Context, *connect.Request[ladulasv1.ListEndorsementsRequest]) (*connect.Response[ladulasv1.ListEndorsementsResponse], error)
+	// RetractEndorsement takes one back, and publishes the retraction to every
+	// holder this instance can reach (decision AG).
+	//
+	// Any holder of the key may issue one, including a holder that did not make
+	// the promise — which is the point: the machine that sees an endorsement it
+	// did not expect is very often not the machine that made it. It needs the
+	// store passphrase for nothing; what stands in for authorization is holding
+	// the key, and the retraction is signed with it.
+	RetractEndorsement(context.Context, *connect.Request[ladulasv1.RetractEndorsementRequest]) (*connect.Response[ladulasv1.RetractEndorsementResponse], error)
 	// BeginPairing displays a pairing code and waits for a peer to arrive. The
 	// stream carries the code first and then the exchange as it happens; the
 	// caller answers the confirmation with AnswerPairing.
@@ -1299,6 +1355,18 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("ListDelegations")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceListEndorsementsHandler := connect.NewUnaryHandler(
+		ControlServiceListEndorsementsProcedure,
+		svc.ListEndorsements,
+		connect.WithSchema(controlServiceMethods.ByName("ListEndorsements")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServiceRetractEndorsementHandler := connect.NewUnaryHandler(
+		ControlServiceRetractEndorsementProcedure,
+		svc.RetractEndorsement,
+		connect.WithSchema(controlServiceMethods.ByName("RetractEndorsement")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceBeginPairingHandler := connect.NewServerStreamHandler(
 		ControlServiceBeginPairingProcedure,
 		svc.BeginPairing,
@@ -1473,6 +1541,10 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceExtendGrantHandler.ServeHTTP(w, r)
 		case ControlServiceListDelegationsProcedure:
 			controlServiceListDelegationsHandler.ServeHTTP(w, r)
+		case ControlServiceListEndorsementsProcedure:
+			controlServiceListEndorsementsHandler.ServeHTTP(w, r)
+		case ControlServiceRetractEndorsementProcedure:
+			controlServiceRetractEndorsementHandler.ServeHTTP(w, r)
 		case ControlServiceBeginPairingProcedure:
 			controlServiceBeginPairingHandler.ServeHTTP(w, r)
 		case ControlServicePairWithPeerProcedure:
@@ -1604,6 +1676,14 @@ func (UnimplementedControlServiceHandler) ExtendGrant(context.Context, *connect.
 
 func (UnimplementedControlServiceHandler) ListDelegations(context.Context, *connect.Request[ladulasv1.ListDelegationsRequest]) (*connect.Response[ladulasv1.ListDelegationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ListDelegations is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) ListEndorsements(context.Context, *connect.Request[ladulasv1.ListEndorsementsRequest]) (*connect.Response[ladulasv1.ListEndorsementsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ListEndorsements is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) RetractEndorsement(context.Context, *connect.Request[ladulasv1.RetractEndorsementRequest]) (*connect.Response[ladulasv1.RetractEndorsementResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.RetractEndorsement is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) BeginPairing(context.Context, *connect.Request[ladulasv1.BeginPairingRequest], *connect.ServerStream[ladulasv1.PairingProgress]) error {

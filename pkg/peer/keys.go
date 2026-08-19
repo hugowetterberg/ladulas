@@ -138,6 +138,15 @@ func (s *peerService) RemoteSign(
 		Process: msg.GetRequester().GetProcess(),
 	}
 
+	// What the requester presented is written down before anything is decided,
+	// because the engine reads it out of the store and not off the wire. It is
+	// presented rather than relied on: every check that decides whether it is
+	// honoured — both signatures here, the key and the issuer in the store, the
+	// requester and the ceiling in the engine — happens after this, and a
+	// requester that presented somebody else's endorsement has simply asked an
+	// ordinary question that will raise an ordinary prompt.
+	s.node.acceptPresented(peer.Fingerprint, req.Msg.GetEndorsement())
+
 	signed, signature, err := s.node.signForPeer(ctx, record, requester, msg,
 		body, req.Msg.GetPayload(), req.Msg.GetWrapSshsig())
 	if err != nil {
@@ -599,6 +608,7 @@ func (n *Node) dropPeerKeys(record *storepb.TrustRecord) {
 	}
 
 	n.dropPeerDelegations(record)
+	n.dropPeerEndorsements(record)
 	n.dropPeerWakeup(record)
 }
 
@@ -915,6 +925,8 @@ func (n *Node) signOverLink(
 		Request:    body,
 		Payload:    payload,
 		WrapSshsig: wrapSSHSIG,
+		Endorsement: n.endorsementFor(
+			msg.GetKey().GetFingerprint()),
 	}
 
 	// The holder is deciding this, so it may ask for the rest of the diff for
@@ -983,15 +995,16 @@ func (n *Node) signThroughInbox(
 	fingerprint := record.GetFingerprint()
 
 	entry := &parked{
-		peer:       fingerprint,
-		id:         outgoing.GetRequestId(),
-		body:       body,
-		digest:     identity.Digest(body),
-		since:      time.Now(),
-		deadline:   deadlineOf(ctx),
-		payload:    payload,
-		wrapSSHSIG: wrapSSHSIG,
-		answer:     make(chan *collectedAnswer, 1),
+		peer:        fingerprint,
+		id:          outgoing.GetRequestId(),
+		body:        body,
+		digest:      identity.Digest(body),
+		since:       time.Now(),
+		deadline:    deadlineOf(ctx),
+		payload:     payload,
+		wrapSSHSIG:  wrapSSHSIG,
+		endorsement: n.endorsementFor(msg.GetKey().GetFingerprint()),
+		answer:      make(chan *collectedAnswer, 1),
 	}
 
 	// The holder is deciding this, so it may ask for the rest of the diff for as
@@ -1152,6 +1165,13 @@ func (n *Node) acceptBorrowedSignature(
 	decision.Reason = answer.Reason
 
 	n.engine.Delegated(msg, decision, answer.Signed)
+
+	// A promise the holder made about this instance travels back with the
+	// answer, and this side keeps it so it can be presented to whichever holder
+	// it borrows from next (decision AG). It is not authorization here and
+	// cannot be: this instance holds no copy of the key, so all it can ever do
+	// with one is hand it to somebody who does.
+	n.acceptEndorsement(decision.GetEndorsement())
 
 	out := &ladulasv1.RemoteSignResponse{
 		Approval:  answer.Signed,

@@ -482,9 +482,65 @@ type InstanceView struct {
 	Recent      []ActivityView          `json:"recent,omitempty"`
 	Pending     []PendingView           `json:"pending,omitempty"`
 	Pairings    []PairingSummaryView    `json:"pairings,omitempty"`
+	// Endorsements are the promises other holders of a key have made about a
+	// machine, and Retractions the ones that have been taken back (decision
+	// AG). Both are listed in full, including the promises this instance only
+	// carries and will never act on: what a surface must be able to answer is
+	// "what is this machine signing under", and a filtered list cannot.
+	Endorsements []EndorsementSummaryView `json:"endorsements,omitempty"`
+	Retractions  []RetractionSummaryView  `json:"retractions,omitempty"`
 	// Lock is the store's state, when the host manages one (§10).
 	Lock  *LockView `json:"lock,omitempty"`
 	Error string    `json:"error,omitempty"`
+}
+
+// EndorsementSummaryView is one promise another holder of a key has made about
+// a machine, as a surface needs it (decision AG).
+//
+// It carries why it would not be acted on rather than being left out when it
+// would not. An endorsement works whether or not this instance was told about
+// it — the requester carries a copy and presents it — so a list that showed
+// only the live ones would be a machine unable to say what it is honouring, and
+// a promise nobody can see is a promise nobody can retract.
+type EndorsementSummaryView struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Expires     string `json:"expires"`
+	ExpiresAt   string `json:"expiresAt,omitempty"`
+	// Issuer is the holder that made the promise, and Requester the machine it
+	// is about — both by name where there is one.
+	Issuer    string `json:"issuer"`
+	Requester string `json:"requester"`
+	// Key is the fingerprint the promise is about, which is also the key that
+	// signed it.
+	Key      string `json:"key"`
+	Received string `json:"received,omitempty"`
+	// Published says a holder was told before the promise could be spent, as
+	// opposed to it arriving on the request that spent it. The second is the
+	// state publishing exists to avoid and cannot always reach.
+	Published bool `json:"published,omitempty"`
+	// Live says this instance would answer under it. InertBecause says why not
+	// when it would not, in the store's own words.
+	Live         bool   `json:"live"`
+	InertBecause string `json:"inertBecause,omitempty"`
+
+	UseCount   int `json:"useCount"`
+	Unreported int `json:"unreported,omitempty"`
+}
+
+// RetractionSummaryView is one promise taken back, remembered until what it
+// takes back would have expired anyway (decision AG).
+type RetractionSummaryView struct {
+	ID string `json:"id"`
+	// Target is what it takes back, worded: one promise, or everything about
+	// the key up to a moment.
+	Target string `json:"target"`
+	Key    string `json:"key"`
+	Issuer string `json:"issuer"`
+	Reason string `json:"reason,omitempty"`
+	// Until is when it may be forgotten, which is not when it takes effect.
+	Until   string `json:"until,omitempty"`
+	UntilAt string `json:"untilAt,omitempty"`
 }
 
 // LocationView is one "this file lives here" row.
@@ -1130,4 +1186,66 @@ func grantSummary(grant *ladulasv1.Grant) GrantSummaryView {
 	}
 
 	return view
+}
+
+// endorsementSummary renders one promise about a key for a surface.
+func endorsementSummary(held Endorsement) EndorsementSummaryView {
+	e := held.Endorsement
+	expires := e.GetExpiresAt().AsTime()
+
+	view := EndorsementSummaryView{
+		ID:           e.GetEndorsementId(),
+		Description:  e.GetDescription(),
+		Expires:      expires.Local().Format(time.RFC1123),
+		ExpiresAt:    expires.Format(time.RFC3339),
+		Issuer:       named(e.GetIssuerName(), e.GetIssuerFingerprint()),
+		Requester:    named(e.GetRequesterName(), e.GetRequesterFingerprint()),
+		Key:          e.GetKeyFingerprint(),
+		Published:    held.Published,
+		Live:         held.InertBecause == "",
+		InertBecause: held.InertBecause,
+		UseCount:     held.UseCount,
+		Unreported:   held.Unreported,
+	}
+
+	if !held.ReceivedAt.IsZero() {
+		view.Received = held.ReceivedAt.Format(time.RFC3339)
+	}
+
+	return view
+}
+
+// retractionSummary renders one promise taken back.
+func retractionSummary(held Retraction) RetractionSummaryView {
+	r := held.Retraction
+
+	view := RetractionSummaryView{
+		ID:     r.GetRetractionId(),
+		Key:    r.GetKeyFingerprint(),
+		Issuer: named(r.GetIssuerName(), r.GetIssuerFingerprint()),
+		Reason: r.GetReason(),
+		Target: r.GetEndorsementId(),
+	}
+
+	if view.Target == "" {
+		view.Target = "every promise made before " +
+			r.GetIssuedBefore().AsTime().Local().Format(time.RFC1123)
+	}
+
+	if until := r.GetRememberUntil(); until != nil {
+		view.Until = until.AsTime().Local().Format(time.RFC1123)
+		view.UntilAt = until.AsTime().Format(time.RFC3339)
+	}
+
+	return view
+}
+
+// named is a name where there is one and a fingerprint where there is not,
+// which is what every one of these views does with an instance.
+func named(name, fingerprint string) string {
+	if name != "" {
+		return name
+	}
+
+	return fingerprint
 }

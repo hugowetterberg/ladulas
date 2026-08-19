@@ -2465,8 +2465,24 @@ type Grant struct {
 	// next reconciliation renews a promise somebody has already taken back.
 	RevokePending     bool                   `protobuf:"varint,12,opt,name=revoke_pending,json=revokePending,proto3" json:"revoke_pending,omitempty"`
 	RevokeRequestedAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=revoke_requested_at,json=revokeRequestedAt,proto3" json:"revoke_requested_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Set when the promise was endorsed as well as kept (decision AG): the key
+	// is a portable one other instances hold, so a signed statement went to the
+	// requester and to every holder this instance could reach, and any of them
+	// may act on it without asking anybody.
+	//
+	// It is not an alternative to keeping the grant, the way `delegated` is. The
+	// issuer holds the key too and answers with this record exactly as before;
+	// what the endorsement adds is that the other holders may answer as well.
+	Endorsed bool `protobuf:"varint,15,opt,name=endorsed,proto3" json:"endorsed,omitempty"`
+	// The holders this instance managed to tell, and the ones it could not. The
+	// second list is the reason both are here: an endorsement is honoured by a
+	// holder that was told nothing about it, because the requester carries a
+	// copy — so a holder that could not be reached is a holder that will honour
+	// the promise and cannot yet be told to stop (decision AG).
+	PublishedTo      []string `protobuf:"bytes,16,rep,name=published_to,json=publishedTo,proto3" json:"published_to,omitempty"`
+	UnreachedHolders []string `protobuf:"bytes,17,rep,name=unreached_holders,json=unreachedHolders,proto3" json:"unreached_holders,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Grant) Reset() {
@@ -2593,6 +2609,27 @@ func (x *Grant) GetRevokePending() bool {
 func (x *Grant) GetRevokeRequestedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.RevokeRequestedAt
+	}
+	return nil
+}
+
+func (x *Grant) GetEndorsed() bool {
+	if x != nil {
+		return x.Endorsed
+	}
+	return false
+}
+
+func (x *Grant) GetPublishedTo() []string {
+	if x != nil {
+		return x.PublishedTo
+	}
+	return nil
+}
+
+func (x *Grant) GetUnreachedHolders() []string {
+	if x != nil {
+		return x.UnreachedHolders
 	}
 	return nil
 }
@@ -2975,6 +3012,12 @@ type ApprovalResponse struct {
 	// the requester's own (decision P). The requester stores it and applies it
 	// itself, so the promise survives the approver being asleep.
 	Delegation *SignedDelegation `protobuf:"bytes,10,opt,name=delegation,proto3" json:"delegation,omitempty"`
+	// A grant the approver endorsed rather than only kept, because the key is a
+	// portable one that other instances hold too (decision AG). The requester
+	// stores it and presents it to whichever holder it borrows from next, so the
+	// promise survives this approver being asleep without the requester ever
+	// being able to widen it.
+	Endorsement *SignedEndorsement `protobuf:"bytes,11,opt,name=endorsement,proto3" json:"endorsement,omitempty"`
 	// Whether the approver's UI should show a passive notification rather than a
 	// prompt, for auto-approved requests (§9).
 	NotifyOnly    bool `protobuf:"varint,9,opt,name=notify_only,json=notifyOnly,proto3" json:"notify_only,omitempty"`
@@ -3075,6 +3118,13 @@ func (x *ApprovalResponse) GetDelegation() *SignedDelegation {
 	return nil
 }
 
+func (x *ApprovalResponse) GetEndorsement() *SignedEndorsement {
+	if x != nil {
+		return x.Endorsement
+	}
+	return nil
+}
+
 func (x *ApprovalResponse) GetNotifyOnly() bool {
 	if x != nil {
 		return x.NotifyOnly
@@ -3166,6 +3216,491 @@ func (x *SignedApproval) GetSignatureAlgorithm() string {
 func (x *SignedApproval) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
+	}
+	return nil
+}
+
+// Endorsement is a key holder's standing statement that one named requester may
+// borrow one named key without further approval, until it expires — and that
+// any other holder of that key may act on it (decision AG).
+//
+// It fills the case decision P leaves open. A grant follows the key: one over a
+// key the requester holds is delegated, and one over a key that lives only in
+// an approver's hardware cannot be. A **portable key held by several instances**
+// (decision S) is neither — the requester holds no copy, so nothing is
+// delegated, and the private half has very much moved, so the second branch's
+// reasoning does not apply. Without this the promise stays on the machine that
+// made it and every borrowed signature wakes it, which is the exact cost
+// decision P exists to remove.
+//
+// It is signed twice and each signature does work the other cannot. Read
+// SignedEndorsement for which is which.
+type Endorsement struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The same identifier as the issuer's own Grant record, so that a use
+	// reported back can be filed against the right promise without the issuer
+	// having to guess — the shape GrantUse already has for delegations.
+	EndorsementId string `protobuf:"bytes,1,opt,name=endorsement_id,json=endorsementId,proto3" json:"endorsement_id,omitempty"`
+	// The same scope an approver-side grant uses, matched the same strict way.
+	// Its key_fingerprint is the key this is about and its requester_instance_id
+	// is the machine it is about, and both are checked again on the way in.
+	Scope           *GrantScope            `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	CreatedAt       *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	OriginRequestId string                 `protobuf:"bytes,5,opt,name=origin_request_id,json=originRequestId,proto3" json:"origin_request_id,omitempty"`
+	// Human readable rendering of the scope, as shown when the promise was made.
+	Description string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
+	// The instance that issued it, which is a holder of the key.
+	IssuerFingerprint string `protobuf:"bytes,7,opt,name=issuer_fingerprint,json=issuerFingerprint,proto3" json:"issuer_fingerprint,omitempty"`
+	IssuerName        string `protobuf:"bytes,8,opt,name=issuer_name,json=issuerName,proto3" json:"issuer_name,omitempty"`
+	// The instance it is about: the one that may borrow without being asked
+	// about again. A holder checks this against the identity of the channel the
+	// request arrived on, never against anything in the message, so a copy of an
+	// endorsement is of no use to anybody but the machine it names.
+	RequesterFingerprint string `protobuf:"bytes,9,opt,name=requester_fingerprint,json=requesterFingerprint,proto3" json:"requester_fingerprint,omitempty"`
+	RequesterName        string `protobuf:"bytes,11,opt,name=requester_name,json=requesterName,proto3" json:"requester_name,omitempty"`
+	// The key. Repeated from the scope because this is what the key signature is
+	// checked against, and the two must agree.
+	KeyFingerprint string `protobuf:"bytes,10,opt,name=key_fingerprint,json=keyFingerprint,proto3" json:"key_fingerprint,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *Endorsement) Reset() {
+	*x = Endorsement{}
+	mi := &file_ladulas_v1_approval_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Endorsement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Endorsement) ProtoMessage() {}
+
+func (x *Endorsement) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_approval_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Endorsement.ProtoReflect.Descriptor instead.
+func (*Endorsement) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_approval_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *Endorsement) GetEndorsementId() string {
+	if x != nil {
+		return x.EndorsementId
+	}
+	return ""
+}
+
+func (x *Endorsement) GetScope() *GrantScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *Endorsement) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *Endorsement) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *Endorsement) GetOriginRequestId() string {
+	if x != nil {
+		return x.OriginRequestId
+	}
+	return ""
+}
+
+func (x *Endorsement) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *Endorsement) GetIssuerFingerprint() string {
+	if x != nil {
+		return x.IssuerFingerprint
+	}
+	return ""
+}
+
+func (x *Endorsement) GetIssuerName() string {
+	if x != nil {
+		return x.IssuerName
+	}
+	return ""
+}
+
+func (x *Endorsement) GetRequesterFingerprint() string {
+	if x != nil {
+		return x.RequesterFingerprint
+	}
+	return ""
+}
+
+func (x *Endorsement) GetRequesterName() string {
+	if x != nil {
+		return x.RequesterName
+	}
+	return ""
+}
+
+func (x *Endorsement) GetKeyFingerprint() string {
+	if x != nil {
+		return x.KeyFingerprint
+	}
+	return ""
+}
+
+// SignedEndorsement is an Endorsement under two signatures (decision AG).
+//
+// As with SignedApproval and SignedDelegation the serialized endorsement is
+// authoritative — protobuf is not canonical, so re-marshalling could produce
+// bytes neither signature covers. Verify first, unmarshal second.
+//
+// **The identity signature says who.** Without it the key signature proves that
+// some holder wrote this and not which one, and a holder could issue in another
+// holder's name — which matters because the receiving side checks the issuer
+// against its own trust records.
+//
+// **The key signature says that the issuer held the key**, and it is what makes
+// the whole mechanism safe: a holder promising unattended use of a key promises
+// nothing it could not do itself. Without it an approver that holds no copy
+// could write standing cheques on somebody else's key.
+//
+// It is an SSHSIG under the namespace "endorsement@ladulas" rather than a raw
+// signature with a prefix, because this is a *user* key signing and SSHSIG's
+// own preamble and namespace are what keep it from being confusable with a git
+// commit signature or an SSH authentication blob (§5).
+type SignedEndorsement struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Serialized Endorsement. Authoritative.
+	Endorsement []byte `protobuf:"bytes,1,opt,name=endorsement,proto3" json:"endorsement,omitempty"`
+	// The issuing instance's identity public key in SSH wire format.
+	IssuerPublicKey    []byte `protobuf:"bytes,2,opt,name=issuer_public_key,json=issuerPublicKey,proto3" json:"issuer_public_key,omitempty"`
+	IssuerFingerprint  string `protobuf:"bytes,3,opt,name=issuer_fingerprint,json=issuerFingerprint,proto3" json:"issuer_fingerprint,omitempty"`
+	SignatureAlgorithm string `protobuf:"bytes,4,opt,name=signature_algorithm,json=signatureAlgorithm,proto3" json:"signature_algorithm,omitempty"`
+	// ssh.Marshal of an ssh.Signature over
+	// "ladulas-endorsement-v1" || 0x00 || endorsement.
+	Signature []byte `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
+	// sshsig.Signature.Marshal() over the same endorsement bytes, made with the
+	// endorsed key's private half. It carries its own public key, so the
+	// fingerprint it was made under is checked rather than believed.
+	KeySignature  []byte `protobuf:"bytes,6,opt,name=key_signature,json=keySignature,proto3" json:"key_signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedEndorsement) Reset() {
+	*x = SignedEndorsement{}
+	mi := &file_ladulas_v1_approval_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedEndorsement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedEndorsement) ProtoMessage() {}
+
+func (x *SignedEndorsement) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_approval_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedEndorsement.ProtoReflect.Descriptor instead.
+func (*SignedEndorsement) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_approval_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *SignedEndorsement) GetEndorsement() []byte {
+	if x != nil {
+		return x.Endorsement
+	}
+	return nil
+}
+
+func (x *SignedEndorsement) GetIssuerPublicKey() []byte {
+	if x != nil {
+		return x.IssuerPublicKey
+	}
+	return nil
+}
+
+func (x *SignedEndorsement) GetIssuerFingerprint() string {
+	if x != nil {
+		return x.IssuerFingerprint
+	}
+	return ""
+}
+
+func (x *SignedEndorsement) GetSignatureAlgorithm() string {
+	if x != nil {
+		return x.SignatureAlgorithm
+	}
+	return ""
+}
+
+func (x *SignedEndorsement) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *SignedEndorsement) GetKeySignature() []byte {
+	if x != nil {
+		return x.KeySignature
+	}
+	return nil
+}
+
+// Retraction takes an endorsement back, and any holder of the key may issue one
+// (decision AG).
+//
+// Granting is narrow and taking back is wide, deliberately: an endorsement is
+// honoured only from an issuer this instance would have accepted a live
+// approval from, and a retraction is honoured from any holder of the key
+// whatever the trust records say. Honouring a retraction nobody wanted costs a
+// prompt; ignoring one that was meant costs a signature.
+type Retraction struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	RetractionId string                 `protobuf:"bytes,1,opt,name=retraction_id,json=retractionId,proto3" json:"retraction_id,omitempty"`
+	// The key the retracted endorsements are about. A retraction is signed with
+	// this key's private half, which is the whole of the issuer's standing to
+	// make one.
+	KeyFingerprint string `protobuf:"bytes,2,opt,name=key_fingerprint,json=keyFingerprint,proto3" json:"key_fingerprint,omitempty"`
+	// What it takes back. Exactly one is set: one endorsement by identifier, or
+	// every endorsement of this key issued at or before a time — the second is
+	// the button for a key somebody thinks has leaked.
+	EndorsementId string                 `protobuf:"bytes,3,opt,name=endorsement_id,json=endorsementId,proto3" json:"endorsement_id,omitempty"`
+	IssuedBefore  *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=issued_before,json=issuedBefore,proto3" json:"issued_before,omitempty"`
+	IssuedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	// When this may be forgotten: the expiry of what it takes back, or the
+	// longest promise anybody could have made past `issued_before`. A retraction
+	// has to outlive its target and no longer, which is what keeps the memory of
+	// them bounded on a machine that has been running for a year.
+	RememberUntil     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=remember_until,json=rememberUntil,proto3" json:"remember_until,omitempty"`
+	IssuerFingerprint string                 `protobuf:"bytes,7,opt,name=issuer_fingerprint,json=issuerFingerprint,proto3" json:"issuer_fingerprint,omitempty"`
+	IssuerName        string                 `protobuf:"bytes,8,opt,name=issuer_name,json=issuerName,proto3" json:"issuer_name,omitempty"`
+	Reason            string                 `protobuf:"bytes,9,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *Retraction) Reset() {
+	*x = Retraction{}
+	mi := &file_ladulas_v1_approval_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Retraction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Retraction) ProtoMessage() {}
+
+func (x *Retraction) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_approval_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Retraction.ProtoReflect.Descriptor instead.
+func (*Retraction) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_approval_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *Retraction) GetRetractionId() string {
+	if x != nil {
+		return x.RetractionId
+	}
+	return ""
+}
+
+func (x *Retraction) GetKeyFingerprint() string {
+	if x != nil {
+		return x.KeyFingerprint
+	}
+	return ""
+}
+
+func (x *Retraction) GetEndorsementId() string {
+	if x != nil {
+		return x.EndorsementId
+	}
+	return ""
+}
+
+func (x *Retraction) GetIssuedBefore() *timestamppb.Timestamp {
+	if x != nil {
+		return x.IssuedBefore
+	}
+	return nil
+}
+
+func (x *Retraction) GetIssuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.IssuedAt
+	}
+	return nil
+}
+
+func (x *Retraction) GetRememberUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RememberUntil
+	}
+	return nil
+}
+
+func (x *Retraction) GetIssuerFingerprint() string {
+	if x != nil {
+		return x.IssuerFingerprint
+	}
+	return ""
+}
+
+func (x *Retraction) GetIssuerName() string {
+	if x != nil {
+		return x.IssuerName
+	}
+	return ""
+}
+
+func (x *Retraction) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// SignedRetraction is a Retraction under the same two signatures a
+// SignedEndorsement carries, and for the same reasons.
+//
+// The identity signature is what a list of retractions shows as "who", and it
+// is not what authorizes one: the key signature is. A retraction whose identity
+// half names an instance nothing here has heard of is still honoured.
+type SignedRetraction struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Serialized Retraction. Authoritative.
+	Retraction         []byte `protobuf:"bytes,1,opt,name=retraction,proto3" json:"retraction,omitempty"`
+	IssuerPublicKey    []byte `protobuf:"bytes,2,opt,name=issuer_public_key,json=issuerPublicKey,proto3" json:"issuer_public_key,omitempty"`
+	IssuerFingerprint  string `protobuf:"bytes,3,opt,name=issuer_fingerprint,json=issuerFingerprint,proto3" json:"issuer_fingerprint,omitempty"`
+	SignatureAlgorithm string `protobuf:"bytes,4,opt,name=signature_algorithm,json=signatureAlgorithm,proto3" json:"signature_algorithm,omitempty"`
+	// ssh.Marshal of an ssh.Signature over
+	// "ladulas-retraction-v1" || 0x00 || retraction.
+	Signature []byte `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
+	// sshsig.Signature.Marshal() over the same retraction bytes, namespace
+	// "retraction@ladulas", made with the key's private half.
+	KeySignature  []byte `protobuf:"bytes,6,opt,name=key_signature,json=keySignature,proto3" json:"key_signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SignedRetraction) Reset() {
+	*x = SignedRetraction{}
+	mi := &file_ladulas_v1_approval_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SignedRetraction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SignedRetraction) ProtoMessage() {}
+
+func (x *SignedRetraction) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_approval_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SignedRetraction.ProtoReflect.Descriptor instead.
+func (*SignedRetraction) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_approval_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SignedRetraction) GetRetraction() []byte {
+	if x != nil {
+		return x.Retraction
+	}
+	return nil
+}
+
+func (x *SignedRetraction) GetIssuerPublicKey() []byte {
+	if x != nil {
+		return x.IssuerPublicKey
+	}
+	return nil
+}
+
+func (x *SignedRetraction) GetIssuerFingerprint() string {
+	if x != nil {
+		return x.IssuerFingerprint
+	}
+	return ""
+}
+
+func (x *SignedRetraction) GetSignatureAlgorithm() string {
+	if x != nil {
+		return x.SignatureAlgorithm
+	}
+	return ""
+}
+
+func (x *SignedRetraction) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *SignedRetraction) GetKeySignature() []byte {
+	if x != nil {
+		return x.KeySignature
 	}
 	return nil
 }
@@ -3374,7 +3909,7 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\busername\x18\x06 \x01(\tR\busername\x127\n" +
 	"\x17destination_fingerprint\x18\b \x01(\tR\x16destinationFingerprint\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\a \x01(\x05R\tsessionId\"\xfa\x04\n" +
+	"session_id\x18\a \x01(\x05R\tsessionId\"\xe6\x05\n" +
 	"\x05Grant\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x12,\n" +
 	"\x05scope\x18\x02 \x01(\v2\x16.ladulas.v1.GrantScopeR\x05scope\x129\n" +
@@ -3393,7 +3928,10 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\vrecent_uses\x18\v \x03(\v2\x14.ladulas.v1.GrantUseR\n" +
 	"recentUses\x12%\n" +
 	"\x0erevoke_pending\x18\f \x01(\bR\rrevokePending\x12J\n" +
-	"\x13revoke_requested_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x11revokeRequestedAt\"\xfd\x01\n" +
+	"\x13revoke_requested_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x11revokeRequestedAt\x12\x1a\n" +
+	"\bendorsed\x18\x0f \x01(\bR\bendorsed\x12!\n" +
+	"\fpublished_to\x18\x10 \x03(\tR\vpublishedTo\x12+\n" +
+	"\x11unreached_holders\x18\x11 \x03(\tR\x10unreachedHolders\"\xfd\x01\n" +
 	"\bGrantUse\x12\x19\n" +
 	"\bgrant_id\x18\x06 \x01(\tR\agrantId\x12\x1d\n" +
 	"\n" +
@@ -3428,7 +3966,7 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05local\x18\x03 \x01(\bR\x05local\"\xcf\x03\n" +
+	"\x05local\x18\x03 \x01(\bR\x05local\"\x90\x04\n" +
 	"\x10ApprovalResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12%\n" +
@@ -3443,7 +3981,8 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\n" +
 	"delegation\x18\n" +
 	" \x01(\v2\x1c.ladulas.v1.SignedDelegationR\n" +
-	"delegation\x12\x1f\n" +
+	"delegation\x12?\n" +
+	"\vendorsement\x18\v \x01(\v2\x1d.ladulas.v1.SignedEndorsementR\vendorsement\x12\x1f\n" +
 	"\vnotify_only\x18\t \x01(\bR\n" +
 	"notifyOnly\"\xde\x01\n" +
 	"\x0eSignedApproval\x12\x1a\n" +
@@ -3451,7 +3990,51 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\x13approver_public_key\x18\x02 \x01(\fR\x11approverPublicKey\x121\n" +
 	"\x14approver_fingerprint\x18\x03 \x01(\tR\x13approverFingerprint\x12/\n" +
 	"\x13signature_algorithm\x18\x04 \x01(\tR\x12signatureAlgorithm\x12\x1c\n" +
-	"\tsignature\x18\x05 \x01(\fR\tsignature*\xcd\x01\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\"\xfb\x03\n" +
+	"\vEndorsement\x12%\n" +
+	"\x0eendorsement_id\x18\x01 \x01(\tR\rendorsementId\x12,\n" +
+	"\x05scope\x18\x02 \x01(\v2\x16.ladulas.v1.GrantScopeR\x05scope\x129\n" +
+	"\n" +
+	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12*\n" +
+	"\x11origin_request_id\x18\x05 \x01(\tR\x0foriginRequestId\x12 \n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\x12-\n" +
+	"\x12issuer_fingerprint\x18\a \x01(\tR\x11issuerFingerprint\x12\x1f\n" +
+	"\vissuer_name\x18\b \x01(\tR\n" +
+	"issuerName\x123\n" +
+	"\x15requester_fingerprint\x18\t \x01(\tR\x14requesterFingerprint\x12%\n" +
+	"\x0erequester_name\x18\v \x01(\tR\rrequesterName\x12'\n" +
+	"\x0fkey_fingerprint\x18\n" +
+	" \x01(\tR\x0ekeyFingerprint\"\x84\x02\n" +
+	"\x11SignedEndorsement\x12 \n" +
+	"\vendorsement\x18\x01 \x01(\fR\vendorsement\x12*\n" +
+	"\x11issuer_public_key\x18\x02 \x01(\fR\x0fissuerPublicKey\x12-\n" +
+	"\x12issuer_fingerprint\x18\x03 \x01(\tR\x11issuerFingerprint\x12/\n" +
+	"\x13signature_algorithm\x18\x04 \x01(\tR\x12signatureAlgorithm\x12\x1c\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\x12#\n" +
+	"\rkey_signature\x18\x06 \x01(\fR\fkeySignature\"\xa6\x03\n" +
+	"\n" +
+	"Retraction\x12#\n" +
+	"\rretraction_id\x18\x01 \x01(\tR\fretractionId\x12'\n" +
+	"\x0fkey_fingerprint\x18\x02 \x01(\tR\x0ekeyFingerprint\x12%\n" +
+	"\x0eendorsement_id\x18\x03 \x01(\tR\rendorsementId\x12?\n" +
+	"\rissued_before\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fissuedBefore\x127\n" +
+	"\tissued_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x12A\n" +
+	"\x0eremember_until\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\rrememberUntil\x12-\n" +
+	"\x12issuer_fingerprint\x18\a \x01(\tR\x11issuerFingerprint\x12\x1f\n" +
+	"\vissuer_name\x18\b \x01(\tR\n" +
+	"issuerName\x12\x16\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\"\x81\x02\n" +
+	"\x10SignedRetraction\x12\x1e\n" +
+	"\n" +
+	"retraction\x18\x01 \x01(\fR\n" +
+	"retraction\x12*\n" +
+	"\x11issuer_public_key\x18\x02 \x01(\fR\x0fissuerPublicKey\x12-\n" +
+	"\x12issuer_fingerprint\x18\x03 \x01(\tR\x11issuerFingerprint\x12/\n" +
+	"\x13signature_algorithm\x18\x04 \x01(\tR\x12signatureAlgorithm\x12\x1c\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\x12#\n" +
+	"\rkey_signature\x18\x06 \x01(\fR\fkeySignature*\xcd\x01\n" +
 	"\vRequestKind\x12\x1c\n" +
 	"\x18REQUEST_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15REQUEST_KIND_SSH_AUTH\x10\x01\x12\x19\n" +
@@ -3494,7 +4077,7 @@ func file_ladulas_v1_approval_proto_rawDescGZIP() []byte {
 }
 
 var file_ladulas_v1_approval_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_ladulas_v1_approval_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_ladulas_v1_approval_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_ladulas_v1_approval_proto_goTypes = []any{
 	(RequestKind)(0),              // 0: ladulas.v1.RequestKind
 	(GitDiffLineKind)(0),          // 1: ladulas.v1.GitDiffLineKind
@@ -3528,9 +4111,13 @@ var file_ladulas_v1_approval_proto_goTypes = []any{
 	(*ApproverInfo)(nil),          // 29: ladulas.v1.ApproverInfo
 	(*ApprovalResponse)(nil),      // 30: ladulas.v1.ApprovalResponse
 	(*SignedApproval)(nil),        // 31: ladulas.v1.SignedApproval
-	nil,                           // 32: ladulas.v1.PairingRequest.AttributesEntry
-	(*timestamppb.Timestamp)(nil), // 33: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 34: google.protobuf.Duration
+	(*Endorsement)(nil),           // 32: ladulas.v1.Endorsement
+	(*SignedEndorsement)(nil),     // 33: ladulas.v1.SignedEndorsement
+	(*Retraction)(nil),            // 34: ladulas.v1.Retraction
+	(*SignedRetraction)(nil),      // 35: ladulas.v1.SignedRetraction
+	nil,                           // 36: ladulas.v1.PairingRequest.AttributesEntry
+	(*timestamppb.Timestamp)(nil), // 37: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 38: google.protobuf.Duration
 }
 var file_ladulas_v1_approval_proto_depIdxs = []int32{
 	5,  // 0: ladulas.v1.SessionBinding.host_key:type_name -> ladulas.v1.HostKey
@@ -3539,7 +4126,7 @@ var file_ladulas_v1_approval_proto_depIdxs = []int32{
 	5,  // 3: ladulas.v1.SshAuthRequest.destination:type_name -> ladulas.v1.HostKey
 	6,  // 4: ladulas.v1.SshAuthRequest.binding_chain:type_name -> ladulas.v1.SessionBinding
 	5,  // 5: ladulas.v1.SshAuthRequest.payload_destination:type_name -> ladulas.v1.HostKey
-	33, // 6: ladulas.v1.GitIdentity.time:type_name -> google.protobuf.Timestamp
+	37, // 6: ladulas.v1.GitIdentity.time:type_name -> google.protobuf.Timestamp
 	11, // 7: ladulas.v1.GitObject.author:type_name -> ladulas.v1.GitIdentity
 	11, // 8: ladulas.v1.GitObject.committer:type_name -> ladulas.v1.GitIdentity
 	11, // 9: ladulas.v1.GitObject.tagger:type_name -> ladulas.v1.GitIdentity
@@ -3551,12 +4138,12 @@ var file_ladulas_v1_approval_proto_depIdxs = []int32{
 	17, // 15: ladulas.v1.GitContext.diff:type_name -> ladulas.v1.GitDiff
 	13, // 16: ladulas.v1.GitContext.parsed:type_name -> ladulas.v1.GitObject
 	18, // 17: ladulas.v1.SshsigRequest.git_context:type_name -> ladulas.v1.GitContext
-	32, // 18: ladulas.v1.PairingRequest.attributes:type_name -> ladulas.v1.PairingRequest.AttributesEntry
-	33, // 19: ladulas.v1.ApprovalRequest.created_at:type_name -> google.protobuf.Timestamp
+	36, // 18: ladulas.v1.PairingRequest.attributes:type_name -> ladulas.v1.PairingRequest.AttributesEntry
+	37, // 19: ladulas.v1.ApprovalRequest.created_at:type_name -> google.protobuf.Timestamp
 	9,  // 20: ladulas.v1.ApprovalRequest.requester:type_name -> ladulas.v1.RequesterInfo
 	0,  // 21: ladulas.v1.ApprovalRequest.kind:type_name -> ladulas.v1.RequestKind
 	4,  // 22: ladulas.v1.ApprovalRequest.key:type_name -> ladulas.v1.KeyRef
-	34, // 23: ladulas.v1.ApprovalRequest.timeout:type_name -> google.protobuf.Duration
+	38, // 23: ladulas.v1.ApprovalRequest.timeout:type_name -> google.protobuf.Duration
 	10, // 24: ladulas.v1.ApprovalRequest.ssh_auth:type_name -> ladulas.v1.SshAuthRequest
 	19, // 25: ladulas.v1.ApprovalRequest.sshsig:type_name -> ladulas.v1.SshsigRequest
 	20, // 26: ladulas.v1.ApprovalRequest.opaque_sign:type_name -> ladulas.v1.OpaqueSignRequest
@@ -3564,27 +4151,34 @@ var file_ladulas_v1_approval_proto_depIdxs = []int32{
 	22, // 28: ladulas.v1.ApprovalRequest.key_list:type_name -> ladulas.v1.KeyListRequest
 	0,  // 29: ladulas.v1.GrantScope.kind:type_name -> ladulas.v1.RequestKind
 	24, // 30: ladulas.v1.Grant.scope:type_name -> ladulas.v1.GrantScope
-	33, // 31: ladulas.v1.Grant.created_at:type_name -> google.protobuf.Timestamp
-	33, // 32: ladulas.v1.Grant.expires_at:type_name -> google.protobuf.Timestamp
+	37, // 31: ladulas.v1.Grant.created_at:type_name -> google.protobuf.Timestamp
+	37, // 32: ladulas.v1.Grant.expires_at:type_name -> google.protobuf.Timestamp
 	26, // 33: ladulas.v1.Grant.recent_uses:type_name -> ladulas.v1.GrantUse
-	33, // 34: ladulas.v1.Grant.revoke_requested_at:type_name -> google.protobuf.Timestamp
-	33, // 35: ladulas.v1.GrantUse.used_at:type_name -> google.protobuf.Timestamp
-	33, // 36: ladulas.v1.GrantUse.reported_at:type_name -> google.protobuf.Timestamp
+	37, // 34: ladulas.v1.Grant.revoke_requested_at:type_name -> google.protobuf.Timestamp
+	37, // 35: ladulas.v1.GrantUse.used_at:type_name -> google.protobuf.Timestamp
+	37, // 36: ladulas.v1.GrantUse.reported_at:type_name -> google.protobuf.Timestamp
 	0,  // 37: ladulas.v1.GrantUse.kind:type_name -> ladulas.v1.RequestKind
 	24, // 38: ladulas.v1.Delegation.scope:type_name -> ladulas.v1.GrantScope
-	33, // 39: ladulas.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
-	33, // 40: ladulas.v1.Delegation.expires_at:type_name -> google.protobuf.Timestamp
+	37, // 39: ladulas.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
+	37, // 40: ladulas.v1.Delegation.expires_at:type_name -> google.protobuf.Timestamp
 	2,  // 41: ladulas.v1.ApprovalResponse.decision:type_name -> ladulas.v1.Decision
 	3,  // 42: ladulas.v1.ApprovalResponse.source:type_name -> ladulas.v1.DecisionSource
-	33, // 43: ladulas.v1.ApprovalResponse.decided_at:type_name -> google.protobuf.Timestamp
+	37, // 43: ladulas.v1.ApprovalResponse.decided_at:type_name -> google.protobuf.Timestamp
 	29, // 44: ladulas.v1.ApprovalResponse.approver:type_name -> ladulas.v1.ApproverInfo
 	25, // 45: ladulas.v1.ApprovalResponse.grant:type_name -> ladulas.v1.Grant
 	28, // 46: ladulas.v1.ApprovalResponse.delegation:type_name -> ladulas.v1.SignedDelegation
-	47, // [47:47] is the sub-list for method output_type
-	47, // [47:47] is the sub-list for method input_type
-	47, // [47:47] is the sub-list for extension type_name
-	47, // [47:47] is the sub-list for extension extendee
-	0,  // [0:47] is the sub-list for field type_name
+	33, // 47: ladulas.v1.ApprovalResponse.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	24, // 48: ladulas.v1.Endorsement.scope:type_name -> ladulas.v1.GrantScope
+	37, // 49: ladulas.v1.Endorsement.created_at:type_name -> google.protobuf.Timestamp
+	37, // 50: ladulas.v1.Endorsement.expires_at:type_name -> google.protobuf.Timestamp
+	37, // 51: ladulas.v1.Retraction.issued_before:type_name -> google.protobuf.Timestamp
+	37, // 52: ladulas.v1.Retraction.issued_at:type_name -> google.protobuf.Timestamp
+	37, // 53: ladulas.v1.Retraction.remember_until:type_name -> google.protobuf.Timestamp
+	54, // [54:54] is the sub-list for method output_type
+	54, // [54:54] is the sub-list for method input_type
+	54, // [54:54] is the sub-list for extension type_name
+	54, // [54:54] is the sub-list for extension extendee
+	0,  // [0:54] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_approval_proto_init() }
@@ -3606,7 +4200,7 @@ func file_ladulas_v1_approval_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_approval_proto_rawDesc), len(file_ladulas_v1_approval_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   29,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

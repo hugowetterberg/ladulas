@@ -240,6 +240,7 @@ func Commands() []*cli.Command {
 		policyCommand(),
 		grantsCommand(),
 		delegationsCommand(),
+		endorsementsCommand(),
 		auditCommand(),
 		agentCommand(),
 		lockCommand(),

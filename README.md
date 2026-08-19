@@ -192,9 +192,28 @@ ladulas grants list             # promises this instance made, and to whom
 ladulas grants extend <id> 2h   # give one more time, counted from now
 ladulas grants revoke <id>      # take one back
 ladulas delegations list        # promises made about this instance, by whom
+ladulas endorsements list       # promises about a key that other holders made
+ladulas endorsements retract <id>          # take one back, tell every holder
+ladulas endorsements retract --key <fp>    # take back everything about a key
 ```
 
-Two lists rather than one, because they are two things (decision P): a
+A third list because there is a third thing (decision AG). A **portable key
+can be held by several machines** (decision S), and a promise one holder
+makes about a requester is honoured by all of them: the requester carries
+the signed statement and presents it wherever it borrows, so the promise
+works with the machine that made it asleep. `endorsements list` is what this
+instance is signing under, and it shows the copies it merely carries and the
+ones it will not act on too, with the reason — because a promise nobody can
+see is a promise nobody can take back.
+
+**Any holder of the key may retract**, including one that did not make the
+promise, and retracting says which holders were told and which were not.
+The ones that were not are still honouring it: a retraction is a delivery,
+it gossips between holders, and the promise runs out on its own whether or
+not anybody gets through.
+
+Two lists rather than one for the first two, because they are two things
+(decision P): a
 grant is this instance's own promise and can be taken back here, and a
 delegation is somebody else's promise about this instance, which it
 applies itself and can only let run out. Ending one of those early is the

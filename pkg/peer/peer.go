@@ -117,6 +117,12 @@ type Options struct {
 	// and nobody has answered. Optional; an instance without one refuses to be
 	// handed a key and has none to give.
 	Handovers Handovers
+	// Endorsements is both halves of decision AG: the promises other holders of
+	// a key have made about a requester, and the retractions that take them
+	// back. Optional; an instance without one endorses nothing, honours no
+	// endorsement and asks about every borrowed signature, which is what every
+	// instance did before decision AG.
+	Endorsements Endorsements
 	// Listen is the bind specification (decision H); AllowPublic opts in to
 	// addresses reachable from outside the local network.
 	Listen      string
@@ -155,21 +161,22 @@ const (
 
 // Node is an instance's peer machinery.
 type Node struct {
-	identity    *identity.Identity
-	trust       Store
-	engine      *approval.Engine
-	keys        KeyStore
-	projects    *project.Cache
-	delegations Delegations
-	wakeups     Wakeups
-	handovers   Handovers
-	server      *transport.Server
-	log         *slog.Logger
-	headless    bool
-	heartbeat   time.Duration
-	floor       time.Duration
-	ceiling     time.Duration
-	retry       time.Duration
+	identity     *identity.Identity
+	trust        Store
+	engine       *approval.Engine
+	keys         KeyStore
+	projects     *project.Cache
+	delegations  Delegations
+	wakeups      Wakeups
+	handovers    Handovers
+	endorsements Endorsements
+	server       *transport.Server
+	log          *slog.Logger
+	headless     bool
+	heartbeat    time.Duration
+	floor        time.Duration
+	ceiling      time.Duration
+	retry        time.Duration
 
 	// load caps how many decisions each peer can have in flight at once, which
 	// bounds how many prompts one peer can raise before a human (M3).
@@ -290,6 +297,7 @@ func New(opts Options) (*Node, error) {
 		delegations:   opts.Delegations,
 		wakeups:       opts.Wakeups,
 		handovers:     opts.Handovers,
+		endorsements:  opts.Endorsements,
 		log:           log,
 		headless:      opts.Headless,
 		heartbeat:     orDuration(opts.Heartbeat, DefaultHeartbeat),

@@ -399,6 +399,55 @@ message StoreDocument {
   // delivered yet — always empty for longer than a moment only when the peer is
   // a phone, which cannot be dialled and comes to collect instead.
   repeated QueuedKeyHandover queued_key_handovers = 18;
+  // Endorsements this instance holds (decision AG), in either of the two roles
+  // there are — the requester keeping one to present when it borrows, and a
+  // fellow holder of the key keeping one so it can act on it and so it can be
+  // seen and taken back. One record covers both because the difference is not a
+  // property of the artifact: it is whether this instance holds the key.
+  repeated HeldEndorsement held_endorsements = 19;
+  // Retractions this instance has been told about, kept until what they take
+  // back would have expired anyway (decision AG).
+  //
+  // They are kept whether or not there is an endorsement here to apply them to.
+  // A retraction can arrive before the endorsement it kills — it gossips and
+  // the endorsement is carried by the requester — and one that was discarded
+  // for naming nothing would let the endorsement land afterwards and be
+  // honoured.
+  repeated HeldRetraction retractions = 20;
+}
+
+// HeldEndorsement is an endorsement this instance keeps, and its ledger
+// (decision AG).
+message HeldEndorsement {
+  // The signed artifact exactly as it arrived, kept whole because the
+  // signatures cover these bytes and re-marshalling could produce others.
+  ladulas.v1.SignedEndorsement signed = 1;
+  // The endorsement it covers, unmarshalled once both signatures verified, so
+  // that matching a request against one is not a signature check per request.
+  ladulas.v1.Endorsement endorsement = 2;
+  google.protobuf.Timestamp received_at = 3;
+  // How it got here: carried by the requester with a borrowed-signing request,
+  // or published by a peer ahead of any request. Worth keeping because they
+  // answer different questions — a published one was known before it could be
+  // spent, and a presented one was not.
+  bool published = 4;
+  // What this instance has signed under it and not yet reported to the issuer,
+  // and the total, which is the number worth showing. The same account a
+  // delegation keeps, and for the same reason: the issuer promised this and is
+  // owed a record of what its promise did.
+  repeated ladulas.v1.GrantUse unreported_uses = 5;
+  uint32 use_count = 6;
+}
+
+// HeldRetraction is a retraction this instance remembers.
+message HeldRetraction {
+  ladulas.v1.SignedRetraction signed = 1;
+  ladulas.v1.Retraction retraction = 2;
+  google.protobuf.Timestamp received_at = 3;
+  // The peers this instance has passed it on to, so that gossip converges
+  // instead of bouncing a retraction between two machines for as long as it
+  // is remembered.
+  repeated string gossiped_to = 4;
 }
 
 // HeldDelegation is a delegation this instance was given, and its ledger.

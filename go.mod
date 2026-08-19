@@ -15,6 +15,7 @@ require (
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
 	google.golang.org/protobuf v1.36.11
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -37,7 +38,6 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )
 
 tool (

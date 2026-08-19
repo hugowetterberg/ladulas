@@ -1275,8 +1275,23 @@ type StoreDocument struct {
 	// delivered yet — always empty for longer than a moment only when the peer is
 	// a phone, which cannot be dialled and comes to collect instead.
 	QueuedKeyHandovers []*QueuedKeyHandover `protobuf:"bytes,18,rep,name=queued_key_handovers,json=queuedKeyHandovers,proto3" json:"queued_key_handovers,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Endorsements this instance holds (decision AG), in either of the two roles
+	// there are — the requester keeping one to present when it borrows, and a
+	// fellow holder of the key keeping one so it can act on it and so it can be
+	// seen and taken back. One record covers both because the difference is not a
+	// property of the artifact: it is whether this instance holds the key.
+	HeldEndorsements []*HeldEndorsement `protobuf:"bytes,19,rep,name=held_endorsements,json=heldEndorsements,proto3" json:"held_endorsements,omitempty"`
+	// Retractions this instance has been told about, kept until what they take
+	// back would have expired anyway (decision AG).
+	//
+	// They are kept whether or not there is an endorsement here to apply them to.
+	// A retraction can arrive before the endorsement it kills — it gossips and
+	// the endorsement is carried by the requester — and one that was discarded
+	// for naming nothing would let the endorsement land afterwards and be
+	// honoured.
+	Retractions   []*HeldRetraction `protobuf:"bytes,20,rep,name=retractions,proto3" json:"retractions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StoreDocument) Reset() {
@@ -1435,6 +1450,190 @@ func (x *StoreDocument) GetQueuedKeyHandovers() []*QueuedKeyHandover {
 	return nil
 }
 
+func (x *StoreDocument) GetHeldEndorsements() []*HeldEndorsement {
+	if x != nil {
+		return x.HeldEndorsements
+	}
+	return nil
+}
+
+func (x *StoreDocument) GetRetractions() []*HeldRetraction {
+	if x != nil {
+		return x.Retractions
+	}
+	return nil
+}
+
+// HeldEndorsement is an endorsement this instance keeps, and its ledger
+// (decision AG).
+type HeldEndorsement struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The signed artifact exactly as it arrived, kept whole because the
+	// signatures cover these bytes and re-marshalling could produce others.
+	Signed *ladulasv1.SignedEndorsement `protobuf:"bytes,1,opt,name=signed,proto3" json:"signed,omitempty"`
+	// The endorsement it covers, unmarshalled once both signatures verified, so
+	// that matching a request against one is not a signature check per request.
+	Endorsement *ladulasv1.Endorsement `protobuf:"bytes,2,opt,name=endorsement,proto3" json:"endorsement,omitempty"`
+	ReceivedAt  *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
+	// How it got here: carried by the requester with a borrowed-signing request,
+	// or published by a peer ahead of any request. Worth keeping because they
+	// answer different questions — a published one was known before it could be
+	// spent, and a presented one was not.
+	Published bool `protobuf:"varint,4,opt,name=published,proto3" json:"published,omitempty"`
+	// What this instance has signed under it and not yet reported to the issuer,
+	// and the total, which is the number worth showing. The same account a
+	// delegation keeps, and for the same reason: the issuer promised this and is
+	// owed a record of what its promise did.
+	UnreportedUses []*ladulasv1.GrantUse `protobuf:"bytes,5,rep,name=unreported_uses,json=unreportedUses,proto3" json:"unreported_uses,omitempty"`
+	UseCount       uint32                `protobuf:"varint,6,opt,name=use_count,json=useCount,proto3" json:"use_count,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *HeldEndorsement) Reset() {
+	*x = HeldEndorsement{}
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeldEndorsement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeldEndorsement) ProtoMessage() {}
+
+func (x *HeldEndorsement) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeldEndorsement.ProtoReflect.Descriptor instead.
+func (*HeldEndorsement) Descriptor() ([]byte, []int) {
+	return file_ladulas_store_v1_store_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *HeldEndorsement) GetSigned() *ladulasv1.SignedEndorsement {
+	if x != nil {
+		return x.Signed
+	}
+	return nil
+}
+
+func (x *HeldEndorsement) GetEndorsement() *ladulasv1.Endorsement {
+	if x != nil {
+		return x.Endorsement
+	}
+	return nil
+}
+
+func (x *HeldEndorsement) GetReceivedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReceivedAt
+	}
+	return nil
+}
+
+func (x *HeldEndorsement) GetPublished() bool {
+	if x != nil {
+		return x.Published
+	}
+	return false
+}
+
+func (x *HeldEndorsement) GetUnreportedUses() []*ladulasv1.GrantUse {
+	if x != nil {
+		return x.UnreportedUses
+	}
+	return nil
+}
+
+func (x *HeldEndorsement) GetUseCount() uint32 {
+	if x != nil {
+		return x.UseCount
+	}
+	return 0
+}
+
+// HeldRetraction is a retraction this instance remembers.
+type HeldRetraction struct {
+	state      protoimpl.MessageState      `protogen:"open.v1"`
+	Signed     *ladulasv1.SignedRetraction `protobuf:"bytes,1,opt,name=signed,proto3" json:"signed,omitempty"`
+	Retraction *ladulasv1.Retraction       `protobuf:"bytes,2,opt,name=retraction,proto3" json:"retraction,omitempty"`
+	ReceivedAt *timestamppb.Timestamp      `protobuf:"bytes,3,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`
+	// The peers this instance has passed it on to, so that gossip converges
+	// instead of bouncing a retraction between two machines for as long as it
+	// is remembered.
+	GossipedTo    []string `protobuf:"bytes,4,rep,name=gossiped_to,json=gossipedTo,proto3" json:"gossiped_to,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeldRetraction) Reset() {
+	*x = HeldRetraction{}
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeldRetraction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeldRetraction) ProtoMessage() {}
+
+func (x *HeldRetraction) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeldRetraction.ProtoReflect.Descriptor instead.
+func (*HeldRetraction) Descriptor() ([]byte, []int) {
+	return file_ladulas_store_v1_store_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *HeldRetraction) GetSigned() *ladulasv1.SignedRetraction {
+	if x != nil {
+		return x.Signed
+	}
+	return nil
+}
+
+func (x *HeldRetraction) GetRetraction() *ladulasv1.Retraction {
+	if x != nil {
+		return x.Retraction
+	}
+	return nil
+}
+
+func (x *HeldRetraction) GetReceivedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReceivedAt
+	}
+	return nil
+}
+
+func (x *HeldRetraction) GetGossipedTo() []string {
+	if x != nil {
+		return x.GossipedTo
+	}
+	return nil
+}
+
 // HeldDelegation is a delegation this instance was given, and its ledger.
 type HeldDelegation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1461,7 +1660,7 @@ type HeldDelegation struct {
 
 func (x *HeldDelegation) Reset() {
 	*x = HeldDelegation{}
-	mi := &file_ladulas_store_v1_store_proto_msgTypes[10]
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1473,7 +1672,7 @@ func (x *HeldDelegation) String() string {
 func (*HeldDelegation) ProtoMessage() {}
 
 func (x *HeldDelegation) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_store_v1_store_proto_msgTypes[10]
+	mi := &file_ladulas_store_v1_store_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1486,7 +1685,7 @@ func (x *HeldDelegation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeldDelegation.ProtoReflect.Descriptor instead.
 func (*HeldDelegation) Descriptor() ([]byte, []int) {
-	return file_ladulas_store_v1_store_proto_rawDescGZIP(), []int{10}
+	return file_ladulas_store_v1_store_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HeldDelegation) GetSigned() *ladulasv1.SignedDelegation {
@@ -1644,7 +1843,7 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"instanceId\x124\n" +
 	"\bplatform\x18\x04 \x01(\x0e2\x18.ladulas.v1.PushPlatformR\bplatform\x12!\n" +
 	"\fdevice_token\x18\x05 \x01(\tR\vdeviceToken\x12?\n" +
-	"\rregistered_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\"\x8f\b\n" +
+	"\rregistered_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\"\xa3\t\n" +
 	"\rStoreDocument\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x05R\aversion\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12!\n" +
@@ -1665,8 +1864,27 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"\rborrowed_keys\x18\f \x03(\v2\x1d.ladulas.store.v1.BorrowedKeyR\fborrowedKeys\x12K\n" +
 	"\x10held_delegations\x18\r \x03(\v2 .ladulas.store.v1.HeldDelegationR\x0fheldDelegations\x12O\n" +
 	"\x12pending_key_offers\x18\x11 \x03(\v2!.ladulas.store.v1.PendingKeyOfferR\x10pendingKeyOffers\x12U\n" +
-	"\x14queued_key_handovers\x18\x12 \x03(\v2#.ladulas.store.v1.QueuedKeyHandoverR\x12queuedKeyHandoversB\x0f\n" +
-	"\r_auto_publish\"\x97\x02\n" +
+	"\x14queued_key_handovers\x18\x12 \x03(\v2#.ladulas.store.v1.QueuedKeyHandoverR\x12queuedKeyHandovers\x12N\n" +
+	"\x11held_endorsements\x18\x13 \x03(\v2!.ladulas.store.v1.HeldEndorsementR\x10heldEndorsements\x12B\n" +
+	"\vretractions\x18\x14 \x03(\v2 .ladulas.store.v1.HeldRetractionR\vretractionsB\x0f\n" +
+	"\r_auto_publish\"\xba\x02\n" +
+	"\x0fHeldEndorsement\x125\n" +
+	"\x06signed\x18\x01 \x01(\v2\x1d.ladulas.v1.SignedEndorsementR\x06signed\x129\n" +
+	"\vendorsement\x18\x02 \x01(\v2\x17.ladulas.v1.EndorsementR\vendorsement\x12;\n" +
+	"\vreceived_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"receivedAt\x12\x1c\n" +
+	"\tpublished\x18\x04 \x01(\bR\tpublished\x12=\n" +
+	"\x0funreported_uses\x18\x05 \x03(\v2\x14.ladulas.v1.GrantUseR\x0eunreportedUses\x12\x1b\n" +
+	"\tuse_count\x18\x06 \x01(\rR\buseCount\"\xdc\x01\n" +
+	"\x0eHeldRetraction\x124\n" +
+	"\x06signed\x18\x01 \x01(\v2\x1c.ladulas.v1.SignedRetractionR\x06signed\x126\n" +
+	"\n" +
+	"retraction\x18\x02 \x01(\v2\x16.ladulas.v1.RetractionR\n" +
+	"retraction\x12;\n" +
+	"\vreceived_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"receivedAt\x12\x1f\n" +
+	"\vgossiped_to\x18\x04 \x03(\tR\n" +
+	"gossipedTo\"\x97\x02\n" +
 	"\x0eHeldDelegation\x124\n" +
 	"\x06signed\x18\x01 \x01(\v2\x1c.ladulas.v1.SignedDelegationR\x06signed\x126\n" +
 	"\n" +
@@ -1695,74 +1913,89 @@ func file_ladulas_store_v1_store_proto_rawDescGZIP() []byte {
 }
 
 var file_ladulas_store_v1_store_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ladulas_store_v1_store_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_ladulas_store_v1_store_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_ladulas_store_v1_store_proto_goTypes = []any{
-	(KeyOrigin)(0),                     // 0: ladulas.store.v1.KeyOrigin
-	(*KeyTransfer)(nil),                // 1: ladulas.store.v1.KeyTransfer
-	(*StoredKey)(nil),                  // 2: ladulas.store.v1.StoredKey
-	(*PendingKeyOffer)(nil),            // 3: ladulas.store.v1.PendingKeyOffer
-	(*QueuedKeyHandover)(nil),          // 4: ladulas.store.v1.QueuedKeyHandover
-	(*TrustRecord)(nil),                // 5: ladulas.store.v1.TrustRecord
-	(*PendingPairing)(nil),             // 6: ladulas.store.v1.PendingPairing
-	(*BorrowedKey)(nil),                // 7: ladulas.store.v1.BorrowedKey
-	(*PeerWakeup)(nil),                 // 8: ladulas.store.v1.PeerWakeup
-	(*WakeupSettings)(nil),             // 9: ladulas.store.v1.WakeupSettings
-	(*StoreDocument)(nil),              // 10: ladulas.store.v1.StoreDocument
-	(*HeldDelegation)(nil),             // 11: ladulas.store.v1.HeldDelegation
-	nil,                                // 12: ladulas.store.v1.TrustRecord.AttributesEntry
-	(*timestamppb.Timestamp)(nil),      // 13: google.protobuf.Timestamp
-	(ladulasv1.PairingAnswer)(0),       // 14: ladulas.v1.PairingAnswer
-	(*ladulasv1.KeyRef)(nil),           // 15: ladulas.v1.KeyRef
-	(*ladulasv1.WakeupRoute)(nil),      // 16: ladulas.v1.WakeupRoute
-	(ladulasv1.PushPlatform)(0),        // 17: ladulas.v1.PushPlatform
-	(*ladulasv1.Grant)(nil),            // 18: ladulas.v1.Grant
-	(*ladulasv1.Publication)(nil),      // 19: ladulas.v1.Publication
-	(*ladulasv1.SignedDelegation)(nil), // 20: ladulas.v1.SignedDelegation
-	(*ladulasv1.Delegation)(nil),       // 21: ladulas.v1.Delegation
-	(*ladulasv1.GrantUse)(nil),         // 22: ladulas.v1.GrantUse
+	(KeyOrigin)(0),                      // 0: ladulas.store.v1.KeyOrigin
+	(*KeyTransfer)(nil),                 // 1: ladulas.store.v1.KeyTransfer
+	(*StoredKey)(nil),                   // 2: ladulas.store.v1.StoredKey
+	(*PendingKeyOffer)(nil),             // 3: ladulas.store.v1.PendingKeyOffer
+	(*QueuedKeyHandover)(nil),           // 4: ladulas.store.v1.QueuedKeyHandover
+	(*TrustRecord)(nil),                 // 5: ladulas.store.v1.TrustRecord
+	(*PendingPairing)(nil),              // 6: ladulas.store.v1.PendingPairing
+	(*BorrowedKey)(nil),                 // 7: ladulas.store.v1.BorrowedKey
+	(*PeerWakeup)(nil),                  // 8: ladulas.store.v1.PeerWakeup
+	(*WakeupSettings)(nil),              // 9: ladulas.store.v1.WakeupSettings
+	(*StoreDocument)(nil),               // 10: ladulas.store.v1.StoreDocument
+	(*HeldEndorsement)(nil),             // 11: ladulas.store.v1.HeldEndorsement
+	(*HeldRetraction)(nil),              // 12: ladulas.store.v1.HeldRetraction
+	(*HeldDelegation)(nil),              // 13: ladulas.store.v1.HeldDelegation
+	nil,                                 // 14: ladulas.store.v1.TrustRecord.AttributesEntry
+	(*timestamppb.Timestamp)(nil),       // 15: google.protobuf.Timestamp
+	(ladulasv1.PairingAnswer)(0),        // 16: ladulas.v1.PairingAnswer
+	(*ladulasv1.KeyRef)(nil),            // 17: ladulas.v1.KeyRef
+	(*ladulasv1.WakeupRoute)(nil),       // 18: ladulas.v1.WakeupRoute
+	(ladulasv1.PushPlatform)(0),         // 19: ladulas.v1.PushPlatform
+	(*ladulasv1.Grant)(nil),             // 20: ladulas.v1.Grant
+	(*ladulasv1.Publication)(nil),       // 21: ladulas.v1.Publication
+	(*ladulasv1.SignedEndorsement)(nil), // 22: ladulas.v1.SignedEndorsement
+	(*ladulasv1.Endorsement)(nil),       // 23: ladulas.v1.Endorsement
+	(*ladulasv1.GrantUse)(nil),          // 24: ladulas.v1.GrantUse
+	(*ladulasv1.SignedRetraction)(nil),  // 25: ladulas.v1.SignedRetraction
+	(*ladulasv1.Retraction)(nil),        // 26: ladulas.v1.Retraction
+	(*ladulasv1.SignedDelegation)(nil),  // 27: ladulas.v1.SignedDelegation
+	(*ladulasv1.Delegation)(nil),        // 28: ladulas.v1.Delegation
 }
 var file_ladulas_store_v1_store_proto_depIdxs = []int32{
-	13, // 0: ladulas.store.v1.KeyTransfer.at:type_name -> google.protobuf.Timestamp
-	13, // 1: ladulas.store.v1.StoredKey.added_at:type_name -> google.protobuf.Timestamp
+	15, // 0: ladulas.store.v1.KeyTransfer.at:type_name -> google.protobuf.Timestamp
+	15, // 1: ladulas.store.v1.StoredKey.added_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: ladulas.store.v1.StoredKey.origin:type_name -> ladulas.store.v1.KeyOrigin
 	1,  // 3: ladulas.store.v1.StoredKey.handed_to:type_name -> ladulas.store.v1.KeyTransfer
 	1,  // 4: ladulas.store.v1.StoredKey.received_from:type_name -> ladulas.store.v1.KeyTransfer
-	13, // 5: ladulas.store.v1.PendingKeyOffer.received_at:type_name -> google.protobuf.Timestamp
-	13, // 6: ladulas.store.v1.QueuedKeyHandover.queued_at:type_name -> google.protobuf.Timestamp
-	13, // 7: ladulas.store.v1.TrustRecord.paired_at:type_name -> google.protobuf.Timestamp
-	12, // 8: ladulas.store.v1.TrustRecord.attributes:type_name -> ladulas.store.v1.TrustRecord.AttributesEntry
-	14, // 9: ladulas.store.v1.PendingPairing.our_answer:type_name -> ladulas.v1.PairingAnswer
-	14, // 10: ladulas.store.v1.PendingPairing.their_answer:type_name -> ladulas.v1.PairingAnswer
-	13, // 11: ladulas.store.v1.PendingPairing.started_at:type_name -> google.protobuf.Timestamp
-	13, // 12: ladulas.store.v1.PendingPairing.answered_at:type_name -> google.protobuf.Timestamp
-	15, // 13: ladulas.store.v1.BorrowedKey.key:type_name -> ladulas.v1.KeyRef
-	13, // 14: ladulas.store.v1.BorrowedKey.last_seen_at:type_name -> google.protobuf.Timestamp
-	16, // 15: ladulas.store.v1.PeerWakeup.route:type_name -> ladulas.v1.WakeupRoute
-	13, // 16: ladulas.store.v1.PeerWakeup.announced_at:type_name -> google.protobuf.Timestamp
-	13, // 17: ladulas.store.v1.PeerWakeup.quiet_until:type_name -> google.protobuf.Timestamp
-	17, // 18: ladulas.store.v1.WakeupSettings.platform:type_name -> ladulas.v1.PushPlatform
-	13, // 19: ladulas.store.v1.WakeupSettings.registered_at:type_name -> google.protobuf.Timestamp
-	13, // 20: ladulas.store.v1.StoreDocument.created_at:type_name -> google.protobuf.Timestamp
+	15, // 5: ladulas.store.v1.PendingKeyOffer.received_at:type_name -> google.protobuf.Timestamp
+	15, // 6: ladulas.store.v1.QueuedKeyHandover.queued_at:type_name -> google.protobuf.Timestamp
+	15, // 7: ladulas.store.v1.TrustRecord.paired_at:type_name -> google.protobuf.Timestamp
+	14, // 8: ladulas.store.v1.TrustRecord.attributes:type_name -> ladulas.store.v1.TrustRecord.AttributesEntry
+	16, // 9: ladulas.store.v1.PendingPairing.our_answer:type_name -> ladulas.v1.PairingAnswer
+	16, // 10: ladulas.store.v1.PendingPairing.their_answer:type_name -> ladulas.v1.PairingAnswer
+	15, // 11: ladulas.store.v1.PendingPairing.started_at:type_name -> google.protobuf.Timestamp
+	15, // 12: ladulas.store.v1.PendingPairing.answered_at:type_name -> google.protobuf.Timestamp
+	17, // 13: ladulas.store.v1.BorrowedKey.key:type_name -> ladulas.v1.KeyRef
+	15, // 14: ladulas.store.v1.BorrowedKey.last_seen_at:type_name -> google.protobuf.Timestamp
+	18, // 15: ladulas.store.v1.PeerWakeup.route:type_name -> ladulas.v1.WakeupRoute
+	15, // 16: ladulas.store.v1.PeerWakeup.announced_at:type_name -> google.protobuf.Timestamp
+	15, // 17: ladulas.store.v1.PeerWakeup.quiet_until:type_name -> google.protobuf.Timestamp
+	19, // 18: ladulas.store.v1.WakeupSettings.platform:type_name -> ladulas.v1.PushPlatform
+	15, // 19: ladulas.store.v1.WakeupSettings.registered_at:type_name -> google.protobuf.Timestamp
+	15, // 20: ladulas.store.v1.StoreDocument.created_at:type_name -> google.protobuf.Timestamp
 	2,  // 21: ladulas.store.v1.StoreDocument.keys:type_name -> ladulas.store.v1.StoredKey
-	18, // 22: ladulas.store.v1.StoreDocument.grants:type_name -> ladulas.v1.Grant
+	20, // 22: ladulas.store.v1.StoreDocument.grants:type_name -> ladulas.v1.Grant
 	5,  // 23: ladulas.store.v1.StoreDocument.peers:type_name -> ladulas.store.v1.TrustRecord
 	6,  // 24: ladulas.store.v1.StoreDocument.pending_pairings:type_name -> ladulas.store.v1.PendingPairing
-	19, // 25: ladulas.store.v1.StoreDocument.publications:type_name -> ladulas.v1.Publication
+	21, // 25: ladulas.store.v1.StoreDocument.publications:type_name -> ladulas.v1.Publication
 	8,  // 26: ladulas.store.v1.StoreDocument.peer_wakeups:type_name -> ladulas.store.v1.PeerWakeup
 	9,  // 27: ladulas.store.v1.StoreDocument.wakeups:type_name -> ladulas.store.v1.WakeupSettings
 	7,  // 28: ladulas.store.v1.StoreDocument.borrowed_keys:type_name -> ladulas.store.v1.BorrowedKey
-	11, // 29: ladulas.store.v1.StoreDocument.held_delegations:type_name -> ladulas.store.v1.HeldDelegation
+	13, // 29: ladulas.store.v1.StoreDocument.held_delegations:type_name -> ladulas.store.v1.HeldDelegation
 	3,  // 30: ladulas.store.v1.StoreDocument.pending_key_offers:type_name -> ladulas.store.v1.PendingKeyOffer
 	4,  // 31: ladulas.store.v1.StoreDocument.queued_key_handovers:type_name -> ladulas.store.v1.QueuedKeyHandover
-	20, // 32: ladulas.store.v1.HeldDelegation.signed:type_name -> ladulas.v1.SignedDelegation
-	21, // 33: ladulas.store.v1.HeldDelegation.delegation:type_name -> ladulas.v1.Delegation
-	13, // 34: ladulas.store.v1.HeldDelegation.received_at:type_name -> google.protobuf.Timestamp
-	22, // 35: ladulas.store.v1.HeldDelegation.unreported_uses:type_name -> ladulas.v1.GrantUse
-	36, // [36:36] is the sub-list for method output_type
-	36, // [36:36] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	11, // 32: ladulas.store.v1.StoreDocument.held_endorsements:type_name -> ladulas.store.v1.HeldEndorsement
+	12, // 33: ladulas.store.v1.StoreDocument.retractions:type_name -> ladulas.store.v1.HeldRetraction
+	22, // 34: ladulas.store.v1.HeldEndorsement.signed:type_name -> ladulas.v1.SignedEndorsement
+	23, // 35: ladulas.store.v1.HeldEndorsement.endorsement:type_name -> ladulas.v1.Endorsement
+	15, // 36: ladulas.store.v1.HeldEndorsement.received_at:type_name -> google.protobuf.Timestamp
+	24, // 37: ladulas.store.v1.HeldEndorsement.unreported_uses:type_name -> ladulas.v1.GrantUse
+	25, // 38: ladulas.store.v1.HeldRetraction.signed:type_name -> ladulas.v1.SignedRetraction
+	26, // 39: ladulas.store.v1.HeldRetraction.retraction:type_name -> ladulas.v1.Retraction
+	15, // 40: ladulas.store.v1.HeldRetraction.received_at:type_name -> google.protobuf.Timestamp
+	27, // 41: ladulas.store.v1.HeldDelegation.signed:type_name -> ladulas.v1.SignedDelegation
+	28, // 42: ladulas.store.v1.HeldDelegation.delegation:type_name -> ladulas.v1.Delegation
+	15, // 43: ladulas.store.v1.HeldDelegation.received_at:type_name -> google.protobuf.Timestamp
+	24, // 44: ladulas.store.v1.HeldDelegation.unreported_uses:type_name -> ladulas.v1.GrantUse
+	45, // [45:45] is the sub-list for method output_type
+	45, // [45:45] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_store_v1_store_proto_init() }
@@ -1778,7 +2011,7 @@ func file_ladulas_store_v1_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_store_v1_store_proto_rawDesc), len(file_ladulas_store_v1_store_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
