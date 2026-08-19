@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package ladulas.v1;
+
+import "google/protobuf/timestamp.proto";
+import "ladulas/v1/approval.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// AuditEvent is the kind of thing that happened.
+enum AuditEvent {
+  AUDIT_EVENT_UNSPECIFIED = 0;
+  // A request was received and classified.
+  AUDIT_EVENT_REQUEST = 1;
+  // A decision was reached, by whatever means.
+  AUDIT_EVENT_DECISION = 2;
+  // A signature was actually produced after an approval.
+  AUDIT_EVENT_SIGNATURE = 3;
+  // Something failed.
+  AUDIT_EVENT_ERROR = 4;
+  // A TTL grant was created or revoked.
+  AUDIT_EVENT_GRANT = 5;
+  // Lifecycle: store unlocked, agent started, key imported.
+  AUDIT_EVENT_LIFECYCLE = 6;
+  // A portable key was handed to a peer, arrived from one, or was accepted or
+  // refused here (§10, decision S).
+  //
+  // It has an event of its own rather than being lifecycle detail because it is
+  // the only thing in Ladulås that cannot be undone. Rotation at the far ends is
+  // the only remedy for a key sent wrong, and the question that starts is "what
+  // went where, and when" — which is a question a log should be able to answer
+  // without anybody grepping for a phrase.
+  AUDIT_EVENT_KEY_TRANSFER = 7;
+}
+
+// AuditEntry is one line of the append-only JSONL audit log (§18). Entries are
+// written with protojson, one per line, on both requester and approver.
+//
+// Hash chaining the log itself is deferred; the tamper evidence that exists
+// today is the approver's signature over each decision, which cannot be forged
+// without the approver's identity key.
+message AuditEntry {
+  string entry_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  AuditEvent event = 3;
+  // Correlates every entry belonging to one request.
+  string request_id = 4;
+
+  // The request as evaluated. Present on REQUEST and DECISION entries.
+  ApprovalRequest request = 5;
+  // The decision. Present on DECISION entries.
+  ApprovalResponse response = 6;
+  // The signed artifact backing the decision, signed by this instance.
+  SignedApproval signed_approval = 7;
+  // The approving peer's own signed artifact, when a paired peer decided
+  // rather than a human here (§9, §18).
+  //
+  // This is the part of a requester's log that is evidence rather than its own
+  // account of events: it cannot be forged without the approver's identity key,
+  // and it covers the exact request bytes that crossed the channel.
+  SignedApproval remote_approval = 13;
+
+  // What was shown to the human, when a human decided — the rendered prompt
+  // text, so the log records what was actually on screen and not just what the
+  // request contained (§9).
+  string prompt_shown = 8;
+
+  // The documentation label the card carried, when the host that drew it drew
+  // one (§6). Present only where a human was asked and the prompt named a
+  // project.
+  PresentedProject project_shown = 14;
+
+  // Free text detail, and the error for ERROR entries.
+  string detail = 9;
+  string error = 10;
+
+  // Fingerprint of the key a SIGNATURE entry used.
+  string key_fingerprint = 11;
+  // The grant a GRANT entry concerns.
+  Grant grant = 12;
+}
+
+// PresentedProject is the "published documentation" panel as one card carried
+// it: which project the change belongs to, and how current what had been read
+// of it was (§6).
+//
+// It is written down rather than worked out again because it cannot be worked
+// out again. Every other part of a card is a rendering of the request, and the
+// request is in the log — but this sentence is the approver's own state at that
+// moment, the pages it happened to hold and the commit they were read at, and
+// all of that moves. A record of what somebody was told has to be a record.
+message PresentedProject {
+  // The project, named the way §6 names one: by the peer that publishes it and
+  // the identifier both ends derive.
+  string peer_fingerprint = 1;
+  string project_id = 2;
+  string name = 3;
+  // Note is the sentence the card showed.
+  string note = 4;
+  // Stale says the card was marked: the pages read here were from a commit the
+  // change was not built on.
+  bool stale = 5;
+  // Known says something of the project had been read at the time. A card that
+  // named a project nothing had been read of said so, and that is worth keeping
+  // too.
+  bool known = 6;
+}

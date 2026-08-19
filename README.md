@@ -1,0 +1,558 @@
+# Ladulås
+
+Ladulås replaces 1Password's SSH agent and git commit signing with a
+distributed approval system. It takes over the agent socket and
+`gpg.ssh.program` on a machine, and every signature it makes is approved —
+by a prompt on that machine, by a policy or a time-boxed grant made
+earlier, or by a paired instance somewhere else. The name is apt: Magnus
+Ladulås put a lock on the barn.
+
+The part that is not an ordinary agent is the "somewhere else". Instances
+pair with each other over any IP path, and approval travels between them:
+a headless box with no keys of its own lists the keys its paired phone
+holds and asks the phone to sign; a desktop reached over SSH while its
+screen is locked keeps working because the phone in your pocket is what
+answers. Keys never move as a side effect of being used — the holder makes
+the signature — and there is **no mandatory infrastructure**: peers connect
+directly, and the optional push relay only ever says "something is
+pending".
+
+The rich prompt is the other half. `ladulas-sign` replaces `ssh-keygen` as
+git's signing program, so what you approve is the commit message, the
+repository, the branch and the diff rather than a hash; an SSH login shows
+the destination host read out of the bytes being signed. A requester can
+publish its repositories' documentation to its approvers, so somebody being
+asked to sign for a machine they are not sitting at can read what the
+project is.
+
+## Documentation
+
+| Document | What it settles |
+|---|---|
+| **`README.md`** (this) | What the repository holds, how to build and run it, every configuration flag, and what is still missing. |
+| [`docs/architecture.md`](docs/architecture.md) | How the service is built: roles, process model, subsystems, protocol, and the decisions behind them. The design authority. |
+| [`docs/ops.md`](docs/ops.md) | Running it: dependencies, ports, bootstrap order, failure modes and what to do about each. |
+| [`docs/observability.md`](docs/observability.md) | Every metric the daemon and the relay export, and what a change in one means. |
+
+The architecture document's section numbers (`§10`) and decision letters
+(`decision P`) are **stable identifiers cited from code comments** — over a
+thousand citations across the tree. Sections are corrected and extended;
+they are not renumbered.
+
+The links between these documents are checked by `go test ./docs/`, which
+runs as part of `make test`: a relative link that does not resolve, or an
+`#anchor` that no heading produces, fails the build.
+
+## Repository layout
+
+```
+cmd/
+  ladulas/        desktop application and management CLI (one binary)
+  ladulasd/       the headless daemon
+  ladulas-sign/   git's signing program: rich commit prompts
+  ladulas-relay/  the optional wake-up relay (APNs)
+pkg/              what a mobile core binds against, and so what is
+                  public: an import path anybody can name, with no
+                  compatibility promise attached to it (§18, §21)
+  agent/          SSH agent server, request classification, session-bind
+  apns/           APNs client: ES256 JWTs from a .p8
+  approval/       engine, policies, grants, prompts, audit log
+  avatar/         the picture drawn beside a fingerprint (decoration)
+  bridge/         the one http.Handler every GUI host serves
+  gitctx/         commit object parsing and diff collection
+  hardware/       the seam to a platform's secure element
+  identity/       instance keys, fingerprints, signed artifacts
+  keystore/       the age-encrypted store, DEK wrapping, portable keys
+  peer/           links, inbox, pairing, borrowed keys, wake-ups
+  peercred/       the uid check, and the session a request came from
+  project/        project publishing, browsing and the read-page cache
+  protocol/       generated protobuf and connect-go services
+  relay/          the wake-up relay service, and its client
+  sshsig/         SSHSIG wrapping
+  storepb/        the store document's protobuf types
+  transport/      pinned-TLS listener and dialer, bind policy
+  trust/          pairing codes, trust records, directions
+internal/         the desktop's and the daemon's own halves, which no phone
+                  reaches and nothing outside this repository may import
+  app/            the assembly: store, engine, sockets, lock states
+  branding/       the app icon; icon-1024.png here is the master
+  command/        the shared command tree of ladulas and ladulasd
+  frontend/       the desktop's half: a viewer host that is a socket client
+  gui/            the Wails shell: tray, windows, notifications (tag: gui)
+  integration/    cross-package tests: two instances, an agent, a signer
+  localapi/       the control socket: SigningService and ControlService
+  logind/         suspend and session-lock triggers over D-Bus
+  observe/        metrics and pprof: the only package that links Prometheus
+  signcli/        the ssh-keygen -Y CLI contract ladulas-sign implements
+  testutil/       instances a test can start
+proto/            the schema those are generated from
+viewer/           the shared HTML/JS bundle: cards, diff, markdown, and the
+                  desktop shell (sidebar and screens; decision AA)
+contrib/          the systemd user units and the desktop entry
+docs/             architecture, ops, observability
+```
+
+`pkg/` is the whole of the public surface. A mobile core built out of this
+module binds those packages, which is why they are not `internal/` and why
+nothing in them is promised — §21 is that seam, and what it means for a
+change made on this side of it.
+
+## Build and development
+
+Go 1.26 or later. `buf` is the only tool that has to be installed
+separately; the protoc plugins are `go tool` entries in `go.mod`.
+
+| Command | What it does |
+|---|---|
+| `make` | `generate lint test` — what CI runs |
+| `make tools` | Installs `buf` |
+| `make build` | Builds every binary into a scratch directory, never the tree |
+| `make gui` | Builds `ladulas` with the desktop application (`GUI_TAGS=gui,gtk3` for GTK 3) |
+| `make install` | `go install`s the desktop binary, the daemon and the signer |
+| `make lint` | `golangci-lint run`, which must be clean |
+| `make test` | `go test ./...` |
+| `make generate` | `buf lint`, `buf generate`, `go mod tidy` — the only way protobuf is regenerated |
+| `make viewer` | The checks that keep the viewer bundle self-contained |
+
+Two rules that are not obvious from the target list. **Protobuf is
+regenerated only through `make generate`** — the toolchain runs in Docker
+and `protoc` is never run by hand. And **`main` has to stay green**, which
+is a heavier obligation here than it looks: a consumer builds against a
+pseudo-version of this branch rather than against a release, so a commit
+that does not compile is a commit nobody can build anything from.
+
+There is no phone target here, and nothing in the tree compiles against
+gomobile — which is also the only check `pkg/` does not get. Gomobile
+takes strings, signed integers, booleans, `[]byte`, errors and types
+declared in the bound package, so a change that widens an exported
+signature past that list compiles perfectly, passes `make test`, and then
+fails to bind. §21 has the rest of what nothing here checks.
+
+## Running a local instance
+
+The daemon comes up **sealed**, or **uninitialised** if there is no store,
+and serves either way — that is what makes a box reached over SSH able to
+say what is wrong with it.
+
+```
+make install
+cp contrib/ladulas.service ~/.config/systemd/user/
+systemctl --user enable --now ladulas.service
+
+ladulas status          # says uninitialised, and what to do about it
+ladulas init            # creates the store; asks for a passphrase twice
+ladulas keys generate work
+ladulas keys list
+```
+
+Then point ssh and git at it:
+
+```
+export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/ladulas/agent.sock
+git config --global gpg.format ssh
+git config --global gpg.ssh.program ladulas-sign
+git config --global user.signingkey "key::$(ladulas keys public work)"
+```
+
+Without the unit, `ladulasd run` in a terminal does the same thing and
+approves at the terminal. With a piece missing: no `ladulas-sign` and git
+still signs through the agent with a poorer prompt; no logind and the
+automatic locks are off and say so; no peer paired and everything still
+works locally, which is the single-machine 1Password replacement.
+
+### Pairing a second instance
+
+```
+ladulas pair --listen                        # displays a code, waits
+ladulas pair host:7373 --code <that code>    # on the other instance
+ladulas pairings list                        # if the confirmation outlived
+                                             # the command that raised it
+ladulas peers allow <peer> --approve --key work
+```
+
+Pairing grants **directions**, never keys; `peers allow` is the separate
+decision that lends one, and its flags describe the state wanted rather
+than a change to make — anything left out is withdrawn. A pairing that
+skipped it is correct and useless.
+
+### The standing permissions, from both ends
+
+```
+ladulas grants list             # promises this instance made, and to whom
+ladulas grants extend <id> 2h   # give one more time, counted from now
+ladulas grants revoke <id>      # take one back
+ladulas delegations list        # promises made about this instance, by whom
+```
+
+Two lists rather than one, because they are two things (decision P): a
+grant is this instance's own promise and can be taken back here, and a
+delegation is somebody else's promise about this instance, which it
+applies itself and can only let run out. Ending one of those early is the
+approver's `grants revoke`, and the listing names who to ask.
+
+`extend` counts from now rather than adding to what is left, and is
+bounded by the longest promise this instance makes — so it tops one back
+up and never reaches past what "approve for a while" could have. A promise
+that was handed to another machine is re-signed and delivered before the
+record here moves; if that machine cannot be reached, nothing is extended
+and the command says so.
+
+### Resetting
+
+Everything an instance is lives in three places:
+`~/.local/share/ladulas/` (store, audit log, project pages),
+`~/.config/ladulas/policy.json`, and `$XDG_RUNTIME_DIR/ladulas/` (the
+sockets). Stop the unit, remove the first two, and the next `ladulas init`
+is a new instance with a new identity — every peer will see a stranger.
+
+## Installing a release
+
+A release is a **tag**, and the tag is the whole version: nothing in the tree
+records which tag points at a commit, so pushing one is what tells goreleaser
+what to build and what to stamp into the binaries.
+
+```
+git tag -a v1.2.3 -m 'what changed'
+git push origin v1.2.3
+```
+
+`.github/workflows/release.yml` then tests, lints, checks that the desktop
+application still compiles under both GTK tag sets, builds linux/amd64 and linux/arm64, and
+commits the Arch packaging into
+[`ladulas-aur`](https://github.com/hugowetterberg/ladulas-aur) as one commit.
+`ladulas version` in any of the binaries says what a build is; a build made
+without those ldflags — `go install ./cmd/ladulasd`, which is what a
+development machine runs — says `0.0.0-dev` and the commit it came from,
+`.dirty` included.
+
+That last step needs two things that live outside this repository, and
+neither of them fails until a tag has already been pushed and the GitHub
+release already published — the packaging commit is the last step, so what
+a missing prerequisite produces is a red run over a release that exists and
+installs:
+
+* the **`hugowetterberg/ladulas-aur` repository**, which has to exist and
+  be initialised with at least one commit. `actions/checkout` asks for the
+  default branch name before it clones anything, so an absent repository
+  and an empty one both surface as `Not Found` against the repositories
+  API, which reads like a permissions problem and is not one.
+* the **`AUR_REPO_KEY` secret**: an SSH private key whose public half is a
+  deploy key on that repository *with write access*. Read-only is enough to
+  clone and gets all the way to `git push` before failing.
+
+Re-running the workflow over the same tag is the fix once both exist —
+`workflow_dispatch` takes the tag as an input for exactly this, and the
+packaging step is a no-op when it is already current, so nothing is
+double-committed.
+
+Three Arch packages come out of it, all installing the same four binaries, all
+owning `/usr/bin/ladulas` because that one binary is both the desktop
+application and the management CLI (§12, §14), and therefore all
+**conflicting with each other**:
+
+| Package | Built | The desktop application |
+|---|---|---|
+| `ladulas` | From source by `makepkg` | GTK 4 and `webkitgtk-6.0` — Wails' default |
+| `ladulas-gtk3` | From source by `makepkg` | GTK 3 and `webkit2gtk-4.1` |
+| `ladulas-headless-bin` | Prebuilt, downloaded | **None.** CGO off, no dependencies at all, and no desktop entry |
+
+The GTK packages are built on the installing machine rather than shipped as
+binaries on purpose: a webview cross-compiled on a CI runner links whatever webkit
+soname that distribution shipped, which is how a package installs cleanly and
+then refuses to start. Compiling against the machine's own libraries is the
+answer and costs only Go, because the generated protobuf is committed — no
+`buf`, no Docker.
+
+The prebuilt package was `ladulas-bin` up to and including v0.0.1, and the
+rename is not cosmetic. `-bin` on the AUR means *the same package, already
+compiled*, and this one was not that — it was the only one of the three with no
+window in it. Said alone, the suffix advertised how the package was built when
+the thing that actually differs is what you get, so somebody reaching for
+`ladulas-bin` to skip a compile got a package with no `ladulas gui` in it and
+nothing in the name to warn them. `headless` is that warning; `-bin` is still
+there and still true, now qualifying `headless` rather than standing for the
+whole difference. It is also not removable — goreleaser appends `-bin` to any
+`aurs` name that lacks it, with no setting to disable that.
+
+Making `-bin` mean what it looked like it meant — a prebuilt package *with* the
+GTK 4 window, so it and `ladulas` install the same thing — is the
+cross-compiled webview two paragraphs up, and it fails later and worse than a
+misleading name: pacman's dependency check passes, the package installs, and
+the failure waits for the first `ladulas gui`. It needs the release job to
+build inside an Arch container so the sonames are Arch's, which does not exist
+yet.
+
+Because this repository is private, `makepkg` cannot fetch the release
+artifacts itself; `./pull` in the packaging repository seeds them with `gh`
+first, and the `PKGBUILD` it hands to `makepkg` is unmodified. That repository's
+README has the detail, including what has to change before any of this can go
+to the AUR — starting with the fact that there is **no license in this tree**,
+so the packages currently say `custom:unlicensed`.
+
+### The units, and the desktop entry
+
+The packages install two user units to `/usr/lib/systemd/user/`, and one
+desktop entry.
+
+```
+systemctl --user enable --now ladulas          # the instance: agent and engine
+systemctl --user enable --now ladulas-relay    # the optional wake-up relay
+```
+
+**The same unit runs on a desktop.** The desktop application is not a unit and
+not an instance: it is a client of the daemon over the control socket
+(decision Z), so it is started by `contrib/ladulas.desktop` — installed both
+into `/usr/share/applications`, where it is a menu entry, and into
+`/etc/xdg/autostart`, where a session starts it at login. Either order works,
+and neither can take the other down.
+
+There used to be a `ladulas-tray.service` alongside, running a desktop
+application that opened the store itself. It and `ladulas.service` were
+alternatives rather than companions — both took over the agent socket, so the
+second to start lost it and exited complaining about the socket rather than
+about the mistake — and it was enabled into `graphical-session.target`, which
+most sessions never reach, so it sat enabled and never started, reported as
+`inactive` with no error. Both problems are gone with it.
+
+`contrib/` holds the units, and they are the packaged ones — with one
+substitution. `contrib/ladulas.service` names `%h/go/bin/ladulasd`, which is
+right for `make install` and wrong for a package, so `package()` rewrites it to
+`/usr/bin`.
+
+**A package also has to install the icon.** `contrib/ladulas.desktop` says
+`Icon=ladulas`, which is a name in the icon theme rather than a path, so
+`package()` needs the sizes under
+`/usr/share/icons/hicolor/<size>x<size>/apps/ladulas.png`, scaled from
+`internal/branding/icon-1024.png` the way
+`make install-desktop` does it for `$HOME`. Without them the entry has no icon
+and the window has none either — see "The icon, and the menu entry" below for
+why that file is the only mechanism there is.
+
+## The desktop application
+
+`ladulas gui` puts a tray icon on the bar and nothing else on screen. Two kinds
+of window come out of it (decision AA).
+
+**One application window**, opened by clicking the tray icon or its `Open
+Ladulås` item, and reused: asking for it again brings back the one that is open.
+It is the phone's app in a window — a sidebar with Home, Keys, Activity and
+Documents, one entry per paired machine below them, and Settings at the bottom
+where the phone has "This phone". Home is what is waiting for an answer, the
+machines and the promises still running; Settings is this instance's own
+fingerprint, where its files are, and the lock, seal and reload verbs. A sealed
+store shows the passphrase panel in place of the screens, and the window opens
+itself once when it attaches to an instance that is sealed.
+
+**A popup per request**, small, centred and above the others, the way 1Password
+and OpenSnitch ask. Only one is on screen at a time: the rest queue, and the
+closing of the one in front starts the next, so a burst of signatures is never a
+stack of overlapping always-on-top windows. Closing a popup without answering is
+a refusal. What is waiting is also listed on Home, which is where a popup that
+was closed by accident is answered from.
+
+Closing the window does not quit — the tray is the application, and `Quit` is on
+its menu. Starting it a second time does not make a second application either:
+the running one raises its window and the new process exits, which is what a
+menu entry clicked while it is already running should do.
+
+### The icon, and the menu entry
+
+`internal/branding/icon-1024.png` is the master — the one drawing anybody makes
+by hand — and it reaches the desktop by two different routes, because GTK 4 has
+only one of them.
+
+The **tray** icon is bytes: `internal/branding` embeds a downscale of the master
+and the tray is handed it at startup. `make icons` regenerates that copy after
+the app icon changes, and the package's test fails until it is run, which is what
+makes keeping a copy safe.
+
+`internal/branding/icon-1024.png` is the master, because the Linux packages need
+the drawing whatever else is ever built from it. The test in that package catches
+a stale `tray-128.png`, since both are in this repository; **a copy of the master
+kept anywhere else is compared by nothing here**, and going out of date silently
+is what such a copy does.
+
+The **window** icon, and the one a launcher shows, cannot be set from the
+program at all: GTK 4 removed every API that takes an icon as bytes, and Wails'
+own backend says so where its `setIcon` used to do something. What draws it is
+the desktop entry's `Icon=ladulas`, resolved against the icon theme — so it
+needs the icon installed under that name, and it needs the process's `WM_CLASS`
+to match the entry's name for a window manager to connect the two
+(`LinuxOptions.ProgramName`, also `ladulas`).
+
+For a tree installed with `make install` rather than from a package:
+
+```
+make install-desktop      # the menu entry and every icon theme size
+make install-autostart    # and start it at login, like the packages do
+make uninstall-autostart
+```
+
+Both write only under `$HOME` and need no root. Autostart is a separate target
+on purpose: installing binaries is a build step and starting something at
+somebody's login is a decision.
+
+### On a tiling window manager
+
+The popup is an ordinary window as far as the window manager is concerned, so i3
+and its relatives tile it. **There is no window role to match on**:
+`WM_WINDOW_ROLE` was a GTK 3 property, GTK 4 dropped `gtk_window_set_role`
+entirely, and Wails exposes nothing else that would set it — nor a per-window
+`WM_CLASS`, which comes from the process name and so is `ladulas` for every
+window it opens. What tells the two apart is the title: a popup is always
+`Ladulås — <what is being asked>` and the application window is exactly
+`Ladulås`. In i3:
+
+```
+for_window [class="ladulas" title="^Ladulås — "] floating enable
+```
+
+That floats the prompts at the size they ask for and leaves the application
+window tiled.
+
+## The relay
+
+`ladulas-relay` is optional and nothing depends on it: an instance with no
+relay, or one whose relay is down, approves exactly as it did before — the
+phone finds the request when it is next opened. What it buys is that the
+phone is opened sooner.
+
+Every credential is configuration; there is no key, key id, team id or
+topic compiled in, because self-hosting means running this against your own
+Apple project.
+
+```
+APNS_KEY_FILE=AuthKey_XXXX.p8 APNS_KEY_ID=… APNS_TEAM_ID=… \
+  APNS_TOPIC=nu.wetterberg.ladulas ladulas-relay
+```
+
+## Configuration reference
+
+### Both binaries: locations and the peer channel
+
+| Flag | Environment | Default | What it does |
+|---|---|---|---|
+| `--data-dir` | `LADULAS_DATA_DIR` | `$XDG_DATA_HOME/ladulas` | The encrypted store, the audit log and the project pages |
+| `--config-dir` | `LADULAS_CONFIG_DIR` | `$XDG_CONFIG_HOME/ladulas` | The policy document |
+| `--socket` | `LADULAS_AGENT_SOCK` | `$XDG_RUNTIME_DIR/ladulas/agent.sock` | Where the SSH agent listens. `SSH_AUTH_SOCK` points here |
+| `--control-socket` | `LADULAS_SOCK` | `$XDG_RUNTIME_DIR/ladulas/control.sock` | The signing and control services. The CLI and `ladulas-sign` both find the instance here |
+| `--no-keyring` | `LADULAS_NO_KEYRING` | off | Ignore the platform keychain entirely, so an instance that enrolled "unlock at login" can still be started without it |
+| `--peer-listen` | `LADULAS_PEER_LISTEN` | port 7373 on private and tailnet addresses | A port, a `host:port`, or `off`. The default binds nothing the local network cannot already reach |
+| `--peer-listen-public` | `LADULAS_PEER_LISTEN_PUBLIC` | off | Allow binding addresses reachable from outside. The channel does not trust the network either way; this exists so it never happens by accident |
+| `--log-level` | `LADULAS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+
+### Running an instance: `ladulasd run` and `ladulas agent`
+
+Both name what they start. `ladulasd` alone is the daemon,
+because a unit starts it with nothing to pass; `ladulas` alone prints the
+usage and starts nothing, which is why `contrib/ladulas.desktop` runs
+`ladulas gui` (decision Y). The verb is `gui` and not `tray` because the
+tray icon is one of the things it draws.
+
+`ladulas gui` takes no flags of its own beyond the global `--control-socket`:
+it is a client of a daemon (decision Z), so the automatic locks and the debug
+listener below are the daemon's and the passphrase dialog is the desktop's
+answer to `--unlock`.
+
+| Flag | Environment | Default | What it does |
+|---|---|---|---|
+| `--unlock` | `LADULAS_UNLOCK` | `auto` | How the passphrase is asked for once the daemon is up: `auto` uses the terminal when there is one and `systemd-ask-password` otherwise, `terminal` and `ask-password` force one, `none` waits for `ladulas unlock`. The store is sealed and the daemon serving either way — the asking always comes after the listening |
+| `--console` | `LADULAS_CONSOLE` | `auto` | Whether to approve at the terminal. `auto` follows whether stdin is one; `off` leaves approvals to paired peers. Registering a terminal approver on a unit whose stdin is `/dev/null` would advertise a prompt that cannot be shown |
+| `--debug-listen` | `LADULAS_DEBUG_ADDR` | **off** | Address for Prometheus metrics and pprof. Off unless set, because this is one daemon per account — a default port is one two users fight over — and because a heap profile of an unlocked instance contains the store key |
+
+### Automatic locks
+
+Each takes `lock` (suspend approval here, keys stay usable by a paired
+approver), `seal` (wipe the store key; the passphrase is needed to come
+back) or `off`.
+
+| Flag | Environment | Default | What it does |
+|---|---|---|---|
+| `--on-suspend` | `LADULAS_ON_SUSPEND` | `lock` | What happens when the machine suspends. `seal` takes a logind inhibitor so the key is gone before the machine goes down — the answer to a stolen sleeping laptop, at the cost of a passphrase on every wake |
+| `--on-session-lock` | `LADULAS_ON_SESSION_LOCK` | `lock` | What happens when the session locks. `lock` rather than `seal` is deliberate: a desktop reached over SSH must keep signing while its screen is locked, which is the 1Password failure this project exists to fix |
+| `--idle-lock` | `LADULAS_IDLE_LOCK` | off | Lock after this long with nothing decided |
+| `--idle-lock-action` | `LADULAS_IDLE_LOCK_ACTION` | `lock` | What the idle timeout does |
+
+### `ladulas-relay`
+
+| Flag | Environment | Default | What it does |
+|---|---|---|---|
+| `--listen` | `LISTEN_ADDR` | `:8443` | Where the relay serves. Cleartext HTTP/1 and HTTP/2 — it expects to sit behind TLS termination, or on a tailnet, where WireGuard is the transport security |
+| `--state` | `STATE_FILE` | `devices.json` | The device registrations, which are the whole of its state |
+| `--debug-listen` | `DEBUG_ADDR` | `127.0.0.1:8444` | Prometheus metrics and pprof. On by default here because this is one process on a host somebody operates — but loopback, because its heap holds a push key and a device list |
+| `--apns-host` | `APNS_HOST` | production | The production host, because TestFlight builds carry production tokens and the sandbox host answers `BadDeviceToken` for every one of them — which looks exactly like a bug in this service |
+| `--apns-topic` | `APNS_TOPIC` | — | The app's bundle identifier |
+| `--apns-key-id` | `APNS_KEY_ID` | — | The key id of the `.p8` |
+| `--apns-team-id` | `APNS_TEAM_ID` | — | The Apple Developer team id |
+| `--apns-key` | `APNS_KEY` | — | The signing key itself, in PEM. Preferred to a path, so the key never reaches a disk |
+| `--apns-key-file` | `APNS_KEY_FILE` | — | Path to the `.p8`, when it is on one. What systemd `LoadCredential=` produces |
+
+A relay that came up without a key would answer every wake-up with a
+failure, which reads to everybody upstream as the phone being unreachable —
+so it refuses to start instead.
+
+## Pending work
+
+**Android (M10).** The one milestone with no code written for it: a Kotlin
+shell, Keystore P-256 keys, and the opt-in foreground-service live
+connection that makes an Android phone a real-time approver with no
+infrastructure at all. The core is already bound for gomobile and the
+keystore decides per key rather than per platform, so what is missing is
+the shell rather than the design.
+
+**Windows and macOS.** Designed and unbuilt. Windows needs the named-pipe
+agent (`\\.\pipe\openssh-ssh-agent`, the takeover 1Password does) and DPAPI
+for the DEK; macOS needs nothing platform-specific written but has never
+been run, because there is no Apple hardware here.
+
+**Drawing a pairing QR on the requester.** The phone reads one and the code
+a QR carries has been specified since M3; nothing renders one. A headless
+box prints the code and the `qrencode` command to turn it into a QR. The
+viewer bundle has no dependencies by policy, so the options are taking the
+first one, writing an encoder, or leaving `qrencode` as the documented
+step — and that is an open decision rather than an oversight.
+
+**A request made in the first moments after pairing can be refused for no
+better reason than timing.** Pairing writes the trust record; the link that
+carries a request to the peer is built afterwards, by the reconciliation
+that follows — new link, register the remote approver with the engine, ping
+(§7). A request submitted in that gap is not queued or delayed but denied
+outright, with *"no approver is available to answer"*, because the engine's
+fan-out answers immediately when it has no handlers rather than waiting for
+one to appear (§9).
+
+Answering at once is deliberate and worth keeping: it is what makes an
+approver that is switched off fail in seconds instead of hanging for the
+request's whole timeout. So the fix is not "wait for a handler" but a
+bounded grace, taken only when a peer is paired-and-may-approve and its
+link is still coming up — and getting that bound wrong turns the good
+failure back into the hang. That is a decision to take on its own.
+
+It surfaced as a test flake rather than a report: every test that paired and
+then immediately submitted was racing it, at a few percent under load. That
+half is fixed — `pair()` in the peer tests now waits for the link to report
+online — which means the race is no longer *visible* in CI while still being
+there in the product. Reproduce it by submitting inside the gap; do not
+expect the suite to catch it.
+
+**Socket activation.** The unit starts the daemon directly, so the agent
+socket exists from start-up rather than on first connection.
+
+**Hash-chaining the audit log.** Tamper evidence today comes from the
+approver's signature over each decision, which cannot be forged without the
+identity key. Chaining the log itself is deferred, and will be an added
+field rather than a new format.
+
+**Nothing scrapes the metrics.** The daemon's port is off by default and
+the relay's is on loopback; there is no Prometheus, no dashboard and no
+alerting. [`docs/ops.md`](docs/ops.md#what-to-watch-in-order) describes
+what an operator should watch, not something that pages anybody.
+
+**The packaged relay unit is not the one running on guppy.** `contrib/` now
+holds a generic `ladulas-relay.service` — site values in an
+`EnvironmentFile`, the `.p8` at a conventional path — because a package has
+to ship something enableable. The instance that is actually running predates
+it and has its addresses and key ids written into the unit itself, so
+[`docs/ops.md`](docs/ops.md#deployment-shape) is still what describes what is
+deployed. The two will drift; the packaged one is the one that gets
+maintained.

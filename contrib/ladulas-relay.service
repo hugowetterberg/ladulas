@@ -1,0 +1,87 @@
+[Unit]
+Description=Ladulås wake-up relay (APNs)
+Documentation=https://github.com/hugowetterberg/ladulas
+After=network-online.target
+Wants=network-online.target
+
+# Keep retrying rather than giving up after the default five attempts: the
+# failure this exists for is the tailnet interface not being up yet, and a
+# relay that gave up on that stays down until somebody notices a phone is not
+# waking — which is the one failure nothing else reports.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/ladulas-relay
+Restart=always
+RestartSec=5s
+
+# Every credential and every address is configuration, because self-hosting
+# means running this against your own Apple project — a value compiled in would
+# be a value to fork. So this unit ships with none of them and reads them from
+# a file you write:
+#
+#   ~/.config/ladulas-relay/env
+#     LISTEN_ADDR=100.64.0.2:8443
+#     APNS_TOPIC=nu.example.yourapp
+#     APNS_KEY_ID=XXXXXXXXXX
+#     APNS_TEAM_ID=YYYYYYYYYY
+#
+# It is required rather than optional (no `-` prefix): a relay that came up
+# without a key answers every wake-up with a failure, which reads to everybody
+# upstream as the phone being unreachable. Failing to start is clearer by far.
+EnvironmentFile=%h/.config/ladulas-relay/env
+
+# LISTEN_ADDR has no default here on purpose. The relay's own default is :8443,
+# meaning every interface, and this service has no TLS in front of it — its
+# transport security is the tailnet it is meant to be reachable on and nothing
+# else. Naming one address is the whole of the protection, so it belongs in the
+# env file above, where forgetting it is a startup failure rather than a quiet
+# exposure. Binding a named address also means the interface has to exist
+# first, which at boot it may not: hence the restart settings above.
+
+# The .p8 arrives through the credentials directory rather than the environment
+# or a path: systemd copies it in at 0400 for this process alone, so it is not
+# in `systemctl show`, not in the environment of anything this spawns, and not
+# readable by another process of the same uid. PID 1 reads it before the
+# sandbox below applies, so ProtectHome does not get in the way.
+LoadCredential=apns.p8:%h/.config/ladulas-relay/apns.p8
+Environment=APNS_KEY_FILE=%d/apns.p8
+
+# Production, not sandbox — the relay's own default, repeated here because it
+# is the setting that wastes the most time when it is wrong. A TestFlight build
+# is signed for distribution, so its device tokens are production tokens and
+# the sandbox host answers BadDeviceToken for every one of them, which looks
+# exactly like a bug in this service.
+Environment=APNS_HOST=https://api.push.apple.com
+
+Environment=STATE_FILE=%S/ladulas-relay/devices.json
+StateDirectory=ladulas-relay
+StateDirectoryMode=0700
+
+# Metrics and pprof on loopback. Nothing authenticates this port and the heap
+# behind it holds a push key and the device list, so the address it is bound to
+# is the whole of the protection.
+Environment=DEBUG_ADDR=127.0.0.1:8444
+
+# The relay holds a push key and a list of opaque device ids, and it needs a
+# socket, a state file and a credential to do its job. Everything else is taken
+# away.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target

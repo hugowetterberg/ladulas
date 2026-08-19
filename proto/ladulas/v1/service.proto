@@ -1,0 +1,673 @@
+syntax = "proto3";
+
+package ladulas.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "ladulas/v1/approval.proto";
+import "ladulas/v1/project.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// The peer-to-peer services.
+//
+// Every RPC runs over the mutually authenticated, SPKI-pinned TLS 1.3 channel
+// described in §8; the identity of the caller therefore comes from the
+// connection, not from the message. Nothing below carries a token, and a field
+// that repeats something the channel already said — a public key, an instance
+// id — is there to be checked against the channel rather than believed.
+
+// ApprovalService is how a requester asks a paired approver to answer.
+service ApprovalService {
+  // RequestApproval submits a request and streams back its lifecycle. The
+  // stream is how first-response-wins cancellation reaches the approver: the
+  // requester cancels it and the approver drops the prompt.
+  rpc RequestApproval(RequestApprovalRequest) returns (stream ApprovalEvent);
+
+  // CancelApproval withdraws a request out of band, for approvers that answered
+  // on a different connection.
+  rpc CancelApproval(CancelApprovalRequest) returns (CancelApprovalResponse);
+
+  // FetchDiff asks the requester for the diff it could not fit in the request.
+  //
+  // A signing request carries the diff capped (§5), because it travels to a
+  // phone and an unbounded diff is both a denial of service and a good place to
+  // hide a change. The cap is a display decision rather than a limit on what an
+  // approver may see, so an approver that wants the rest asks for it — and asks
+  // the requester, over a connection the requester has already agreed to, about
+  // a request the requester is at that moment waiting on.
+  rpc FetchDiff(FetchDiffRequest) returns (FetchDiffResponse);
+}
+
+message RequestApprovalRequest {
+  // The serialized ApprovalRequest, and authoritative as bytes rather than as
+  // a message.
+  //
+  // The approver's response commits to a digest of exactly what it received, so
+  // both ends have to agree on the bytes down to the encoding. Carrying the
+  // request as a message would leave that agreement resting on protobuf
+  // serialization being reproducible, which it is not promised to be; carrying
+  // the bytes makes the digest something both ends can compute from the same
+  // material. It is the same reason SignedApproval carries a serialized
+  // response rather than a nested message.
+  bytes request = 1;
+}
+
+// ApprovalEventKind lets a requester tell "someone is looking at it" from
+// "nobody is home", which matters for the fan-out timeout.
+enum ApprovalEventKind {
+  APPROVAL_EVENT_KIND_UNSPECIFIED = 0;
+  // The approver accepted the request for consideration.
+  APPROVAL_EVENT_KIND_ACCEPTED = 1;
+  // A prompt is on screen.
+  APPROVAL_EVENT_KIND_PROMPTED = 2;
+  // Terminal: the answer.
+  APPROVAL_EVENT_KIND_DECIDED = 3;
+}
+
+message ApprovalEvent {
+  ApprovalEventKind kind = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  // Set on DECIDED events. The requester verifies the signature against the
+  // paired peer's identity key before acting on it.
+  SignedApproval approval = 3;
+}
+
+message CancelApprovalRequest {
+  string request_id = 1;
+  string reason = 2;
+}
+
+message CancelApprovalResponse {}
+
+message FetchDiffRequest {
+  // The request the diff belongs to. Only a request this instance currently has
+  // out to the caller can be asked about: a diff is repository content, and
+  // "which commits has that machine been signing" is not a question a paired
+  // peer gets to ask at leisure.
+  string request_id = 1;
+  // One file to expand, or empty for the whole diff at the larger cap.
+  string path = 2;
+}
+
+message FetchDiffResponse {
+  GitDiff diff = 1;
+}
+
+// InboxService is how an approver that cannot be dialled collects the requests
+// waiting for it (§3, §11).
+//
+// Everything else here runs from the requester to the approver, because the
+// requester is the side that dials. That works for every approver but the one
+// that matters most: a phone never listens — iOS forbids a background listener
+// outright — so a requester has no way to put a prompt in front of it. The
+// relationship is inverted rather than relayed. The phone dials its requesters
+// when the app opens, asks what is waiting, and posts its answers back, which
+// is the poll-on-open baseline of §11 and needs no infrastructure whatsoever.
+//
+// Nothing about the decision changes. The request is the same bytes, the answer
+// is the same signed artifact over the same digest, and the requester's
+// fan-out is the same first-response-wins race — an approver that collects is
+// simply an approver whose prompt took a different road to the screen.
+//
+// Both calls are authorized by the same half of a pairing: the caller is a peer
+// this instance agreed may approve for it.
+service InboxService {
+  // FetchPending returns the requests this instance is currently waiting on the
+  // caller to answer.
+  //
+  // Wait makes it a long poll. Without one an approval would take as long as
+  // the phone's next poll, and with one a phone with the app open is as
+  // immediate as a desktop that was dialled — the "live connection" of §11 with
+  // the connection pointing the other way.
+  rpc FetchPending(FetchPendingRequest) returns (FetchPendingResponse);
+
+  // AnswerPending settles one of them.
+  rpc AnswerPending(AnswerPendingRequest) returns (AnswerPendingResponse);
+
+  // ReportGrantUse is the requester pushing what it has done, over the link it
+  // already holds (decision P).
+  //
+  // It is served by the approver and called by the requester, which is the
+  // opposite of everything else here — and it is the direction that works
+  // between two desktops, where the requester dials and the approver listens.
+  // An approver that cannot be dialled never receives one; it is told there is
+  // something waiting by the flag on a poll's answer, and comes to collect it
+  // with ReconcileGrants.
+  //
+  // Nothing is lost when it fails. The uses stay in the requester's ledger
+  // until they are acknowledged, so the push is an optimisation on the pull and
+  // never the only way an account gets told.
+  rpc ReportGrantUse(ReportGrantUseRequest) returns (ReportGrantUseResponse);
+
+  // ReconcileGrants brings a delegated grant's two halves back into line
+  // (decision P). The approver drives it, in both directions at once: it says
+  // which delegations it has taken back, and is told what has been done under
+  // the ones it has not.
+  //
+  // The approver drives because it is the side that can always dial. A phone
+  // advertises no address and collects rather than listens, so a requester that
+  // had to report in would have nowhere to report to — the same asymmetry the
+  // inbox above exists for.
+  //
+  // Nothing here is load-bearing for a delegation working. One that cannot be
+  // reconciled goes on being honoured until it expires, which is the whole
+  // point of having handed it over; revocation is best-effort and bounded by
+  // the expiry the approver chose when it granted it.
+  rpc ReconcileGrants(ReconcileGrantsRequest) returns (ReconcileGrantsResponse);
+}
+
+message ReportGrantUseRequest {
+  repeated ladulas.v1.GrantUse uses = 1;
+}
+
+message ReportGrantUseResponse {
+  // The uses that were recorded, so the requester can drop exactly those from
+  // its ledger. Naming them rather than saying "all of it" is what makes a
+  // report that crossed with a revocation harmless.
+  repeated string acknowledged_request_ids = 1;
+}
+
+message ReconcileGrantsRequest {
+  // Delegations the approver has taken back. The requester drops them.
+  repeated string revoked_delegation_ids = 1;
+  // Uses the approver has already recorded, so that a report which was
+  // delivered but whose acknowledgement was lost is not counted twice.
+  repeated string acknowledged_request_ids = 2;
+  // Delegations the approver has re-issued: the same promise, signed again
+  // with a later expiry, because somebody extended it before it ran out.
+  //
+  // It travels here rather than through a verb of its own because a delegation
+  // arriving twice already replaces the one held, ledger and all — an approver
+  // re-issuing after a lost answer is the ordinary case — so extending one is
+  // that same path with a new expiry in it. The requester verifies each exactly
+  // as it verifies one that arrives with an approval: signed by the paired key,
+  // addressed to this instance, from a peer that may approve for it.
+  repeated ladulas.v1.SignedDelegation renewed_delegations = 3;
+}
+
+message ReconcileGrantsResponse {
+  // What this instance has self-approved under delegations and not yet been
+  // acknowledged for, oldest first.
+  repeated ladulas.v1.GrantUse uses = 1;
+  // The delegations this instance still holds, so an approver can notice one it
+  // has no record of and take it back.
+  repeated string held_delegation_ids = 2;
+}
+
+message FetchPendingRequest {
+  // How long to hold the call open when nothing is waiting. Capped by the
+  // requester, and zero means answer immediately.
+  google.protobuf.Duration wait = 1;
+}
+
+message FetchPendingResponse {
+  // Whether this instance has done things under a delegation that the caller
+  // has not been told about (decision P).
+  //
+  // It is a flag rather than the account itself: a poll is answered while
+  // somebody may be waiting on a card, and the reconciliation that follows is
+  // bookkeeping. An approver that cannot be dialled — a phone — is how this
+  // arrives at all, because the push below can never reach one.
+  bool grant_activity_waiting = 10;
+
+  repeated PendingApproval pending = 1;
+}
+
+message PendingApproval {
+  string request_id = 1;
+  // The serialized ApprovalRequest, authoritative as bytes for the same reason
+  // RequestApprovalRequest.request is: the answer commits to a digest of
+  // exactly what was handed over.
+  bytes request = 2;
+  google.protobuf.Timestamp waiting_since = 3;
+  // What is left of the requester's own timeout, so an approver does not put a
+  // prompt on screen for something that will have expired before it is read.
+  google.protobuf.Duration expires_in = 4;
+  // The bytes to sign, when this is a borrowed signature rather than an
+  // approval (decision T): the requester holds no such key and is asking the
+  // collector, which does, to produce the signature its engine approves.
+  //
+  // They mean what RemoteSignRequest.payload and .wrap_sshsig mean, and are
+  // handled by the same code on the holder — the payload is reconstructed and
+  // re-classified there rather than believed (§5, §8).
+  bytes payload = 5;
+  bool wrap_sshsig = 6;
+}
+
+message AnswerPendingRequest {
+  string request_id = 1;
+  SignedApproval approval = 2;
+  // ssh.Marshal of an ssh.Signature, for a pending request that carried a
+  // payload. An approval without one, where one was asked for, is an approver
+  // that said yes and signed nothing, and the requester treats it as a failure
+  // rather than as a signature it can use.
+  bytes signature = 3;
+}
+
+message AnswerPendingResponse {
+  // False when the request was no longer waiting — another approver got there
+  // first, or the requester gave up. It is not an error: first response wins,
+  // and losing that race is an ordinary way for a prompt to end.
+  bool accepted = 1;
+}
+
+// KeyService lets a keyless requester borrow a key holder's keys (M4).
+service KeyService {
+  // ListKeys answers what the peer may use, so a keyless agent can respond to
+  // SSH_AGENTC_REQUEST_IDENTITIES.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+
+  // RemoteSign performs the signature on the key holder. Implies an approval on
+  // the key holder, per its own policy.
+  rpc RemoteSign(RemoteSignRequest) returns (RemoteSignResponse);
+
+  // OfferKey hands a portable key's private half to this peer (decision S).
+  //
+  // It is the one call in the protocol that carries key material, and it sits
+  // here rather than beside the pairing calls because it is about a key. Any
+  // paired peer may make it: the directions a trust record grants are about who
+  // may ask whom for a signature, and giving somebody a key is neither. What
+  // stands in for authorization is at the two ends instead — the sending side
+  // re-enters its store passphrase before the call is made, and the key goes
+  // nowhere near this store's key list until somebody here has accepted it.
+  //
+  // The answer says only that the offer is waiting. Acceptance happens whenever
+  // the person at this end gets to it, which may be days, and the caller is
+  // typically a phone that cannot be called back to be told.
+  rpc OfferKey(OfferKeyRequest) returns (OfferKeyResponse);
+
+  // CollectKeyOffers is OfferKey for a peer that cannot be dialled.
+  //
+  // A phone never listens, so a key meant for one is queued on the sending
+  // instance, the phone is woken, and it comes and asks — the shape a parked
+  // approval already has (§11). The two calls are the same transfer from
+  // opposite ends, and which one carries a key is decided by which end can be
+  // reached rather than by anything about the key.
+  //
+  // Acknowledgement rides on the next call rather than having one of its own: a
+  // collector names the handovers it has written down, and they stop being held
+  // for it. A lost response therefore costs a redelivery and never a key —
+  // offering the same key twice replaces the earlier offer where it lands.
+  rpc CollectKeyOffers(CollectKeyOffersRequest) returns (CollectKeyOffersResponse);
+
+  // AnnounceKeys is ListKeys for a holder that cannot be dialled (decision T).
+  //
+  // It is served by the requester and called by the holder, because the holder
+  // is the side that can always dial — the same asymmetry, and the same
+  // remedy, as the wake-up route a phone announces for itself (§11). The list
+  // is what the caller would have answered ListKeys with: what this instance is
+  // permitted to use, and no more.
+  //
+  // The requester remembers it the way it remembers an answer it asked for
+  // (decision N), which means an announcement replaces everything remembered
+  // about that peer. Nothing here is authorization for anything: it is a peer
+  // saying which of its keys exist and may be offered to an agent, and every
+  // signature made with one is still decided where the key is.
+  rpc AnnounceKeys(AnnounceKeysRequest) returns (AnnounceKeysResponse);
+}
+
+message ListKeysRequest {}
+
+message ListKeysResponse {
+  repeated KeyRef keys = 1;
+}
+
+message AnnounceKeysRequest {
+  repeated KeyRef keys = 1;
+}
+
+message AnnounceKeysResponse {
+  // False when this instance kept none of it, with the reason. A phone that is
+  // told its keys will not be remembered can say so on a screen, which is a
+  // great deal better than a key that silently never appears.
+  bool accepted = 1;
+  string reason = 2;
+}
+
+message RemoteSignRequest {
+  // The request the signature belongs to, carrying all the context the key
+  // holder needs to decide.
+  bytes request = 1;
+  // The bytes to sign. For SSHSIG requests this is the raw payload and the
+  // signing instance recomputes the SSHSIG wrapper itself (§5).
+  bytes payload = 2;
+  // True when payload is a raw message that must be SSHSIG wrapped before
+  // signing, false when it is the exact blob to sign.
+  bool wrap_sshsig = 3;
+}
+
+message RemoteSignResponse {
+  // ssh.Marshal of an ssh.Signature.
+  bytes signature = 1;
+  // The approval artifact that authorized the signature.
+  SignedApproval approval = 2;
+}
+
+message OfferKeyRequest {
+  // What the sender calls the key, and the comment its public half carries.
+  // Both are suggestions: labels are unique within a store, so the receiving
+  // side may have to choose another.
+  string label = 1;
+  string comment = 2;
+  // The private half in unencrypted OpenSSH format — the shape the store holds
+  // and the shape `ssh-keygen` reads. It is unencrypted because the channel is
+  // the protection (§8) and a passphrase invented for the trip would have to
+  // travel beside it to be of any use.
+  bytes private_key = 3;
+}
+
+message OfferKeyResponse {
+  // What the receiving side has written the offer down as. Of no use to the
+  // caller beyond saying that there is something to answer; the answer itself
+  // never comes back this way.
+  string offer_id = 1;
+}
+
+message CollectKeyOffersRequest {
+  // The handovers this collector has written down since it last asked. They are
+  // released here rather than in a call of their own, so that the ordinary
+  // sequence is one round trip and a lost answer costs a redelivery.
+  repeated string received_ids = 1;
+}
+
+message CollectKeyOffersResponse {
+  repeated OfferedKey offers = 1;
+}
+
+// OfferedKey is one queued handover, as the collector receives it.
+message OfferedKey {
+  // What the sender calls this handover. Named back on the next collection.
+  string handover_id = 1;
+  string label = 2;
+  string comment = 3;
+  bytes private_key = 4;
+}
+
+// ProjectService serves published documentation to the peers that approve for
+// this instance (§6).
+//
+// It runs in one direction only, which is what decision Q left behind: every
+// call here arrives at a requester from a peer it has agreed to be answered by,
+// so may_approve is the gate on all four. Nothing travels the other way, and a
+// caller that is not an approver of ours has nothing to read.
+service ProjectService {
+  // ListProjects returns what the caller's peer currently publishes.
+  //
+  // Publishing is a state rather than an action (decision Q): marking a project
+  // published sends nothing, and this is how an approver finds out there is
+  // something to read. What comes back describes each project — its name, where
+  // it lives, the commit it is at — and not its contents.
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+
+  // ListDirectory returns one directory, one page at a time.
+  //
+  // A page rather than a tree, because a tree is unbounded and most of it is
+  // never looked at. The caller says where it is and how much it wants; the
+  // publisher decides what it is willing to send and says whether there is
+  // more.
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+
+  // SearchProjectFiles finds files by name across a project.
+  //
+  // "Where is the deployment runbook" is the question people actually have, and
+  // walking a directory listing by hand to answer it is not browsing. Paged for
+  // the same reason as the listing.
+  rpc SearchProjectFiles(SearchProjectFilesRequest)
+      returns (SearchProjectFilesResponse);
+
+  // FetchProjectFile returns one file's current contents. What an approver
+  // keeps is what it has asked for here.
+  rpc FetchProjectFile(FetchProjectFileRequest) returns (FetchProjectFileResponse);
+}
+
+message ListDirectoryRequest {
+  // The project, by the identifier both ends derive from the origin URL and the
+  // repository path (§6).
+  string project = 1;
+  // The directory to read, relative to the project root. Empty is the root
+  // itself. Canonicalized against that root by the publisher, so nothing here
+  // can reach outside it.
+  string path = 2;
+  // A substring the entry names must contain, matched without case. Applied by
+  // the publisher rather than the caller, so a directory of ten thousand files
+  // costs one page either way.
+  string filter = 3;
+  // Where to carry on from, taken from a previous response. Opaque to the
+  // caller.
+  string page_token = 4;
+  // How many entries to return. Capped by the publisher, and zero means its
+  // default.
+  int32 page_size = 5;
+}
+
+message ListDirectoryResponse {
+  repeated ProjectEntry entries = 1;
+  // Empty when this is the last page.
+  string next_page_token = 2;
+  // How many entries the directory holds in total, before the filter. It is
+  // what lets a browser say "showing 50 of 1,200" rather than leaving somebody
+  // to guess whether they have seen everything.
+  int32 total = 3;
+}
+
+message SearchProjectFilesRequest {
+  string project = 1;
+  // Matched without case against the whole path, so "docs/dep" finds what
+  // "deployment" under docs would.
+  string query = 2;
+  string page_token = 3;
+  int32 page_size = 4;
+}
+
+message SearchProjectFilesResponse {
+  repeated ProjectEntry entries = 1;
+  string next_page_token = 2;
+  // Whether the search stopped before it had looked everywhere. A project big
+  // enough to hit the publisher's walk budget should say so rather than report
+  // an incomplete answer as a complete one.
+  bool truncated = 3;
+}
+
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+  // What each project is, and nothing about what is in it. Re-read at the
+  // moment of asking rather than remembered from when it was published, so the
+  // commit here is the commit the publisher is standing on now.
+  repeated Publication projects = 1;
+}
+
+message FetchProjectFileRequest {
+  string project_id = 1;
+  string path = 2;
+}
+
+message FetchProjectFileResponse {
+  // The file as the listing would have described it, so that an approver that
+  // fetched by name rather than by browsing gets the same facts about it.
+  ProjectEntry file = 1;
+  bytes content = 2;
+}
+
+// PairingService establishes trust on first use (§7).
+//
+// The exchange is in two halves that keep different time. `Pair` spends the
+// pairing code, and the code is the short-lived half: five minutes, single use,
+// five wrong answers. Everything after it is durable — both sides write down a
+// pending pairing and then converge on it whenever they can reach each other,
+// which is what `SettlePairing` is for.
+//
+// Neither side writes a trust record until both users have said yes, and no
+// clock ever decides that they did not. What the pairing code authenticates is
+// described on PairRequest.proof.
+service PairingService {
+  // Pair proves the pairing code and returns at once, with a session id both
+  // sides record. It does not wait for anybody: the human confirmation is
+  // raised behind it and answered whenever the human gets to it.
+  rpc Pair(PairRequest) returns (PairResponse);
+
+  // SettlePairing reconciles one pending pairing. The caller states its own
+  // answer so far and is told the callee's; either side may call it, as often
+  // as it likes, and the same answer twice changes nothing. It is the only way
+  // a pairing completes, and it is how a withdrawal on one side reaches the
+  // other.
+  rpc SettlePairing(SettlePairingRequest) returns (SettlePairingResponse);
+}
+
+// PairingAnswer is what one side's user has said about a pending pairing.
+//
+// It has no "expired": a human comparing two fingerprints is not guessing, so
+// nothing about the confirmation is bounded by a clock (§7).
+enum PairingAnswer {
+  // Nobody has answered on that side yet, which is a state to wait in rather
+  // than a failure.
+  PAIRING_ANSWER_UNSPECIFIED = 0;
+  PAIRING_ANSWER_ACCEPTED = 1;
+  // The user said no.
+  PAIRING_ANSWER_DECLINED = 2;
+  // The user called the attempt off without answering it.
+  PAIRING_ANSWER_WITHDRAWN = 3;
+}
+
+// PairingRecordState is what the answering side still has on record.
+enum PairingRecordState {
+  PAIRING_RECORD_STATE_UNSPECIFIED = 0;
+  // Still pending there, and the answer field says how far it has got.
+  PAIRING_RECORD_STATE_PENDING = 1;
+  // Completed there: a trust record for this session exists.
+  PAIRING_RECORD_STATE_PAIRED = 2;
+  // Nothing on record. The attempt was withdrawn, declined or revoked while
+  // this side could not be reached, and there is nothing left to converge on.
+  PAIRING_RECORD_STATE_GONE = 3;
+}
+
+// PairingCode is everything a pairing code carries, and the reason the typed
+// code and the QR code are two renderings of one thing rather than two
+// mechanisms (§7).
+//
+// The typed code is the secret alone, because ten characters is what somebody
+// will actually read off a screen and type into a headless box; the address is
+// typed alongside it. The QR — and the copyable full code, which is the same
+// string — carries this whole message, so the dialling side knows the listening
+// side's identity key before it connects and the visual channel becomes the
+// integrity root rather than a fingerprint comparison.
+//
+// The security of the exchange does not depend on which rendering was used.
+// What the secret proves is the same either way, and both sides confirm on
+// their own screens regardless.
+message PairingCode {
+  int32 version = 1;
+  // The typed secret, normalised.
+  string secret = 2;
+  // The displaying instance's identity key in SSH wire format.
+  bytes identity_public_key = 3;
+  repeated string addresses = 4;
+  string instance_name = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message PairRequest {
+  // Proof that the caller is looking at the pairing code this instance is
+  // displaying, bound to the two identity keys of this very channel:
+  //
+  //   HMAC-SHA256(secret,
+  //     "ladulas-pairing-v1" || 0x00 ||
+  //     uint32be(len(listener key)) || <listener identity key, SSH wire> ||
+  //     uint32be(len(dialler key))  || <dialler identity key, SSH wire>)
+  //
+  // The lengths are there so that the two keys cannot be slid past each other
+  // to produce the same input from a different pair.
+  //
+  // The binding is what makes a short typed code safe. A relay that got a
+  // dialler to connect to it rather than to the real listener receives a proof
+  // computed over its own key, which the real listener rejects, and it cannot
+  // recompute one without the secret. The secret is single use, attempt capped
+  // and short lived, which is the whole of the replay story: a proof is bound
+  // to a channel that no longer exists.
+  bytes proof = 1;
+  string instance_name = 2;
+  // The caller's identity public key in SSH wire format. Redundant with the
+  // channel, and checked against it: a message that disagrees with the
+  // connection it arrived on is a bug or an attack, and either way not
+  // something to pair with.
+  bytes identity_public_key = 3;
+  // What the caller grants the listener: whether the listener may approve for
+  // the caller, and whether it may ask the caller to approve. Each side
+  // declares its own half; this is the caller telling the listener what it has
+  // written down, so the listener's prompt can say what the pairing means in
+  // both directions.
+  bool may_approve = 4;
+  bool may_request = 5;
+  // Addresses the caller listens on, so the listener can dial back later.
+  repeated string listen_addresses = 6;
+}
+
+message PairResponse {
+  // Whether the code was accepted and a pending pairing was written down. It
+  // says nothing about the listening user, who has not been asked yet.
+  bool accepted = 1;
+  // Identifies the pending pairing on both sides, and is what SettlePairing
+  // refers to for the rest of its life.
+  string session_id = 2;
+  string instance_name = 3;
+  bytes identity_public_key = 4;
+  // What the listener granted the caller, from the listener's own prompt.
+  bool may_approve = 5;
+  bool may_request = 6;
+  repeated string listen_addresses = 7;
+  // HMAC-SHA256 over the same material as the proof with the prefix
+  // "ladulas-pairing-v1-response", proving to the caller that the instance it
+  // reached is the one displaying the code. Without it a dialler that typed an
+  // address wrongly would be shown a stranger's fingerprint and asked to trust
+  // it, which is exactly the moment a fingerprint is hardest to check.
+  bytes confirmation = 8;
+  string reason = 9;
+}
+
+message SettlePairingRequest {
+  string session_id = 1;
+  // The caller's own answer as it stands. UNSPECIFIED is a poll: a side that
+  // has not been answered yet still asks, because the other side may have been
+  // withdrawn and the entry here would otherwise wait for ever.
+  PairingAnswer answer = 2;
+  // The answering user's own words, for the other side's log.
+  string reason = 3;
+}
+
+message SettlePairingResponse {
+  PairingRecordState state = 1;
+  // The callee's own answer, when it still has the pairing pending.
+  PairingAnswer answer = 2;
+  string reason = 3;
+}
+
+// PresenceService is the liveness check that decides whether a wake-up push is
+// needed at all (§11), and on desktops what "connected peers" means.
+service PresenceService {
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // Watch holds a connection open and heartbeats over it, so a requester knows
+  // whether an approver is reachable before it has anything to ask. The
+  // requester reconnects with backoff when the stream breaks.
+  rpc Watch(WatchRequest) returns (stream PresenceEvent);
+}
+
+message PingRequest {
+  google.protobuf.Timestamp sent_at = 1;
+}
+
+message PingResponse {
+  google.protobuf.Timestamp sent_at = 1;
+  string instance_name = 2;
+  // Whether this peer currently has a human able to answer a prompt.
+  bool can_prompt = 3;
+}
+
+message WatchRequest {}
+
+message PresenceEvent {
+  google.protobuf.Timestamp timestamp = 1;
+  string instance_name = 2;
+  bool can_prompt = 3;
+}

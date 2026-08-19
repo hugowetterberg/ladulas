@@ -1,0 +1,657 @@
+syntax = "proto3";
+
+// Package ladulas.v1 defines the wire schema shared by every Ladulås peer.
+//
+// The types here are used from the moment a request leaves the SSH agent: the
+// approval engine, the local prompt, the audit log and (from M3) the peer-to-peer
+// RPCs all speak these messages. Nothing in an ApprovalRequest assumes the
+// requester and the approver share a process — a locally decided request and a
+// request that crossed a pinned-TLS channel are byte-identical.
+package ladulas.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// RequestKind is the classification the agent assigned to a request. §4 of the
+// design makes this unambiguous: a payload either starts with the raw bytes
+// "SSHSIG", or parses as an RFC 4252 §7 public key authentication blob, or it is
+// OPAQUE_SIGN and hard-denied.
+enum RequestKind {
+  REQUEST_KIND_UNSPECIFIED = 0;
+  // SSH public key authentication to a remote server.
+  REQUEST_KIND_SSH_AUTH = 1;
+  // SSHSIG signature, namespace "git" — a commit or tag signature.
+  REQUEST_KIND_GIT_SIGN = 2;
+  // SSHSIG signature in some other namespace.
+  REQUEST_KIND_SSHSIG = 3;
+  // The payload parses as neither. Always denied (§9 hard rules); the kind
+  // exists so the denial can be audited with the same shape as everything else.
+  REQUEST_KIND_OPAQUE_SIGN = 4;
+  // A peer asked which keys we hold. M3.
+  REQUEST_KIND_KEY_LIST = 5;
+  // A pairing or trust change. Always prompts (§9 hard rules). M3.
+  REQUEST_KIND_PAIRING = 6;
+}
+
+// KeyRef identifies an SSH key by its public half. The fingerprint is the
+// SSH-style SHA256:base64 form used in every UI and in policy rules.
+message KeyRef {
+  string fingerprint = 1;
+  // Key algorithm, e.g. "ssh-ed25519".
+  string algorithm = 2;
+  // The SSH wire format public key blob.
+  bytes public_key = 3;
+  // The comment carried in the key file, usually an email address.
+  string comment = 4;
+  // The name the user gave the key inside Ladulås.
+  string label = 5;
+  // Whether this key belongs in an agent's identity list (decision T). It is
+  // the holder's setting, projected onto the public half so that it travels to
+  // whoever borrows the key, and it is advertising rather than permission: a
+  // key with it off still signs whenever something names it.
+  //
+  // Optional so that unset means yes. A peer that has not heard of the setting
+  // sends no field, and its keys must go on being offered rather than quietly
+  // disappearing out of an agent that used to have them.
+  optional bool agent_use = 6;
+}
+
+// HostKey is a remote server's host key as learned from session-bind, annotated
+// with whatever known_hosts could tell us about it.
+message HostKey {
+  bytes blob = 1;
+  string algorithm = 2;
+  string fingerprint = 3;
+  // Host patterns from known_hosts that matched this key, best display name
+  // first. Empty when the key is unknown.
+  repeated string known_hosts_names = 4;
+  // True when the key was found in known_hosts.
+  bool known = 5;
+}
+
+// SessionBinding is one entry of the session-bind@openssh.com list a client
+// sends before asking for identities. Forwarded hops arrive as additional binds
+// with is_forwarding set, so the list is also the hop chain (§4).
+message SessionBinding {
+  HostKey host_key = 1;
+  bytes session_id = 2;
+  bool is_forwarding = 3;
+  // Whether the server's signature over the session ID verified against the
+  // host key. A binding that fails verification is never used for context.
+  bool signature_verified = 4;
+  // Position in the binding list; 0 is the connection the client made itself.
+  int32 hop = 5;
+}
+
+// ClientProcess describes the local process on the other end of the agent
+// socket, from SO_PEERCRED. Only populated for local unix socket requests.
+message ClientProcess {
+  int32 pid = 1;
+  uint32 uid = 2;
+  uint32 gid = 3;
+  string executable = 4;
+  string command_line = 5;
+  string user_name = 6;
+  // The session the calling process belongs to, which is what says *who* is
+  // asking rather than which helper they used (decision U).
+  //
+  // The program at the socket is a helper — ssh, or ladulas-sign — and reads the
+  // same whether somebody is committing from an editor or pushing from a
+  // terminal. The session is not: an editor that runs its own subprocesses is
+  // one session, and a terminal window is another.
+  int32 session_id = 7;
+  // The processes between the caller and its session, nearest first, ending
+  // with the session leader and the process that started the session when there
+  // is one — the terminal emulator behind a shell.
+  //
+  // It travels because the approver may be a phone, which cannot read the
+  // requester's /proc, and because "ssh ← git ← zsh ← kitty" is the sentence
+  // that makes a prompt legible.
+  repeated ProcessAncestor ancestry = 8;
+}
+
+// ProcessAncestor is one step up the tree from the calling process.
+message ProcessAncestor {
+  int32 pid = 1;
+  string executable = 2;
+  string command_line = 3;
+  // The leader of the caller's session — the editor, or the shell in a terminal
+  // window.
+  bool session_leader = 4;
+  // The process that created the session and is not in it: a terminal emulator
+  // behind its shell. Absent when the leader has no such parent, which is what
+  // an editor that set up its own session looks like.
+  bool started_session = 5;
+}
+
+// RequesterInfo says who is asking. For a local request this is the instance
+// itself plus the process behind the socket; for a remote request it is the
+// paired peer's identity.
+message RequesterInfo {
+  // Fingerprint of the requesting instance's identity key.
+  string instance_id = 1;
+  // Human assigned instance name.
+  string name = 2;
+  // True when the request originated in this process.
+  bool local = 3;
+  // True when the requester has no GUI of its own.
+  bool headless = 4;
+  // Peer address for remote requests.
+  string remote_address = 5;
+  ClientProcess process = 6;
+}
+
+// SshAuthRequest is a public key authentication attempt, parsed out of the
+// RFC 4252 §7 blob and correlated against the connection's session-bind list.
+message SshAuthRequest {
+  // Username being authenticated as on the remote host.
+  string username = 1;
+  // Service name, in practice always "ssh-connection".
+  string service = 2;
+  // Authentication method: "publickey" (RFC 4252 §7), or
+  // "publickey-hostbound-v00@openssh.com", which OpenSSH 8.9 and later use
+  // whenever the server offers it — which in practice is nearly always (§4).
+  string method = 3;
+  // Session identifier from the auth blob.
+  bytes session_id = 4;
+  // True when session_id matched an entry in the connection's binding list.
+  bool bound = 5;
+  // True when the matched binding, or any binding ahead of it, is a forwarding
+  // hop. Forwarded requests always prompt (§4, §9).
+  bool forwarded = 6;
+  // The host key of the binding this request matched.
+  HostKey destination = 7;
+  // The full ordered binding list for the connection.
+  repeated SessionBinding binding_chain = 8;
+  // Best display name for the destination, from known_hosts when available and
+  // otherwise the fingerprint.
+  string destination_label = 9;
+  // Number of forwarding hops between the requester and the destination.
+  int32 forwarded_hops = 10;
+  // The server host key the payload itself names, present for the hostbound
+  // method and only for it.
+  //
+  // It is a better answer to "where is this login going" than destination
+  // above, and the reason is where it comes from: this host key is inside the
+  // bytes being signed, so the signature is a statement about which server the
+  // login is for, and a requester cannot change it without changing what it
+  // asked to have signed. session-bind is verified too, but it travels beside
+  // the request rather than in it.
+  //
+  // Wherever the payload is parsed the blob, the algorithm and the fingerprint
+  // are filled in; the known_hosts half is filled in only where there is a
+  // known_hosts file to read, which is the requesting machine (§4).
+  HostKey payload_destination = 11;
+}
+
+// GitIdentity is one of git's author, committer or tagger lines, split up.
+message GitIdentity {
+  string name = 1;
+  string email = 2;
+  google.protobuf.Timestamp time = 3;
+  // The offset as git recorded it, e.g. "+0200". Kept verbatim, because the
+  // approver should be able to see the time the way the object states it and
+  // not only in the approver's own zone.
+  string timezone = 4;
+}
+
+// GitHeader is a header line of a commit or tag object that this schema has no
+// field of its own for — mergetag, encoding, an unknown extension. They are
+// carried rather than dropped, because "the object had a header I did not
+// understand" is something an approver may want to see.
+message GitHeader {
+  string name = 1;
+  string value = 2;
+}
+
+// GitObject is the commit or tag object the signature covers, parsed.
+//
+// Everything here is derived from the signed bytes, so unlike the rest of
+// GitContext it is provable: the approver has the object, hashes it against the
+// digest in the payload, and then knows that the message and author it shows
+// are the ones being signed (§5).
+message GitObject {
+  // "commit" or "tag".
+  string type = 1;
+  // Commit fields.
+  string tree = 2;
+  repeated string parents = 3;
+  GitIdentity author = 4;
+  GitIdentity committer = 5;
+  // Tag fields.
+  string tagged_object = 6;
+  string tagged_type = 7;
+  string tag = 8;
+  GitIdentity tagger = 9;
+  // The first line of the message, and the whole message.
+  string subject = 10;
+  string message = 11;
+  repeated GitHeader extra_headers = 12;
+}
+
+// GitDiffLineKind is what a line of a hunk does.
+enum GitDiffLineKind {
+  GIT_DIFF_LINE_KIND_UNSPECIFIED = 0;
+  GIT_DIFF_LINE_KIND_CONTEXT = 1;
+  GIT_DIFF_LINE_KIND_ADDED = 2;
+  GIT_DIFF_LINE_KIND_REMOVED = 3;
+  // "\ No newline at end of file" and anything else git says inside a hunk.
+  GIT_DIFF_LINE_KIND_NOTE = 4;
+}
+
+// GitDiffLine is one line of a hunk, with the leading +/-/space removed.
+message GitDiffLine {
+  GitDiffLineKind kind = 1;
+  string text = 2;
+}
+
+// GitDiffHunk is one @@ section of a file's diff.
+message GitDiffHunk {
+  // The @@ header verbatim, including any trailing section heading.
+  string header = 1;
+  repeated GitDiffLine lines = 2;
+}
+
+// GitDiffFile is one file's worth of a diff.
+//
+// The diff is parsed on the requesting side and travels structured rather than
+// as text, so that the viewer can render it without parsing anything: the
+// approval UI is showing attacker-influenced content and the less of it that is
+// interpreted in JavaScript, the better (§12).
+message GitDiffFile {
+  string old_path = 1;
+  string new_path = 2;
+  // "added", "removed", "modified", "renamed", "copied" or "mode changed".
+  string status = 3;
+  int32 insertions = 4;
+  int32 deletions = 5;
+  bool binary = 6;
+  // The file mode before and after, when it changed, e.g. "100644 → 100755".
+  string mode_change = 7;
+  repeated GitDiffHunk hunks = 8;
+  // True when this file's hunks were cut short or left out by the size caps.
+  bool truncated = 9;
+}
+
+// GitDiff is the change the commit makes, as collected by the requester.
+message GitDiff {
+  repeated GitDiffFile files = 1;
+  int32 files_changed = 2;
+  int32 insertions = 3;
+  int32 deletions = 4;
+  // True when files or hunks were left out to stay inside the caps.
+  bool truncated = 5;
+  // What was left out and why, for display next to the diff.
+  string truncation_note = 6;
+  // What the diff was taken between, e.g. "a1b2c3d..<tree>".
+  string range = 7;
+  // Set when the diff could not be collected at all.
+  string error = 8;
+}
+
+// GitContext is the commit context ladulas-sign attaches (§5). It has two
+// halves, and the difference between them is the whole security story of the
+// rich git prompt.
+//
+// Everything up to `diff` originates on the requesting machine and is display
+// metadata only — the machine we distrust, when it is a headless one. The
+// approver's UI labels it as reported by the requester.
+//
+// `object` and everything derived from it is different: it is the exact byte
+// string the signature covers, so the approver parses it itself and knows that
+// the message, author and timestamps it displays are what is being signed.
+message GitContext {
+  // Requester-asserted: where the requester says this happened.
+  string repository_path = 1;
+  string origin_url = 2;
+  string branch = 3;
+  // The git operation the signature belongs to, e.g. "commit" or "tag".
+  string operation = 4;
+  // Requester-asserted: the change the commit makes.
+  GitDiff diff = 5;
+  // The project this change belongs to, derived from the origin URL and the
+  // repository path the same way on every instance (§6). It is what ties a
+  // signing request to the documentation an approver has been sent, and to the
+  // staleness label that says how far the two have drifted apart. Like
+  // everything else above it is the requester's word: an approver looks the id
+  // up among the projects that requester published and nowhere else.
+  string project_id = 6;
+
+  // The raw object, exactly as signed. "commit" or "tag" in object_type.
+  string object_type = 10;
+  bytes object = 11;
+  // The parse of `object`. Whoever displays this parses it from the bytes
+  // rather than trusting a parse done elsewhere.
+  GitObject parsed = 12;
+  // Set once someone has confirmed that `object` hashes to the digest in the
+  // payload about to be signed.
+  bool verified_against_payload = 13;
+  // Why that check failed, when it did. A mismatch is a hard denial (§9): a
+  // request whose context describes a different commit from the one it signs is
+  // exactly the attack the check exists for.
+  string verification_error = 14;
+}
+
+// SshsigRequest is an SSHSIG signature request. Namespace "git" is a commit or
+// tag signature and is classified as REQUEST_KIND_GIT_SIGN; any other namespace
+// is REQUEST_KIND_SSHSIG.
+message SshsigRequest {
+  string namespace = 1;
+  string hash_algorithm = 2;
+  // The message digest. Note that the agent only ever sees the digest — the
+  // rich context in GitContext is what makes a useful prompt possible.
+  bytes message_digest = 3;
+  GitContext git_context = 4;
+}
+
+// OpaqueSignRequest is a payload that classified as neither SSHSIG nor an
+// RFC 4252 auth blob. These are denied unconditionally; the message exists so
+// the denial carries enough detail to debug it.
+message OpaqueSignRequest {
+  uint32 payload_length = 1;
+  bytes payload_sha256 = 2;
+  // Why classification failed.
+  string reason = 3;
+  // First bytes of the payload, capped, for diagnosis.
+  bytes prefix = 4;
+}
+
+// PairingRequest is a trust change: the confirmation each side's user gives on
+// their own device before a peer becomes trusted (§7). Pairing always prompts,
+// and the policy layer cannot override that.
+//
+// Both fingerprints are here because the prompt has to show both. The whole
+// integrity story of a TOFU pairing is that the two screens agree, so a prompt
+// that only showed the peer's fingerprint would leave the user nothing to
+// compare against.
+message PairingRequest {
+  string peer_name = 1;
+  string peer_fingerprint = 2;
+  string remote_address = 3;
+  // Whether the peer may approve for us, request approval from us, or both.
+  bool peer_may_approve = 4;
+  bool peer_may_request = 5;
+  // Corroborating attributes such as a tailnet node name (§7). Never
+  // authoritative.
+  map<string, string> attributes = 6;
+  // This instance's own identity, so the prompt can show the user the
+  // fingerprint the other side is being asked to confirm.
+  string local_fingerprint = 7;
+  string local_name = 8;
+  // True when this instance started the pairing — it dialled the peer using a
+  // code the peer displayed — and false when the peer arrived at our listener.
+  // The wording of the prompt differs, and so does what a surprise means.
+  bool initiated_locally = 9;
+  // Addresses the peer says it listens on, recorded so we can dial it later.
+  repeated string peer_addresses = 10;
+  // True when the peer's identity key was carried by the pairing code itself
+  // rather than learned from the connection, which makes the visual channel the
+  // integrity root and leaves nothing for the user to compare by hand.
+  bool key_from_code = 11;
+}
+
+// KeyListRequest is a peer asking which keys it may use. M3.
+message KeyListRequest {
+  string purpose = 1;
+}
+
+// ApprovalRequest is the unit of work of the approval engine. It is created by
+// whatever produced the operation (the SSH agent, ladulas-sign, an incoming
+// peer RPC), evaluated against policy, and either auto-answered or shown to
+// approvers.
+message ApprovalRequest {
+  // Random, unique per request. Used for correlation and cancellation.
+  string request_id = 1;
+  google.protobuf.Timestamp created_at = 2;
+  RequesterInfo requester = 3;
+  RequestKind kind = 4;
+  // The key the operation wants to use. Absent for pairing requests.
+  KeyRef key = 5;
+  // How long the requester is willing to wait.
+  google.protobuf.Duration timeout = 6;
+  // Signature flags from the agent protocol, e.g. SSH_AGENT_RSA_SHA2_512.
+  uint32 signature_flags = 7;
+  // The signature algorithm the flags resolve to, e.g. "rsa-sha2-512".
+  string signature_algorithm = 8;
+  // SHA-256 of the exact payload to be signed. Lets an approver confirm that
+  // the bytes it approved are the bytes that got signed.
+  bytes payload_sha256 = 9;
+
+  oneof operation {
+    SshAuthRequest ssh_auth = 20;
+    SshsigRequest sshsig = 21;
+    OpaqueSignRequest opaque_sign = 22;
+    PairingRequest pairing = 23;
+    KeyListRequest key_list = 24;
+  }
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_APPROVE = 1;
+  DECISION_DENY = 2;
+}
+
+// DecisionSource records what actually decided, which is the part of an audit
+// entry you care about six months later.
+enum DecisionSource {
+  DECISION_SOURCE_UNSPECIFIED = 0;
+  // A human answered a prompt.
+  DECISION_SOURCE_USER = 1;
+  // A policy rule matched.
+  DECISION_SOURCE_POLICY = 2;
+  // An unexpired TTL grant covered the request.
+  DECISION_SOURCE_GRANT = 3;
+  // A hard rule that policy cannot override (§9).
+  DECISION_SOURCE_HARD_RULE = 4;
+  // Nobody answered in time.
+  DECISION_SOURCE_TIMEOUT = 5;
+  // The requester gave up, or another approver answered first.
+  DECISION_SOURCE_CANCELLED = 6;
+  // No approver was reachable.
+  DECISION_SOURCE_NO_APPROVER = 7;
+  // Something went wrong; always a denial.
+  DECISION_SOURCE_ERROR = 8;
+}
+
+// GrantScope bounds a TTL grant. Empty fields mean "any".
+//
+// Matching is strict equality on every field, not "empty means any" — see
+// approval.scopeFor, where an unbound SSH request derives an empty destination
+// and a grant that treated that as a wildcard would cover every host there is.
+message GrantScope {
+  string key_fingerprint = 1;
+  RequestKind kind = 2;
+  // Display name of the destination host for an SSH auth grant — the label a
+  // person reads in the promise sentence. It is the requester's word for the
+  // host (§5) and is NOT what the grant matches on: two hosts can wear one
+  // label, so matching on it would let a compromised requester spend a promise
+  // made for one host on another (M2, decision X). destination_fingerprint is
+  // the matched field.
+  string destination = 3;
+  // Repository path or origin URL for git signing grants.
+  string repository = 4;
+  string requester_instance_id = 5;
+  string username = 6;
+  // Fingerprint of the destination host proven in the signed session-bind
+  // payload — what an SSH auth grant is actually matched on (M2). Empty for a
+  // login whose payload named no host, which is then covered only by a grant
+  // equally without one, exactly as an empty destination was before. It keys on
+  // the proof rather than on the requester's Bound flag or its label, both of
+  // which the requester chooses.
+  string destination_fingerprint = 8;
+  // The session on the requesting instance that the promise was made to
+  // (decision U): the editor or the terminal window somebody was working in.
+  //
+  // Zero is the one field here where empty means "any", and it is deliberate:
+  // that is what a grant covered before this existed, and it is what a request
+  // with no process behind it — one that arrived over the channel from a peer
+  // that told us nothing — can be covered by. Every other field is matched by
+  // strict equality, because an empty destination that meant "any" would cover
+  // every host on the internet.
+  int32 session_id = 7;
+}
+
+// Grant is an approver's standing promise to auto-answer matching requests
+// until it expires. Created from the prompt ("Approve for 3 hours").
+message Grant {
+  string grant_id = 1;
+  GrantScope scope = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  // The request that the grant was created from.
+  string origin_request_id = 5;
+  // Human readable rendering of the scope, as shown when the grant was made.
+  string description = 6;
+  // Who the promise was made to, in the words the button offered it in: "this
+  // kitty window", "anywhere on guppy" (decisions U and V).
+  //
+  // It is kept beside the rendered sentence rather than only inside it because
+  // extending a promise has to re-render that sentence — a row reading "for 1
+  // hour" on a promise that now runs three is the one thing a list of standing
+  // permissions must not say — and the subject is a name that cannot be
+  // recovered from the scope, which holds an identifier.
+  string promise_subject = 14;
+
+  // Set when the promise was handed over rather than kept (decision P): the
+  // key is the requester's own, so the requester holds a signed delegation and
+  // applies it itself, and this record is what makes the promise listable and
+  // revocable here. It is not what makes it work — revoking this stops the
+  // next reconciliation from renewing it, and takes effect on the requester
+  // when the two are next in touch.
+  bool delegated = 7;
+  // Who it was handed to. Empty on a grant this instance keeps.
+  string delegate_fingerprint = 8;
+  string delegate_name = 9;
+
+  // What has been done under it. use_count is complete; recent_uses is the
+  // tail, because a grant can cover a great many signatures and the number is
+  // the part worth reading (decision P).
+  uint32 use_count = 10;
+  repeated GrantUse recent_uses = 11;
+
+  // Set when somebody has revoked this and the machine holding the delegation
+  // could not be told. The promise is still being kept over there — a
+  // delegation is honoured without asking anybody — so the grant stays in the
+  // list rather than disappearing into a state where it looks finished and is
+  // not. It is taken back, and the record removed, the moment the holder is
+  // reachable again.
+  //
+  // A revocation nobody could deliver is the one state a grant list must not
+  // round off, in either direction: hiding it says the signing has stopped
+  // when it has not, and refusing the revoke outright loses the intent, so the
+  // next reconciliation renews a promise somebody has already taken back.
+  bool revoke_pending = 12;
+  google.protobuf.Timestamp revoke_requested_at = 13;
+}
+
+// GrantUse is one signature a requester made under a delegation and then told
+// the approver about.
+//
+// It is an account received, not a decision made. The approver did not see the
+// request and has no signed artifact for it — a requester that lied about this
+// list could equally have lied by omitting it, and is an actor that already
+// holds the key (decision P, §18).
+message GrantUse {
+  // The grant this was done under. A delegation and the approver's record of
+  // it are two halves of one promise and share an identifier, so a report can
+  // be filed against the right one without the approver having to guess.
+  string grant_id = 6;
+  string request_id = 1;
+  google.protobuf.Timestamp used_at = 2;
+  // When the approver was told, which is not when it happened.
+  google.protobuf.Timestamp reported_at = 3;
+  RequestKind kind = 4;
+  // What was signed, in the words the prompt would have used.
+  string subject = 5;
+}
+
+// Delegation is the artifact behind a delegated grant: an approver's signed
+// statement that within this scope, until this time, one named instance may
+// approve its own requests without asking (decision P, §9).
+//
+// It names both instances. A delegation issued to one machine is not usable at
+// another that happens to hold the same key, which is what stops one being
+// lifted off the wire and replayed.
+message Delegation {
+  string delegation_id = 1;
+  GrantScope scope = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  // The request this was granted from.
+  string origin_request_id = 5;
+  // Human readable rendering of the scope, as shown when it was granted.
+  string description = 6;
+  // The instance that granted it, and the one it was granted to.
+  string approver_fingerprint = 7;
+  string approver_name = 8;
+  string requester_fingerprint = 9;
+}
+
+// SignedDelegation is a Delegation with the approver's identity signature over
+// it, under its own domain separator: a standing permission and an approval of
+// one specific request must never be confusable as bytes (decision P).
+//
+// As with SignedApproval, the serialized delegation is authoritative — protobuf
+// is not canonical, so re-marshalling could produce bytes the signature does
+// not cover. Verify first, unmarshal second.
+message SignedDelegation {
+  bytes delegation = 1;
+  bytes approver_public_key = 2;
+  string approver_fingerprint = 3;
+  string signature_algorithm = 4;
+  bytes signature = 5;
+}
+
+// ApproverInfo identifies who answered.
+message ApproverInfo {
+  string instance_id = 1;
+  string name = 2;
+  bool local = 3;
+}
+
+// ApprovalResponse is the answer. It carries a digest of the exact request
+// bytes it answers, so a response cannot be replayed against a different
+// request even though it travels separately from it.
+message ApprovalResponse {
+  string request_id = 1;
+  // SHA-256 over the serialized ApprovalRequest as the approver received it.
+  bytes request_digest = 2;
+  Decision decision = 3;
+  DecisionSource source = 4;
+  google.protobuf.Timestamp decided_at = 5;
+  ApproverInfo approver = 6;
+  // The rule name, grant ID or hard rule that produced the decision.
+  string reason = 7;
+  // A grant the approver created while answering.
+  Grant grant = 8;
+  // A grant the approver handed over instead of keeping, because the key is
+  // the requester's own (decision P). The requester stores it and applies it
+  // itself, so the promise survives the approver being asleep.
+  SignedDelegation delegation = 10;
+  // Whether the approver's UI should show a passive notification rather than a
+  // prompt, for auto-approved requests (§9).
+  bool notify_only = 9;
+}
+
+// SignedApproval is the approval-as-artifact: the approver's identity key signs
+// the response, and both ends keep the signature in their audit log (§18).
+//
+// The signature covers the exact serialized response in `response`, not a
+// re-marshalled copy, because protobuf serialization is not canonical. Verify by
+// checking the signature over the signing input and only then unmarshalling
+// `response`.
+message SignedApproval {
+  // Serialized ApprovalResponse. Authoritative.
+  bytes response = 1;
+  // The approver's identity public key in SSH wire format.
+  bytes approver_public_key = 2;
+  string approver_fingerprint = 3;
+  // The algorithm of the signature, e.g. "ssh-ed25519".
+  string signature_algorithm = 4;
+  // ssh.Marshal of an ssh.Signature over
+  // "ladulas-approval-v1" || 0x00 || response.
+  bytes signature = 5;
+}

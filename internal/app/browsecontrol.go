@@ -1,0 +1,147 @@
+package app
+
+import (
+	"context"
+	"errors"
+
+	"connectrpc.com/connect"
+
+	"github.com/hugowetterberg/ladulas/pkg/project"
+	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+)
+
+// The doc browser over the control socket (§6, decision Z).
+//
+// Both halves of an answer are this process's: what a peer publishes is read
+// over the peer channel, which needs the identity key, and what has been read
+// before is kept in a cache sealed with the store key. So a front end asks and
+// this answers, exactly as it asks for a key list — and the provenance travels
+// with the answer, because "the publisher says so" and "this is what was read
+// of it once" are different claims (decision Q).
+
+// ErrNoBrowser is what a sealed instance has instead of a doc browser: the
+// pages are sealed with the store key, and there is nothing to read until
+// somebody unlocks it.
+var ErrNoBrowser = errors.New("the store is sealed, so there is nothing to browse")
+
+func (s *controlService) browser() (*project.Browser, error) {
+	browser := s.app.Browser()
+	if browser == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, ErrNoBrowser)
+	}
+
+	return browser, nil
+}
+
+func (s *controlService) ListPeerProjects(
+	ctx context.Context, req *connect.Request[ladulasv1.ListPeerProjectsRequest],
+) (*connect.Response[ladulasv1.ListPeerProjectsResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	found, err := browser.List(ctx, req.Msg.GetFingerprint())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	resp := &ladulasv1.ListPeerProjectsResponse{}
+
+	for _, overview := range found {
+		resp.Projects = append(resp.Projects, project.OverviewWire(overview))
+	}
+
+	return connect.NewResponse(resp), nil
+}
+
+func (s *controlService) OpenPeerProject(
+	ctx context.Context, req *connect.Request[ladulasv1.OpenPeerProjectRequest],
+) (*connect.Response[ladulasv1.OpenPeerProjectResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	// Cached is the call a card makes: somebody is waiting in front of it, and
+	// asking a machine that may be asleep is not what a card does (decision Q).
+	if req.Msg.GetCachedOnly() {
+		overview, ok := browser.Cached(
+			req.Msg.GetFingerprint(), req.Msg.GetProjectId())
+
+		return connect.NewResponse(&ladulasv1.OpenPeerProjectResponse{
+			Project: project.OverviewWire(overview),
+			Found:   ok,
+		}), nil
+	}
+
+	overview, err := browser.Open(
+		ctx, req.Msg.GetFingerprint(), req.Msg.GetProjectId())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.OpenPeerProjectResponse{
+		Project: project.OverviewWire(overview),
+		Found:   true,
+	}), nil
+}
+
+func (s *controlService) ListPeerDirectory(
+	ctx context.Context, req *connect.Request[ladulasv1.ListPeerDirectoryRequest],
+) (*connect.Response[ladulasv1.ListPeerDirectoryResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	listing, err := browser.Directory(ctx,
+		req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetPath(),
+		req.Msg.GetFilter(), req.Msg.GetToken(), int(req.Msg.GetSize()))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.ListPeerDirectoryResponse{
+		Listing: project.ListingWire(listing),
+	}), nil
+}
+
+func (s *controlService) SearchPeerProject(
+	ctx context.Context, req *connect.Request[ladulasv1.SearchPeerProjectRequest],
+) (*connect.Response[ladulasv1.SearchPeerProjectResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	listing, err := browser.Search(ctx,
+		req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetQuery(),
+		req.Msg.GetToken(), int(req.Msg.GetSize()))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.SearchPeerProjectResponse{
+		Listing: project.ListingWire(listing),
+	}), nil
+}
+
+func (s *controlService) ReadPeerPage(
+	ctx context.Context, req *connect.Request[ladulasv1.ReadPeerPageRequest],
+) (*connect.Response[ladulasv1.ReadPeerPageResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	page, err := browser.File(ctx,
+		req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetPath())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.ReadPeerPageResponse{
+		Page: project.PageWire(page),
+	}), nil
+}

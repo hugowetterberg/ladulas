@@ -1,0 +1,378 @@
+# goreleaser builds a tagged release and writes the Arch packaging for it.
+#
+# The version is the tag and nothing else: nothing in the tree records which
+# tag points at a commit, so it arrives through the ldflags below and lands in
+# internal/version. A build with no ldflags — `go install ./cmd/ladulasd`, which
+# is how the maintainer's own daemon is built — falls back to the toolchain's
+# VCS stamps and says `0.0.0-dev` out loud. Both cases are that package's
+# problem, not this file's.
+#
+# What comes out, for linux/amd64 and linux/arm64:
+#
+#   * an archive of the four binaries, the units and the documents;
+#   * a source archive, which is what the two GTK packages build from;
+#   * three PKGBUILDs, written into ../ladulas-aur by the release workflow.
+#
+# The three packages all own /usr/bin/ladulas, because that one binary is both
+# the desktop application and the management CLI (§12, §14). They therefore
+# conflict, and the split is by which desktop application is in them:
+#
+#   ladulas               built here, GTK 4 / webkitgtk-6.0 — Wails' default
+#   ladulas-gtk3          built here, GTK 3 / webkit2gtk-4.1
+#   ladulas-headless-bin  prebuilt, no GUI: the daemon, the CLI, the signer
+#
+# The GUI packages are built from source rather than shipped as binaries on
+# purpose. A window cross-compiled on a CI runner links whatever webkit soname
+# that distribution shipped, and shipping that to Arch is how a package
+# installs cleanly and then will not start. makepkg compiling against the
+# machine's own libraries is the answer, and it is cheap here: pkg/protocol is
+# committed, so a source build needs Go and nothing else — no buf, no Docker.
+#
+# The prebuilt one was called ladulas-bin until the tag after v0.0.1, and the
+# name was the problem: `-bin` is an Arch convention meaning *the same package,
+# already compiled*, so ladulas-bin read as a faster path to what ladulas
+# installs. It was not. It was the only one of the three with no window in it,
+# which is a difference in what you get rather than in how it was built, and
+# the suffix was the only thing the name said. `headless` says the axis that
+# actually differs; `-bin` stays and is now a modifier on it rather than the
+# whole claim, which is both honest and not optional — goreleaser appends
+# `-bin` to any aurs name lacking it (internal/pipe/aur/aur.go), with no
+# setting to turn it off. Renaming past that would mean rewriting pkgname in
+# the generated PKGBUILD and pkgbase in the generated .SRCINFO from the
+# workflow, and ../ladulas-aur's whole premise is that what is committed there
+# is exactly what goreleaser wrote.
+#
+# What must not come back is the shape that reading suggests: a prebuilt
+# package that *does* have the GUI in it, so that -bin and the base package
+# install the same thing. That is the cross-compiled webview above — it would
+# link the runner's libwebkitgtk-6.0 soname, install cleanly on Arch through
+# pacman's dependency check, and fail at the first `ladulas gui`, which is a
+# failure that surfaces after the release rather than during it. Making it
+# safe means building in an Arch container so the sonames match, and that is a
+# build chain nobody has built yet — not a flag on this file.
+version: 2
+
+project_name: ladulas
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # CGO off for all four. The desktop application needs cgo and system
+  # libraries, which is exactly why the prebuilt package is the headless one:
+  # this is the GUI-less build of the same binary, still a complete management
+  # CLI and still `ladulas agent`, the terminal approver. What it cannot do is
+  # `ladulas gui`, which says so and exits (decision Y: the bare name prints the
+  # usage and starts nothing).
+  - &build
+    id: ladulas
+    main: ./cmd/ladulas
+    binary: ladulas
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags: &ldflags
+      - -s
+      - -w
+      - -X github.com/hugowetterberg/ladulas/internal/version.Version={{ .Version }}
+      - -X github.com/hugowetterberg/ladulas/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/hugowetterberg/ladulas/internal/version.Date={{ .CommitDate }}
+  - <<: *build
+    id: ladulasd
+    main: ./cmd/ladulasd
+    binary: ladulasd
+  - <<: *build
+    id: ladulas-sign
+    main: ./cmd/ladulas-sign
+    binary: ladulas-sign
+  - <<: *build
+    id: ladulas-relay
+    main: ./cmd/ladulas-relay
+    binary: ladulas-relay
+
+archives:
+  - id: linux
+    ids: [ladulas, ladulasd, ladulas-sign, ladulas-relay]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - docs/*.md
+      - contrib/*.service
+      - contrib/ladulas.desktop
+
+# The source archive is what the two GTK packages hand to makepkg. It is a
+# `git archive` of the tag, so it holds the committed protobuf and the viewer
+# bundle and needs no code generation to build.
+source:
+  enabled: true
+  format: tar.gz
+  name_template: "{{ .ProjectName }}-{{ .Version }}"
+  # A prefix, and a version-independent one. Without it the tarball extracts
+  # straight into makepkg's $srcdir, and the `cd` the PKGBUILD's build() opens
+  # with has nothing to enter. Naming the directory after the version instead
+  # would work for `v1.2.3` and break for `v1.0.0-rc.1`, because pacman forbids
+  # `-` in a pkgver and goreleaser rewrites it to `_`: the directory would be
+  # ladulas-1.0.0-rc.1 while ${pkgver} said 1.0.0_rc.1. A fixed name cannot
+  # drift from the version because it does not carry it.
+  prefix_template: "{{ .ProjectName }}/"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  # The repository is private, so this release and its assets are private with
+  # it — which is the whole reason ../ladulas-aur carries a `pull` script
+  # instead of makepkg fetching these itself. makepkg cannot authenticate.
+  draft: false
+  prerelease: auto
+
+  # TEMPORARY — remove this once the release job is trustworthy end to end.
+  #
+  # `release --clean` cleans dist/ here, not the release on GitHub, so an asset
+  # that already exists is a 422 already_exists and the whole publish step
+  # fails. That is the right default: it is what stops a re-run from quietly
+  # replacing the binaries somebody has already installed, and the assets are
+  # the one part of a release that must not change under a tag that did not.
+  #
+  # It is on because the packaging commit is the last step of the job and the
+  # steps before it have failed twice for reasons outside the tree — a missing
+  # AUR repository, then a missing deploy key. Each time the fix left a
+  # published v0.0.1 that could not be re-run over, because goreleaser refused
+  # at the assets before ever reaching the packaging. Retrying a tag had to
+  # work before the thing being retried could be tested at all.
+  #
+  # Take it out when a green release has gone through without needing a retry.
+  # After that, a re-run wanting to replace assets is a signal worth keeping —
+  # it means the build is not reproducible from the tag, and silently
+  # overwriting is how that goes unnoticed.
+  replace_existing_artifacts: true
+
+# goreleaser rejects unknown top-level keys, so the fields the three packages
+# share are anchored where they first appear rather than in a block of their
+# own. What is deliberately *not* shared is provides and conflicts: all three
+# own /usr/bin/ladulas, so each has to conflict with the other two by name, and
+# the source-built `ladulas` must not claim to provide itself.
+aurs:
+  - name: ladulas-headless-bin
+    ids: [linux]
+    homepage: &homepage "https://github.com/hugowetterberg/ladulas"
+    license: &license "custom:unlicensed"
+    maintainers: &maintainers
+      - "Hugo Wetterberg <hugo at wetterberg dot nu>"
+    optdepends: &optdepends
+      - "git: commit context in the signing prompt — the branch and the diff"
+      - "openssh: ssh-keygen, which ladulas-sign falls back to for anything it does not sign"
+      - "tailscale: reaching a peer or the wake-up relay over a tailnet"
+    # The workflow makes one commit into ../ladulas-aur for all three packages
+    # rather than letting three pipes each clone, commit and push to the same
+    # repository — which is a race, and a "fetch first" rejection halfway
+    # through a release is a release that published two thirds of its
+    # packaging.
+    skip_upload: &skip_upload true
+    git_url: &git_url "ssh://git@github.com/hugowetterberg/ladulas-aur.git"
+    directory: ladulas-headless-bin
+    commit_msg_template: "ladulas-headless-bin {{ .Version }}"
+    description: >-
+      SSH agent and git signing with distributed approval (prebuilt, no
+      desktop application). Every signature is approved here, by policy, or by
+      a paired phone
+    provides:
+      - ladulas
+      - ladulasd
+      - ladulas-sign
+      - ladulas-relay
+    conflicts:
+      - ladulas
+      - ladulas-gtk3
+      # ladulas-bin is not built any more, but naming it is what makes the
+      # rename an upgrade instead of an error. Arch's mechanism for a renamed
+      # package is `replaces`, and goreleaser's aur config has no field for it
+      # — so without this line pacman meets the old package as a *file*
+      # conflict over /usr/bin/ladulas, which it refuses outright and cannot
+      # offer to resolve. Declared as a package conflict it prompts to remove
+      # ladulas-bin and carries on. Drop it once nobody is on v0.0.1.
+      - ladulas-bin
+    package: |-
+      install -Dm755 ./ladulas "${pkgdir}/usr/bin/ladulas"
+      install -Dm755 ./ladulasd "${pkgdir}/usr/bin/ladulasd"
+      install -Dm755 ./ladulas-sign "${pkgdir}/usr/bin/ladulas-sign"
+      install -Dm755 ./ladulas-relay "${pkgdir}/usr/bin/ladulas-relay"
+
+      for unit in ladulas.service ladulas-relay.service; do
+        sed -e 's|%h/go/bin/|/usr/bin/|' "contrib/${unit}" > "${unit}"
+        install -Dm644 "${unit}" "${pkgdir}/usr/lib/systemd/user/${unit}"
+      done
+
+      # No desktop entry: this package has no GUI compiled in, so an autostart
+      # entry would start a binary at login whose only answer is that it was
+      # built without one.
+
+      install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+      for doc in docs/*.md; do
+        install -Dm644 "${doc}" "${pkgdir}/usr/share/doc/${pkgname}/${doc}"
+      done
+
+aur_sources:
+  - name: ladulas
+    homepage: *homepage
+    license: *license
+    maintainers: *maintainers
+    optdepends: *optdepends
+    skip_upload: *skip_upload
+    git_url: *git_url
+    directory: ladulas
+    commit_msg_template: "ladulas {{ .Version }}"
+    description: &gui-description >-
+      SSH agent and git signing with distributed approval, with the desktop
+      application: one window, a tray icon, and a popup per request
+    # No `ladulas` here: this package is ladulas.
+    provides:
+      - ladulasd
+      - ladulas-sign
+      - ladulas-relay
+    makedepends: &gui-makedepends
+      - go
+      # For the icon sizes in package() below. The alternative is committing a
+      # PNG per size, which is nine copies of one picture to keep in step.
+      - imagemagick
+    # Same dead name as above, for the same reason; the live half differs
+    # because a package never conflicts with itself.
+    conflicts:
+      - ladulas-headless-bin
+      - ladulas-gtk3
+      - ladulas-bin
+    depends:
+      - gtk4
+      - webkitgtk-6.0
+    prepare: |-
+      cd "${srcdir}/ladulas"
+      go mod download
+    build: |-
+      cd "${srcdir}/ladulas"
+      export CGO_CPPFLAGS="${CPPFLAGS}"
+      export CGO_CFLAGS="${CFLAGS}"
+      export CGO_CXXFLAGS="${CXXFLAGS}"
+      export CGO_LDFLAGS="${LDFLAGS}"
+      export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+
+      # ${pkgver} with the underscore turned back into a hyphen: pacman forbids
+      # `-` in a pkgver, so a tag of v1.0.0-rc.1 arrives here as 1.0.0_rc.1 and
+      # stamping that in would have `ladulas version` name a tag that does not
+      # exist. A release tag has nothing to substitute and is unaffected.
+      _ldflags="-linkmode=external -buildid=''"
+      _ldflags+=" -X github.com/hugowetterberg/ladulas/internal/version.Version=${pkgver//_/-}"
+
+      # Only ladulas carries the GUI tag; the daemon, the signer and the relay
+      # have no GUI in them and never did. The `gui` tag alone is Wails' default,
+      # which is GTK 4 and webkitgtk-6.0.
+      go build -tags gui -ldflags "${_ldflags}" -o ladulas ./cmd/ladulas
+      go build -ldflags "${_ldflags}" -o ladulasd ./cmd/ladulasd
+      go build -ldflags "${_ldflags}" -o ladulas-sign ./cmd/ladulas-sign
+      go build -ldflags "${_ldflags}" -o ladulas-relay ./cmd/ladulas-relay
+    package: &gui-package |-
+      cd "${srcdir}/ladulas"
+      install -Dm755 ./ladulas "${pkgdir}/usr/bin/ladulas"
+      install -Dm755 ./ladulasd "${pkgdir}/usr/bin/ladulasd"
+      install -Dm755 ./ladulas-sign "${pkgdir}/usr/bin/ladulas-sign"
+      install -Dm755 ./ladulas-relay "${pkgdir}/usr/bin/ladulas-relay"
+
+      for unit in ladulas.service ladulas-relay.service; do
+        sed -e 's|%h/go/bin/|/usr/bin/|' "contrib/${unit}" > "${unit}"
+        install -Dm644 "${unit}" "${pkgdir}/usr/lib/systemd/user/${unit}"
+      done
+
+      # The desktop application is an application, not a service (decision Z):
+      # a menu entry to launch it, and an autostart entry so a desktop starts
+      # it at login. Both are the same file, which is why it is installed
+      # twice rather than written twice.
+      install -Dm644 contrib/ladulas.desktop \
+        "${pkgdir}/usr/share/applications/ladulas.desktop"
+      install -Dm644 contrib/ladulas.desktop \
+        "${pkgdir}/etc/xdg/autostart/ladulas.desktop"
+
+      # The icon, without which both of those entries have none — and so does
+      # the window. GTK 4 removed every API that takes an icon as bytes, so the
+      # entry's `Icon=ladulas` resolved against the icon theme is the whole
+      # mechanism there is (decision AA), and the theme has to be given the file.
+      # It is generated here from the picture the phone app is built from, which
+      # is the only drawing of it in the tree: one master, every size derived,
+      # nothing to keep in step. Same set as `make install-desktop` writes into
+      # $HOME for a tree installed with `make install`.
+      for size in 16 22 24 32 48 64 128 256 512; do
+        magick internal/branding/icon-1024.png \
+          -resize "${size}x${size}" -strip "icon-${size}.png"
+        install -Dm644 "icon-${size}.png" \
+          "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/ladulas.png"
+      done
+
+      install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+
+      for doc in docs/*.md; do
+        install -Dm644 "${doc}" "${pkgdir}/usr/share/doc/${pkgname}/${doc}"
+      done
+
+  - name: ladulas-gtk3
+    homepage: *homepage
+    license: *license
+    maintainers: *maintainers
+    optdepends: *optdepends
+    skip_upload: *skip_upload
+    git_url: *git_url
+    directory: ladulas-gtk3
+    commit_msg_template: "ladulas-gtk3 {{ .Version }}"
+    description: *gui-description
+    makedepends: *gui-makedepends
+    provides:
+      - ladulas
+      - ladulasd
+      - ladulas-sign
+      - ladulas-relay
+    conflicts:
+      - ladulas
+      - ladulas-headless-bin
+      - ladulas-bin
+    depends:
+      - gtk3
+      - webkit2gtk-4.1
+    prepare: |-
+      cd "${srcdir}/ladulas"
+      go mod download
+    build: |-
+      cd "${srcdir}/ladulas"
+      export CGO_CPPFLAGS="${CPPFLAGS}"
+      export CGO_CFLAGS="${CFLAGS}"
+      export CGO_CXXFLAGS="${CXXFLAGS}"
+      export CGO_LDFLAGS="${LDFLAGS}"
+      export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+
+      # ${pkgver} with the underscore turned back into a hyphen: pacman forbids
+      # `-` in a pkgver, so a tag of v1.0.0-rc.1 arrives here as 1.0.0_rc.1 and
+      # stamping that in would have `ladulas version` name a tag that does not
+      # exist. A release tag has nothing to substitute and is unaffected.
+      _ldflags="-linkmode=external -buildid=''"
+      _ldflags+=" -X github.com/hugowetterberg/ladulas/internal/version.Version=${pkgver//_/-}"
+
+      # The gtk3 tag is what selects GTK 3 and webkit2gtk-4.1 over Wails' GTK 4
+      # default; everything else here is the same build as the ladulas package.
+      go build -tags gui,gtk3 -ldflags "${_ldflags}" -o ladulas ./cmd/ladulas
+      go build -ldflags "${_ldflags}" -o ladulasd ./cmd/ladulasd
+      go build -ldflags "${_ldflags}" -o ladulas-sign ./cmd/ladulas-sign
+      go build -ldflags "${_ldflags}" -o ladulas-relay ./cmd/ladulas-relay
+    package: *gui-package

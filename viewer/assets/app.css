@@ -1,0 +1,1320 @@
+/* The viewer's only stylesheet. It is written for a 560px desktop prompt window
+   and for a phone, which is the same layout problem twice: one column, no
+   chrome, and the thing being approved above the buttons that approve it. */
+
+/* The palette is a set of tokens twice over, because the bundle is a page inside
+   somebody else's window: a phone in light appearance drawing a dark document
+   under a light navigation bar looks like a bug in the app, and it was one.
+   Every colour in this file comes from here, so following the appearance is a
+   second block rather than a second stylesheet.
+
+   Dark is what :root holds and light is the media query, which is the way round
+   that survives a host reporting nothing: "no preference" matches
+   prefers-color-scheme: light, so a window that has never been asked gets the
+   light page the platform's own default assumes. */
+:root {
+  color-scheme: light dark;
+
+  --bg: #18181b;
+  --bg-raised: #1f1f23;
+  --bg-sunken: #141417;
+  --border: #2f2f35;
+  --border-strong: #3f3f46;
+  --text: #e4e4e7;
+  --text-dim: #a1a1aa;
+  --text-faint: #71717a;
+  --accent: #a5b4fc;
+  --accent-hover: #bfdbfe;
+  --added: #4ade80;
+  --added-bg: #052e16;
+  --removed: #f87171;
+  --removed-bg: #2c0d0d;
+  --warn-bg: #422006;
+  --warn-border: #854d0e;
+  --warn-text: #fde68a;
+  --danger-bg: #450a0a;
+  --danger-border: #dc2626;
+  --danger-text: #fecaca;
+
+  /* The surfaces that are not the page: a control's face, a code block, a text
+     field. They were literals in a dozen rules, which is why the first attempt
+     at a light theme left black boxes in it. */
+  --control: #27272a;
+  --control-hover: #3f3f46;
+  --code-bg: #101013;
+  --hunk-bg: #101013;
+  --field-bg: #18181b;
+
+  --verified-border: #14532d;
+  --verified-text: #86efac;
+  --stale-border: #b45309;
+  --kept-border: #52525b;
+
+  /* A search hit, which needs a colour that carries its own text rather than
+     borrowing the warning's. */
+  --mark-bg: #854d0e;
+  --mark-text: #fde68a;
+
+  --approve-bg: #166534;
+  --approve-hover: #15803d;
+  --approve-border: #16a34a;
+  --approve-text: #dcfce7;
+  --deny-bg: #7f1d1d;
+  --deny-hover: #991b1b;
+  --deny-border: #dc2626;
+  --deny-text: #fee2e2;
+
+  --shadow: rgb(0 0 0 / .45);
+  --shadow-strong: rgb(0 0 0 / .5);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --bg-raised: #ffffff;
+    --bg-sunken: #f4f4f5;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --text: #18181b;
+    --text-dim: #52525b;
+    --text-faint: #71717a;
+    --accent: #4338ca;
+    --accent-hover: #312e81;
+    --added: #15803d;
+    --added-bg: #dcfce7;
+    --removed: #b91c1c;
+    --removed-bg: #fee2e2;
+    --warn-bg: #fef3c7;
+    --warn-border: #d97706;
+    --warn-text: #78350f;
+    --danger-bg: #fee2e2;
+    --danger-border: #dc2626;
+    --danger-text: #7f1d1d;
+
+    --control: #f4f4f5;
+    --control-hover: #e4e4e7;
+    --code-bg: #f4f4f5;
+    --hunk-bg: #e4e4e7;
+    --field-bg: #ffffff;
+
+    --verified-border: #16a34a;
+    --verified-text: #15803d;
+    --stale-border: #d97706;
+    --kept-border: #a1a1aa;
+
+    --mark-bg: #fde68a;
+    --mark-text: #78350f;
+
+    /* Dark enough under white text to clear 4.5:1 rather than the 3:1 the
+       lighter shade of each gets: these are the two buttons in the bundle whose
+       label being misread is a decision being misread. */
+    --approve-bg: #15803d;
+    --approve-hover: #166534;
+    --approve-border: #166534;
+    --approve-text: #ffffff;
+    --deny-bg: #b91c1c;
+    --deny-hover: #991b1b;
+    --deny-border: #991b1b;
+    --deny-text: #ffffff;
+
+    /* A shadow is how far a thing is off the page, and on a white page that is
+       a fraction of what it is on a dark one before it stops reading as depth
+       and starts reading as dirt. */
+    --shadow: rgb(0 0 0 / .12);
+    --shadow-strong: rgb(0 0 0 / .18);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+  overflow-wrap: anywhere;
+}
+
+main {
+  padding: 20px 22px calc(20px + env(safe-area-inset-bottom));
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+main.loading, .empty { color: var(--text-faint); }
+
+h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
+
+h2 {
+  font-size: 12px;
+  margin: 22px 0 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+}
+
+.subject {
+  color: var(--accent);
+  font-size: 15px;
+  margin: 0 0 14px;
+}
+
+.mono { font-family: var(--mono); font-size: 12px; }
+
+/* Facts ------------------------------------------------------------------ */
+
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 5px 14px;
+  margin: 0;
+}
+
+dl.facts dt { color: var(--text-dim); }
+dl.facts dd { margin: 0; }
+
+.asserted {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.provenance {
+  margin: 14px 0 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.provenance.verified { border-color: var(--verified-border); color: var(--verified-text); }
+
+.warning {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+  padding: 9px 12px;
+  border-radius: 6px;
+  margin: 8px 0 0;
+}
+
+.warning.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+/* Commit message --------------------------------------------------------- */
+
+pre.message {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  -webkit-user-select: text;
+  user-select: text;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* The diff on its own, for a host that draws the card itself (decision O).
+   It is the whole screen rather than a section of one, so it gets the width
+   and the phone's home indicator rather than the card's margins. */
+main.diff-only {
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  max-width: none;
+}
+
+main.diff-only .diff-summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 0 10px;
+  background: var(--bg);
+}
+
+/* One published document on its own, for a host that browses the project
+   natively (decision R). The reading measure is the point of it, so the column
+   keeps a maximum width and the padding is a page's rather than a card's — but
+   the chrome above it is somebody else's, so there is none here. */
+main.document-only {
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  max-width: 700px;
+}
+
+main.document-only .note-line { padding: 0 0 10px; }
+
+/* The two panes a native shell pushes — the diff and one document — are not
+   pages of their own: the screen around them is SwiftUI and the surface under
+   them belongs to it. So they paint no background at all and the shell's own
+   shows through the webview, which is how the two stay exactly the same colour
+   in either appearance rather than each guessing at the other's. The webview is
+   already non-opaque for it (ios/Ladulas/ViewerView.swift).
+
+   The type comes from the host too. `-apple-system-body` is the system font at
+   the reader's own Dynamic Type size, resolved by WebKit against the setting
+   itself and re-resolved when it changes — so a document is the size the rest of
+   the phone is, including at the accessibility sizes, and nothing has to be
+   passed across the bridge or kept in step. A host that does not know the value
+   drops the declaration and keeps the line above it, which is why both are here.
+   It is also what makes turning zoom off the right trade rather than a cost:
+   what pinching was for is a setting the reader has already made. */
+body.hosted {
+  background: transparent;
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: -apple-system-body;
+}
+
+/* A reader may copy out of what it is reading. The rest of the bundle turns
+   selection off because a card is a thing you answer rather than a thing you
+   quote, but the one screen that is a page of prose and commands is not — and on
+   a phone the long press that selects is also the one that offers to look a word
+   up, which is what somebody reading a runbook wants. */
+main.document-only .document {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Diff ------------------------------------------------------------------- */
+
+.diff-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.diff-summary .counts { color: var(--text-dim); }
+.plus { color: var(--added); }
+.minus { color: var(--removed); }
+
+.diff-files { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+
+details.file {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+details.file > summary {
+  cursor: pointer;
+  padding: 7px 11px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  list-style: none;
+}
+
+details.file > summary::-webkit-details-marker { display: none; }
+
+details.file > summary::before {
+  content: "▸";
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+details.file[open] > summary::before { content: "▾"; }
+
+.file .path { font-family: var(--mono); font-size: 12px; flex: 1; }
+.file .status { color: var(--text-faint); font-size: 11px; text-transform: uppercase; }
+.file .stat { font-family: var(--mono); font-size: 11px; }
+
+.hunks {
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  overflow-x: auto;
+  max-height: 50vh;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.hunk-header {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 4px 11px;
+  background: var(--hunk-bg);
+  white-space: pre;
+}
+
+.line {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 0 11px 0 0;
+  white-space: pre;
+  display: flex;
+}
+
+.line .gutter {
+  width: 1.6em;
+  flex: none;
+  text-align: center;
+  color: var(--text-faint);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.line.added { background: var(--added-bg); }
+.line.added .gutter { color: var(--added); }
+.line.removed { background: var(--removed-bg); }
+.line.removed .gutter { color: var(--removed); }
+.line.note { color: var(--text-faint); font-style: italic; }
+
+.note-line { color: var(--text-faint); font-size: 0.86em; padding: 6px 11px; }
+
+/* Actions ---------------------------------------------------------------- */
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--control);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) { background: var(--control-hover); }
+button:disabled { opacity: .5; cursor: default; }
+
+button.approve {
+  background: var(--approve-bg);
+  border-color: var(--approve-border);
+  color: var(--approve-text);
+}
+
+button.approve:hover:not(:disabled) { background: var(--approve-hover); }
+
+button.deny {
+  background: var(--deny-bg);
+  border-color: var(--deny-border);
+  color: var(--deny-text);
+}
+
+button.deny:hover:not(:disabled) { background: var(--deny-hover); }
+button.grant { font-size: 13px; }
+
+/* The timed promise: which one, and then how long (decision V). The chosen
+   reach stays pressed while the clock is being set, because the length being
+   dialled belongs to it and to nothing else. */
+
+button.grant[aria-pressed="true"] {
+  background: var(--control-hover);
+  border-color: var(--text-dim);
+}
+
+/* Hidden until a reach has been chosen, and `hidden` has to be said again here:
+   an author rule that sets `display` beats the user agent's rule for the
+   attribute, so this panel was on screen from the start — an unlabelled button
+   beside a clock reading 01:00, which would have approved for an hour if
+   anybody had clicked it (decision V wants the reach chosen first). */
+.grant-picker[hidden] { display: none; }
+
+.grant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.grant-picker .promise {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.grant-picker input[type="time"] {
+  font: inherit;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--control);
+  color: var(--text);
+}
+
+/* What a timed promise leans on when its scope is the requester's word
+   (decision X). A note, not a warning: neutral surface, no alarm colour. */
+
+.grant-trust {
+  margin-top: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.grant-trust .note {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.grant-trust dl.facts { margin: 0; }
+
+.grant-trust-more { margin-top: 8px; }
+
+.grant-trust-more > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.grant-trust-more > p {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Unlock ----------------------------------------------------------------- */
+
+.unlock p { color: var(--text-faint); }
+
+input.passphrase {
+  font: inherit;
+  width: 100%;
+  margin-top: 18px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--field-bg);
+  color: var(--text);
+}
+
+input.passphrase:focus { outline: 2px solid var(--border-strong); }
+
+/* Status pane ------------------------------------------------------------ */
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 5px 10px 5px 0; vertical-align: top; }
+th { color: var(--text-dim); font-weight: 500; font-size: 12px; }
+
+/* A row that opens what it names. Sized for a thumb, since the list of waiting
+   requests is the one a phone comes back to the app to use. */
+button.row-open {
+  border: none;
+  background: none;
+  padding: 3px 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  min-height: 32px;
+}
+
+button.row-open:hover:not(:disabled) { background: none; text-decoration: underline; }
+
+/* Published documentation ------------------------------------------------ */
+
+/* A published document is the requesting machine's own text (§6), so the
+   browser is styled to read like a document and labelled to read like a claim.
+   The links in it are buttons with no href, because nothing here may navigate
+   this window anywhere. */
+
+button.doclink {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.doclink:hover:not(:disabled) { background: none; color: var(--accent-hover); }
+
+button.fetch-diff { margin: 10px 11px; font-size: 13px; }
+
+.provenance.stale { border-left: 3px solid var(--stale-border); padding-left: 10px; }
+
+.project-list { display: flex; flex-direction: column; gap: 14px; }
+
+.project-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.project-links { display: flex; flex-direction: column; gap: 6px; }
+
+button.project-open {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.project-open:hover:not(:disabled) { background: none; text-decoration: underline; }
+
+.project-header { border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.project-header button.back { margin-bottom: 10px; font-size: 13px; }
+
+/* A page that came from the cache rather than from the machine is marked
+   rather than hidden: it is a real state and the reader should know which one
+   they are in (decision Q). */
+.note-line.kept, .provenance.kept {
+  border-left: 3px solid var(--kept-border);
+  padding-left: 10px;
+  color: var(--text-dim);
+}
+
+.crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; margin-top: 10px; }
+.crumb-sep { color: var(--text-faint); font-size: 12px; }
+
+button.crumb {
+  border: none;
+  background: none;
+  padding: 1px 3px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+button.crumb:hover:not(:disabled) { background: none; text-decoration: underline; }
+
+.project-search { display: flex; gap: 6px; margin-top: 10px; }
+
+.project-search .search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--field-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.project-search button.search-go { font-size: 13px; }
+
+.project-body { display: flex; gap: 18px; align-items: flex-start; }
+
+.project-tree {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+
+button.tree-item {
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+button.tree-item:hover:not(:disabled) { background: var(--control); color: var(--text); }
+button.tree-item.current { background: var(--control); color: var(--text); }
+
+/* A file the publisher will not hand over is still listed — hiding it would be
+   lying about what the project contains (§6) — and is visibly not a door. */
+button.tree-item.unreadable { color: var(--text-faint); cursor: default; }
+
+.tree-count { color: var(--text-faint); font-size: 11px; padding: 4px 6px; margin: 0; }
+
+button.tree-more {
+  align-self: flex-start;
+  margin: 4px 6px;
+  font-size: 12px;
+}
+
+.project-reader { flex: 1 1 auto; min-width: 0; }
+.project-reader .path { color: var(--text-faint); font-size: 12px; }
+
+/* The document's own sizes are relative to the body's, which on a phone is the
+   reader's Dynamic Type size and on a desktop is 14px — the em values below are
+   the pixel sizes this had, divided by that, so the desktop draws what it drew
+   and the phone draws a document that grows with the setting. A heading fixed at
+   20px in a page whose body text is 28 is a heading that has stopped being
+   one. */
+.document { line-height: 1.6; }
+.document h1 { font-size: 1.43em; margin: 18px 0 8px; }
+.document h2 { font-size: 1.21em; margin: 16px 0 8px; }
+.document h3, .document h4, .document h5, .document h6 {
+  font-size: 1.07em;
+  margin: 14px 0 6px;
+}
+.document p { margin: 8px 0; }
+.document ul, .document ol { margin: 8px 0; padding-left: 22px; }
+.document li { margin: 3px 0; }
+.document blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-dim);
+}
+.document code { font-family: var(--mono); font-size: 0.86em; }
+.document pre.code {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  position: relative;
+}
+.document pre.code .language {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 0.79em;
+  color: var(--text-faint);
+}
+.document hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+/* A wide table scrolls inside its own box. The alternative is a document whose
+   every paragraph is 900 points wide because one table is, which on a phone is
+   the whole page sliding sideways under a thumb that meant to scroll down. */
+.doctable-scroll {
+  overflow-x: auto;
+  margin: 12px 0;
+  /* The scroll box is the table's, so its own edges are what say there is more
+     of it to the right. */
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+table.doctable {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.93em;
+}
+table.doctable th, table.doctable td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+table.doctable thead th {
+  background: var(--code-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+table.doctable tbody tr:last-child td { border-bottom: none; }
+table.doctable th.align-center, table.doctable td.align-center { text-align: center; }
+table.doctable th.align-right, table.doctable td.align-right { text-align: right; }
+
+/* Grants ----------------------------------------------------------------- */
+
+.grants { display: flex; flex-direction: column; gap: 6px; }
+
+details.grant {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+details.grant > summary {
+  cursor: pointer;
+  padding: 8px 11px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  list-style: none;
+}
+
+details.grant > summary::-webkit-details-marker { display: none; }
+
+details.grant > summary::before {
+  content: "▸";
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+details.grant[open] > summary::before { content: "▾"; }
+
+.grant .scope { flex: 1; }
+.grant .expires { color: var(--text-dim); font-size: 12px; }
+
+/* A grant revoked here that the holder has not been told about. It is not an
+   error and not a live promise either — it is one that has been taken back and
+   is still being kept somewhere else, which is worth a colour of its own. */
+details.grant.pending-revoke {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.grant .pending-revoke-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn-text);
+  border: 1px solid var(--warn-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* The count is the number worth reading: a grant used two hundred times is
+   one row that says two hundred, and the two hundred are behind it. */
+.grant .count {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+}
+
+.grant > table, .grant > p { margin: 0 11px 10px; }
+
+/* Outline and search ----------------------------------------------------- */
+
+/* One control, in the corner a thumb reaches. The document it navigates is
+   read on a phone as often as on a desktop, and on a phone both "take me to
+   the deployment section" and "where does it mention the socket" are a long
+   way from a scrollbar. */
+.outline {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.outline-toggle {
+  width: 48px;
+  height: 48px;
+  border-radius: 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 6px 20px var(--shadow);
+  align-self: flex-end;
+}
+
+.outline-toggle .bar {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text);
+}
+
+.outline-panel {
+  display: none;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(60vh, 460px);
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  box-shadow: 0 12px 32px var(--shadow-strong);
+}
+
+.outline.open .outline-panel { display: flex; }
+
+.outline-search {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-sunken);
+  color: var(--text);
+}
+
+.outline-search:focus { outline: 2px solid var(--border-strong); }
+
+.outline-count {
+  margin: 8px 2px 4px;
+  font-size: 0.86em;
+  color: var(--text-faint);
+}
+
+.outline-count:empty { display: none; }
+
+.outline-list { overflow-y: auto; }
+
+.outline-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  padding: 7px 8px;
+  border-radius: 6px;
+  /* A row is a tap target before it is a line of text. */
+  min-height: 34px;
+}
+
+.outline-row:hover:not(:disabled) { background: var(--bg-sunken); }
+
+/* The row the arrow keys are on. The caret stays in the search field while they
+   move, so this mark is the only thing on the screen saying where Enter goes —
+   it has to read as strongly as a focus ring, because that is its job. */
+.outline-row.active,
+.outline-row:focus-visible {
+  background: var(--bg-sunken);
+  box-shadow: inset 0 0 0 2px var(--border-strong);
+  outline: none;
+}
+
+.outline-row.level-1 { font-weight: 600; }
+.outline-row.level-2 { padding-left: 20px; }
+.outline-row.level-3 { padding-left: 32px; color: var(--text-dim); }
+.outline-row.level-4,
+.outline-row.level-5,
+.outline-row.level-6 { padding-left: 44px; color: var(--text-dim); font-size: 0.93em; }
+
+.outline-row.result { padding-left: 8px; }
+
+.outline-row .where {
+  display: block;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.outline-row .snippet {
+  display: block;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+mark, .outline-row mark {
+  background: var(--mark-bg);
+  color: var(--mark-text);
+  border-radius: 2px;
+}
+
+/* Enough room under a heading that a smooth scroll does not put it against the
+   top edge of the window. */
+.document h1, .document h2, .document h3,
+.document h4, .document h5, .document h6 { scroll-margin-top: 16px; }
+
+.document p, .document li, .document pre, .document blockquote {
+  scroll-margin-top: 16px;
+}
+
+/* A moment of emphasis on arrival: a smooth scroll that lands in the middle of
+   a page leaves nothing saying which paragraph was asked for. */
+.outline-landed {
+  animation: outline-landed 1.4s ease-out;
+}
+
+@keyframes outline-landed {
+  0%, 40% { background: var(--warn-bg); }
+  100% { background: transparent; }
+}
+
+/* The desktop shell ------------------------------------------------------- *
+
+   A sidebar and one screen beside it (decision AA). Nothing in this section is
+   reachable from a phone: the two panes a native shell pushes are `body.hosted`
+   and the popup is the bare page, so everything below hangs off `body.app`,
+   which only the desktop's application window sets.
+
+   It borrows nothing but the tokens at the top of this file, which is how the
+   window follows the desktop into light appearance along with the popups. */
+
+body.app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* The page rule at the top of this file is for a pane that *is* the page: the
+   popup, the diff, one document. The application window is a layout instead, so
+   the `main` it hangs off keeps none of it. */
+body.app > main {
+  padding: 0;
+  max-width: none;
+  height: 100%;
+  margin: 0;
+}
+
+.shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Sidebar ---------------------------------------------------------------- */
+
+.sidebar {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 8px 10px;
+  background: var(--bg-sunken);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* The instance, at the top, where an application that can be signed into puts
+   the account: this window is about one machine and this says which. It is a
+   button because reading your own fingerprint is a thing somebody comes here to
+   do (§7), and Settings is where it is. */
+.sidebar .identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  text-align: left;
+}
+
+.sidebar .identity:hover { background: var(--control); }
+
+.identity-lines { flex: 1 1 auto; min-width: 0; }
+
+.identity-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.identity-state { color: var(--text-dim); font-size: 11px; }
+.identity-gear { color: var(--text-faint); flex: 0 0 auto; }
+
+.nav { display: flex; flex-direction: column; gap: 1px; }
+.nav.footer { margin-top: auto; padding-top: 6px; }
+
+.nav .section-label { margin: 14px 0 4px; padding: 0 9px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  text-align: left;
+  font-size: 13px;
+}
+
+.nav-item:hover:not(:disabled) { background: var(--control); color: var(--text); }
+
+.nav-item.current {
+  background: var(--control-hover);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A machine in the sidebar is a nav item with a face on it: the picture is what
+   tells two of them apart before anybody reads a name, and the dot is whether
+   reaching for it would get anywhere right now (decision N). The pill loses its
+   word here — there is no room for one, and the row it opens says it in full. */
+.peer-item .pill span:last-child { display: none; }
+.peer-item .pill { border: none; background: none; padding: 0; }
+
+/* Pane ------------------------------------------------------------------- */
+
+.pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.pane-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-head h1 { font-size: 19px; margin: 0; }
+.pane-head button.back { font-size: 12px; padding: 5px 10px; }
+
+.pane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 24px 28px;
+  max-width: 860px;
+}
+
+/* The doc browser is a tree and a page side by side, and it wants the window. */
+.pane-body.wide { max-width: none; }
+
+.pane .starting, main .starting {
+  color: var(--text-faint);
+  padding: 22px 24px;
+}
+
+/* Cards, rows and their furniture ---------------------------------------- */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-raised);
+  padding: 12px 13px;
+}
+
+.cards { display: flex; flex-direction: column; gap: 8px; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.card-actions { display: flex; gap: 8px; margin-top: 11px; }
+
+/* A row is a card that is a button. The whole thing is the target and the
+   chevron says so, which is what keeps "does this row do anything" from being a
+   question anybody has to ask. A row with nothing behind it says that by having
+   no chevron and not lifting under the pointer. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-raised);
+  color: var(--text);
+  text-align: left;
+}
+
+.row:hover:not(:disabled) {
+  background: var(--control);
+  border-color: var(--border-strong);
+}
+
+.row.static { opacity: 1; cursor: default; }
+
+.row-stack { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row-title { font-size: 13.5px; font-weight: 600; }
+.row-sub { color: var(--text-dim); font-size: 12px; }
+.row-warn { color: var(--warn-text); font-size: 11.5px; }
+
+.row .chevron { color: var(--text-faint); flex: 0 0 auto; }
+.row .when, .card .when {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* A request that is waiting for an answer is the one row on any of these screens
+   that is a question rather than a fact, and it is tinted for it — the same
+   amber the phone's banner uses, and for the same reason (§9). */
+.row.wants-answer {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.row.wants-answer:hover { background: var(--warn-bg); border-color: var(--warn-text); }
+.row.wants-answer .row-sub, .row.wants-answer .when { color: var(--warn-text); }
+
+.icon { width: 16px; height: 16px; flex: 0 0 auto; }
+.icon.kind { width: 18px; height: 18px; color: var(--text-dim); }
+.icon.kind.ok { color: var(--added); }
+.icon.kind.bad { color: var(--removed); }
+
+.avatar {
+  flex: 0 0 auto;
+  border-radius: 7px;
+  background: var(--control);
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 0 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.pane-body > .section-label:first-child { margin-top: 2px; }
+
+.count {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--control-hover);
+  color: var(--text-dim);
+  letter-spacing: 0;
+}
+
+/* A state, in the core's own word, with a dot in the colour of it. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.pill.ok .dot { background: var(--added); }
+.pill.warn .dot { background: var(--stale-border); }
+.pill.bad .dot { background: var(--removed); }
+
+/* The characters somebody is meant to compare: monospaced, selectable, and never
+   cut through the middle. */
+.fingerprint {
+  display: block;
+  margin-top: 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  -webkit-user-select: text;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.card-head .fingerprint, .row-stack .fingerprint { margin-top: 2px; }
+
+.algorithm {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hint { color: var(--text-dim); font-size: 12px; margin: 8px 0 0; }
+.empty-card .hint { margin-top: 4px; }
+.empty-card { color: var(--text-dim); }
+
+/* A line meant to be read before what is under it. */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 10px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 12.5px;
+}
+
+.banner.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+/* A promise still running, and what it has covered folded up behind it
+   (decision P). */
+.grant-card.pending { border-color: var(--stale-border); }
+
+.grant-card .uses { margin-top: 10px; }
+
+.grant-card .uses > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.grant-card .use {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 3px 0 0;
+}
+
+/* The two buttons that undo something somebody agreed to. Danger is a colour and
+   not a filled red button: the destructive thing on these screens is rarer than
+   the reading, and a wall of red buttons is how a reader stops seeing red. */
+button.small { font-size: 12px; padding: 5px 10px; }
+
+button.danger {
+  color: var(--removed);
+  border-color: var(--border-strong);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--removed-bg);
+  border-color: var(--removed);
+}
+
+.card.pairing, .card.identity, .card.peer-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.card.pairing .row-stack, .card.identity .row-stack { flex: 1 1 auto; }
+
+/* The doc browser, inside the pane rather than in a window of its own. Its own
+   heading is the project's name; the pane above it says which screen this is. */
+.project-listing { display: flex; flex-direction: column; gap: 12px; }
+
+.avatar.blank { display: inline-block; border: 1px solid var(--border); }
+
+.card.reach {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}

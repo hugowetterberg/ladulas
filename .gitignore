@@ -1,0 +1,20 @@
+# build products
+/build/
+
+# the binaries, when somebody builds into the tree rather than into a scratch
+# directory. `make build` and `make gui` write to a mktemp dir for exactly this
+# reason; this is the net under them.
+/ladulas
+/ladulasd
+/ladulas-sign
+
+# goreleaser's output: the binaries, the archives and the generated PKGBUILDs.
+# The PKGBUILDs are worth keeping, but in ../ladulas-aur where the release
+# workflow puts them, not here where they would be a second copy going stale.
+/dist/
+
+# the relay's device registrations, when it is run from the tree
+/.relay-devices.json
+
+# agent worktrees, which are whole second checkouts of this repository
+/.claude/

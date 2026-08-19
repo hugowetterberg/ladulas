@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- No zooming. A page inside a native screen that pinches away from the
+     navigation bar above it reads as a website somebody embedded, which is what
+     the reader looked like; the text size that matters is the one the reader
+     already chose for the whole phone, and app.css takes that from the host
+     instead (Dynamic Type). WKWebView honours user-scalable, unlike Safari. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Ladulås</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main id="root" class="loading">Loading…</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package ladulas.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// Wake-ups (§11, decision G).
+//
+// Two services that never meet. WakeupService runs over the peer channel and is
+// how a requester learns where to knock; RelayService runs over the open
+// internet against the publisher's relay and is the knocking. Nothing on the
+// second one is trusted by the first: the relay learns an opaque identifier and
+// a device token, and is never told a request, a fingerprint or a peer.
+//
+// Everything here is an optimization on the poll-on-open baseline. An instance
+// with no route, an unreachable relay and a revoked device token behaves exactly
+// as M6 did — the phone finds the request when it is next opened — which is the
+// property every design decision below is measured against.
+
+// WakeupService is how an approver tells a requester where to knock.
+//
+// It is announced rather than exchanged at pairing, and §19 open question 2 is
+// resolved that way for one reason above the others: a device token does not
+// exist at pairing time and does not stay the same afterwards. iOS hands one
+// over asynchronously, after the user has been asked about notifications, which
+// on a phone paired the minute the app was installed is minutes later; and it
+// reissues one on a restore, a reinstall and sometimes an OS upgrade. A field on
+// PairRequest would therefore be empty in the ordinary case and would need this
+// call anyway, and a pairing that carried a load-bearing wake-up field would be
+// a pairing that can fail because of a wake-up (§11).
+//
+// The approver drives it, for the same reason it drives ReconcileGrants: it is
+// the side that can always dial.
+service WakeupService {
+  // AnnounceWakeup tells a requester how this instance can be woken, or that it
+  // cannot be.
+  //
+  // Idempotent and repeatable. An announcement replaces whatever the requester
+  // held for this peer, and one carrying no route withdraws it — which is what
+  // switching wake-ups off, and revoking notification permission, both look
+  // like from here.
+  rpc AnnounceWakeup(AnnounceWakeupRequest) returns (AnnounceWakeupResponse);
+}
+
+// WakeupKind is how a wake-up reaches a device. Only the publisher-hosted relay
+// exists; UnifiedPush is the deferred option §11 describes and would be the next
+// value rather than a second field.
+enum WakeupKind {
+  WAKEUP_KIND_UNSPECIFIED = 0;
+  WAKEUP_KIND_RELAY = 1;
+}
+
+// WakeupRoute is where to knock, and is deliberately the whole of what a
+// requester is told.
+//
+// The instance id is minted by the approver, is random, and means nothing
+// anywhere but at that relay. It is a capability rather than a name: whoever
+// holds it can cause an empty notification on that device and nothing else, so
+// it travels only over the peer channel and is replaced by announcing a new one.
+message WakeupRoute {
+  WakeupKind kind = 1;
+  // The relay's base URL. Configuration on the approver and nothing on the
+  // requester, which is what makes self-hosting a build of the app rather than
+  // a fork of everything that talks to it (§11).
+  string relay_url = 2;
+  string instance_id = 3;
+}
+
+message AnnounceWakeupRequest {
+  // Absent withdraws whatever the requester holds for this peer.
+  WakeupRoute route = 1;
+  // Until when this instance expects to answer this requester without asking
+  // anybody — the latest expiry among the grants it holds that cover that
+  // requester (§20, M9).
+  //
+  // It is what the silent-push carve-out is decided from, and it is a hint in
+  // the strict sense: a requester that ignores it sends the alert push it would
+  // always have sent, and an approver whose grant was revoked a second ago
+  // wakes quietly once more and then polls, finds a request, and asks.
+  google.protobuf.Timestamp quiet_until = 2;
+}
+
+message AnnounceWakeupResponse {
+  // Whether the requester will use it. A requester that will not dial the URL —
+  // cleartext, or wake-ups switched off there — says so, so that a phone can
+  // report "this machine will not wake me" rather than waiting to notice that
+  // nothing ever arrives.
+  bool accepted = 1;
+  string reason = 2;
+}
+
+// RelayService is the publisher-hosted wake-up relay (§11, decision G).
+//
+// It holds platform push credentials and device tokens keyed by opaque instance
+// ids, and it sends "something is pending" and nothing else. **Payloads carry no
+// request data**, encrypted or otherwise: what leaves this service is a fixed
+// sentence that is the same for every request anybody ever makes.
+//
+// Both calls are signed by an identity key under the "ladulas-relay-v1" domain
+// separator. What that buys is different at each end, and the difference is
+// worth stating rather than glossing:
+//
+//   * Register binds an instance id to the public key that first claimed it, so
+//     nobody else can point somebody's instance id at their own device.
+//   * Wake proves only that a Ladulås instance made the call. The relay has no
+//     idea who is paired with whom and is deliberately never told — so the
+//     instance id is the whole of the authorization, and a signature is what
+//     makes an abusive caller something the relay can count and refuse rather
+//     than an anonymous packet.
+//
+// What that costs, stated plainly: somebody who learns an instance id can make
+// a phone show "Signing request pending" for as long as the relay's throttle
+// allows. The phone opens, polls, finds nothing, and closes. The id travels only
+// over the peer channel, and is rotated by announcing a new one.
+service RelayService {
+  // Register binds a device token to an instance id.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Wake sends the push.
+  rpc Wake(WakeRequest) returns (WakeResponse);
+}
+
+// PushPlatform is which vendor's push service a token belongs to. FCM arrives
+// with Android (M10) and is a value here rather than a second relay.
+enum PushPlatform {
+  PUSH_PLATFORM_UNSPECIFIED = 0;
+  PUSH_PLATFORM_APNS = 1;
+  PUSH_PLATFORM_FCM = 2;
+}
+
+// WakeStyle is what the push should do when it arrives.
+enum WakeStyle {
+  WAKE_STYLE_UNSPECIFIED = 0;
+  // A visible alert. The default, and the only one that reaches a human.
+  WAKE_STYLE_ALERT = 1;
+  // A silent background wake, for a request the approver has already promised
+  // to answer (§20, M9). It is throttled by the platform, works only while the
+  // app is resident, and is followed by the alert when it does not land.
+  WAKE_STYLE_SILENT = 2;
+}
+
+// RelayCall is what an identity key signs. The two operations share one message
+// so that they share one signing path and one replay window.
+message RelayCall {
+  // Bounds replay. The relay refuses a call that is too old or too far in the
+  // future; combined with the nonce it means a captured call is worth one
+  // notification within a few minutes of being captured, and nothing after.
+  google.protobuf.Timestamp issued_at = 1;
+  string nonce = 2;
+  string instance_id = 3;
+
+  oneof operation {
+    DeviceRegistration register = 4;
+    Wake wake = 5;
+  }
+}
+
+message DeviceRegistration {
+  PushPlatform platform = 1;
+  // The platform's device token. Hex for APNs, which is what the shell gets
+  // from didRegisterForRemoteNotificationsWithDeviceToken.
+  string device_token = 2;
+}
+
+// WakeSubject is which of the two fixed sentences the relay should send.
+//
+// It is the one thing beyond timing a relay learns about what is happening, and
+// it is one bit: somebody is being asked to sign, or somebody is being handed a
+// key (§10, decision S). The alternative was worse in both directions — a phone
+// told "Signing request pending" when a key is waiting is being lied to, and a
+// key handover that could only be collected the next time the app happened to
+// open is a feature that works when nobody is watching for it.
+//
+// It stays an enum rather than a string for the reason the payload has no
+// request data in it at all: what the relay can send is a list this repository
+// wrote, not something a caller composes.
+enum WakeSubject {
+  // Unset means an approval, which is what every wake-up was before there was
+  // anything else to be woken for.
+  WAKE_SUBJECT_UNSPECIFIED = 0;
+  WAKE_SUBJECT_APPROVAL = 1;
+  WAKE_SUBJECT_KEY_OFFER = 2;
+}
+
+message Wake {
+  WakeStyle style = 1;
+  WakeSubject subject = 2;
+}
+
+// SignedRelayCall carries the exact serialized call the signature covers, for
+// the reason SignedApproval does: protobuf serialization is not canonical, so
+// re-marshalling to check a signature is a way to fail on bytes nobody changed.
+message SignedRelayCall {
+  bytes call = 1;
+  // The caller's identity key in SSH wire format.
+  bytes public_key = 2;
+  string signature_algorithm = 3;
+  bytes signature = 4;
+}
+
+message RegisterRequest {
+  SignedRelayCall signed = 1;
+}
+
+message RegisterResponse {}
+
+message WakeRequest {
+  SignedRelayCall signed = 1;
+}
+
+// WakeOutcome is what became of it, and every value is a thing the caller acts
+// on rather than a status code to log.
+enum WakeOutcome {
+  WAKE_OUTCOME_UNSPECIFIED = 0;
+  // Handed to the platform.
+  WAKE_OUTCOME_DELIVERED = 1;
+  // Refused by the relay's own pacing. Not an error: the request is parked and
+  // the phone will find it.
+  WAKE_OUTCOME_THROTTLED = 2;
+  // No device has ever registered under that instance id.
+  WAKE_OUTCOME_UNKNOWN = 3;
+  // The platform says the token is dead — the app was deleted, or the token was
+  // reissued and this one was not. It is how a route is dropped without waiting
+  // for anybody to announce anything, and is the other half of token rotation.
+  WAKE_OUTCOME_UNREGISTERED = 4;
+}
+
+message WakeResponse {
+  WakeOutcome outcome = 1;
+  // How long to wait before trying this instance again, when throttled.
+  google.protobuf.Timestamp retry_after = 2;
+}

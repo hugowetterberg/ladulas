@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package ladulas.v1;
+
+import "google/protobuf/duration.proto";
+import "ladulas/v1/approval.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// Action is what a rule does to a matching request.
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  // Ask a human. The default for everything.
+  ACTION_PROMPT = 1;
+  // Approve without asking. Approvers still get a passive notification unless
+  // notify is explicitly disabled (§9).
+  ACTION_APPROVE = 2;
+  ACTION_DENY = 3;
+}
+
+// Tristate lets a rule require a boolean condition, forbid it, or ignore it.
+enum Tristate {
+  TRISTATE_ANY = 0;
+  TRISTATE_TRUE = 1;
+  TRISTATE_FALSE = 2;
+}
+
+// Match selects requests. All populated fields must match; within a repeated
+// field any element matching is enough. String lists are matched with shell
+// glob patterns, case insensitively for host names.
+message Match {
+  repeated RequestKind kinds = 1;
+  repeated string key_fingerprints = 2;
+  repeated string key_labels = 3;
+  // Destination host name or fingerprint for SSH auth requests.
+  repeated string destinations = 4;
+  // Remote username for SSH auth requests.
+  repeated string usernames = 5;
+  // Repository path or origin URL for git signing requests.
+  repeated string repositories = 6;
+  // SSHSIG namespace.
+  repeated string namespaces = 7;
+  repeated string requester_instances = 8;
+  // Executable path of the local process behind the agent socket.
+  repeated string executables = 9;
+
+  // Whether the request arrived over a forwarded agent connection.
+  Tristate forwarded = 20;
+  // Whether the request could be tied to a session-bind entry.
+  Tristate bound = 21;
+  // Whether the requester is this instance.
+  Tristate local = 22;
+}
+
+// Rule is one policy entry. Rules are evaluated in order and the first match
+// wins, so put specific denials above general approvals.
+message Rule {
+  string name = 1;
+  string description = 2;
+  Match match = 3;
+  Action action = 4;
+  // Show a passive notification when this rule auto-approves. Defaults to true
+  // for ACTION_APPROVE; set explicitly to false to silence it.
+  optional bool notify = 5;
+}
+
+// Defaults cover requests no rule matched.
+message Defaults {
+  // What to do with an SSH auth request that carries no session-bind context,
+  // i.e. an unknown destination. Defaults to ACTION_PROMPT.
+  Action unbound_ssh_auth = 1;
+  // What to do with anything else no rule matched. Defaults to ACTION_PROMPT.
+  Action fallback = 2;
+  // How long to wait for an answer. SSH auth is bounded by the far server's
+  // LoginGraceTime, typically 120s, so the default is 90s; git signing blocks
+  // happily and gets minutes (§9).
+  google.protobuf.Duration ssh_auth_timeout = 3;
+  google.protobuf.Duration sign_timeout = 4;
+  // TTL offered by the "approve for a while" buttons on the prompt.
+  repeated google.protobuf.Duration grant_ttl_options = 5;
+}
+
+// PolicyDocument is the on-disk policy, stored as protojson so it stays
+// hand-editable and typed at once.
+message PolicyDocument {
+  int32 version = 1;
+  Defaults defaults = 2;
+  repeated Rule rules = 3;
+}

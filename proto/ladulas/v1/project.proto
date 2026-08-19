@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+// Project publishing and browsing (§6, decision Q). A requester marks a project
+// as published to the peers that approve for it, and marking it sends nothing;
+// an approver that wants to read one asks — for the projects on offer, for a
+// directory at a time, for a name across the whole of it, and for the files it
+// opens — and keeps what it has read.
+//
+// Everything here is requester-asserted display content and nothing else. It is
+// never evidence about a signature, it is rendered as untrusted text by the
+// shared viewer (§12), and the caps that bound it exist because an approver's
+// disk and an approver's patience are both finite.
+package ladulas.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// Publication is a project on offer: what it is called, where it lives on the
+// requester, and what commit it is at.
+//
+// It is the whole of what publishing carries. The contents are read a call at a
+// time by whoever wants them, so a publication that nobody opens costs one
+// record on the machine that made it and nothing anywhere else.
+message Publication {
+  // Stable across publications of the same project, derived from the origin URL
+  // and the repository path so that the requester and the approver arrive at it
+  // independently — which is what lets a signing request name a project without
+  // carrying one.
+  string project_id = 1;
+  string name = 2;
+  // Where the project lives on the requester.
+  string path = 3;
+  string origin_url = 4;
+  // The branch and commit the project is at. They are re-read every time the
+  // project is listed rather than frozen at publication, because the commit is
+  // what the staleness label compares a signing request against and a machine
+  // that has been committing all afternoon has moved.
+  string branch = 5;
+  string commit = 6;
+  // When the project was first marked published.
+  google.protobuf.Timestamp published_at = 7;
+}
+
+// ProjectEntry is one thing in a directory, as an approver sees it.
+message ProjectEntry {
+  string name = 1;
+  // The path relative to the project root, which is what every other call
+  // takes.
+  string path = 2;
+  bool directory = 3;
+  int64 size = 4;
+  google.protobuf.Timestamp modified = 5;
+  // Whether the publisher would serve the contents. A file too large for the
+  // caps, or of a kind that is not offered, is still listed — a browser that
+  // silently omitted it would be lying about what the project contains.
+  bool readable = 6;
+  // Why not, when it is not.
+  string reason = 7;
+  // For a directory: nothing anywhere beneath it is a file this instance would
+  // serve. It answers the question a browser cannot answer for itself without a
+  // call per folder — the publisher is walking its own disk, an approver would
+  // be walking it down a network — and it is what lets a viewer that shows only
+  // what it can read leave out the folders that lead nowhere.
+  //
+  // It is stated the empty way round on purpose. A publisher that has never
+  // heard of the field sends nothing, which reads as false, and a browser that
+  // hides on true then hides nothing rather than hiding every folder there is.
+  // A walk that hits its own cap before finding anything reports false for the
+  // same reason: not knowing is not the same as knowing there is nothing.
+  bool nothing_readable = 8;
+}

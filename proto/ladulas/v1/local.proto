@@ -1,0 +1,1237 @@
+syntax = "proto3";
+
+// The local services are the ones an instance serves to the machine it runs
+// on, over a unix socket in the user's runtime directory rather than over the
+// peer channel (§8). They are in ladulas.v1 with everything else because a
+// local request and a request that crossed a pinned-TLS channel are the same
+// kind of thing to the approval engine — only the transport differs.
+package ladulas.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "ladulas/v1/approval.proto";
+import "ladulas/v1/audit.proto";
+import "ladulas/v1/project.proto";
+import "ladulas/v1/service.proto";
+
+option go_package = "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1";
+
+// SigningService is what ladulas-sign talks to (§5).
+//
+// The caller is authenticated by the filesystem: the socket lives in a
+// 0700 directory in the user's runtime directory, is itself 0600, and the
+// server checks the peer's uid. There is no token, because a process that can
+// open the socket can already open the agent socket next to it.
+service SigningService {
+  // SignPayload signs a raw message with one of the instance's keys, wrapping
+  // it in SSHSIG here rather than at the caller.
+  //
+  // The caller sends the message it wants signed, not a digest, which is what
+  // makes the rich prompt possible: the approver has the full commit object and
+  // can check for itself that the context describes what the signature covers
+  // (§5). The same shape carries to M4's RemoteSign, where the payload crosses
+  // a peer channel instead of a socket.
+  rpc SignPayload(SignPayloadRequest) returns (SignPayloadResponse);
+}
+
+message SignPayloadRequest {
+  // The key to sign with, as an SSH wire format public key blob.
+  bytes public_key = 1;
+  // The message to sign. Not a digest: the instance computes the SSHSIG
+  // wrapper, and the approver wants the bytes.
+  bytes payload = 2;
+  // SSHSIG namespace. "git" for commit and tag signatures.
+  string namespace = 3;
+  // The hash the SSHSIG wrapper uses, "sha512" or "sha256". Empty means
+  // sha512, which is what ssh-keygen and git use.
+  string hash_algorithm = 4;
+  // Display context for the approval prompt. Requester-asserted except for the
+  // raw object, which the instance parses itself.
+  GitContext git_context = 5;
+  // How long the caller is willing to wait. Zero means the policy default,
+  // which for signing is generous — git blocks happily (§9).
+  google.protobuf.Duration timeout = 6;
+}
+
+message SignPayloadResponse {
+  string request_id = 1;
+  bool approved = 2;
+  // What decided, and why, so the caller can print something better than
+  // "denied".
+  DecisionSource source = 3;
+  string reason = 4;
+  // The armoured SSHSIG signature, ready to be written to <payload>.sig.
+  // Only set when approved.
+  string armored_signature = 5;
+  // The approval artifact backing the signature (§18). The caller keeps it, so
+  // that the requester's own audit log has the approver's signature in it and
+  // not just its own account of what happened.
+  SignedApproval approval = 6;
+}
+
+// ControlService is how the command line and the desktop drive an instance.
+//
+// It is the only way either of them touches one (§14). The process serving
+// these sockets is the process that opened the store, and it is the only
+// process that ever does: the store document is rewritten whole on every
+// change, with nothing guarding the file against a second writer, so a CLI
+// that opened it behind a running daemon could silently discard what the
+// daemon knows. Reads go through here for the same reason the writes do, plus
+// one of their own — the daemon has already been given the passphrase, and a
+// reader that opened the file itself would ask for it again on a box with no
+// terminal to ask on. The audit log is the exception that proves the rule: it
+// lives outside the store on purpose, and stays a plain file read.
+service ControlService {
+  // Status reports what the instance is doing, including which peers are
+  // currently reachable — which only the process holding the links knows.
+  //
+  // It is one of the two calls a sealed instance still answers (§10, §14):
+  // saying what state the store is in needs no store.
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Initialize creates the store and the instance identity key on a daemon
+  // that has neither, and leaves it unlocked and fully serving — no restart,
+  // because the process that made the store is the process that owns it.
+  //
+  // It is the other call an instance with no store answers, and the only way a
+  // store is ever created: nothing outside the daemon writes store.age.
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+
+  // Unlock brings the data encryption key back, or lifts a soft lock. The
+  // passphrase travels over the uid-checked socket and the daemon derives the
+  // key encryption key from it (§14); an empty passphrase means "use the
+  // keychain", which is the enrolled instance's way in.
+  //
+  // The other call a sealed instance answers.
+  rpc Unlock(UnlockRequest) returns (UnlockResponse);
+
+  // Lock suspends local approval authority, or — with seal — wipes the data
+  // encryption key. A soft lock leaves remote approval working, which is the
+  // whole point of it (§10).
+  rpc Lock(LockRequest) returns (LockResponse);
+
+  // AwaitState holds the call open until this instance is in one of the states
+  // asked for, and is how something waits for a person to unlock the store
+  // rather than asking every few seconds whether they have.
+  //
+  // It is the third call a sealed instance answers, and has to be: waiting for
+  // an unlock is only ever done by something looking at a sealed store. The
+  // answer says which state was reached, or says that the wait ran out — a
+  // timeout is an answer here rather than an error, because "still sealed after
+  // ten minutes" is a fact about the store and not a failure of the call.
+  rpc AwaitState(AwaitStateRequest) returns (AwaitStateResponse);
+
+  // KeyringStatus says whether this instance unlocks at login, and whether the
+  // passphrase that decision I calls primary is still there behind it.
+  rpc KeyringStatus(KeyringStatusRequest) returns (KeyringStatusResponse);
+
+  // SetUnlockAtLogin enrols the platform keychain, or forgets it again
+  // (decision I). Enrolling copies the data encryption key into the keychain,
+  // so it is the daemon's to do: it is the process holding that key.
+  rpc SetUnlockAtLogin(SetUnlockAtLoginRequest)
+      returns (SetUnlockAtLoginResponse);
+
+  // ListStoredKeys reports the keys this instance holds. A read, and it goes
+  // through the daemon like every other one: the running instance is the only
+  // thing that can answer without asking for a passphrase it has already been
+  // given. The name says "stored" because KeyService.ListKeys next door is the
+  // other question — what a peer is lending us.
+  rpc ListStoredKeys(ListStoredKeysRequest) returns (ListStoredKeysResponse);
+
+  // GenerateKey makes a fresh key in the store. The agent offers it
+  // immediately, since the process that added it is the process serving it.
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+
+  // ImportKey takes an existing OpenSSH private key, as 1Password exports it.
+  // The bytes travel over the uid-checked socket and the daemon wipes them.
+  rpc ImportKey(ImportKeyRequest) returns (ImportKeyResponse);
+
+  // RemoveKey forgets a key.
+  rpc RemoveKey(RemoveKeyRequest) returns (RemoveKeyResponse);
+
+  // SetKeyEnabled stops or resumes offering a key through the agent.
+  rpc SetKeyEnabled(SetKeyEnabledRequest) returns (SetKeyEnabledResponse);
+
+  // SetKeyAgentUse takes a key out of the agent's identity list, or puts it
+  // back (decision T). Weaker than disabling it: the key goes on signing for
+  // anything that names it, and stops being one of the identities ssh is handed
+  // and told to try.
+  rpc SetKeyAgentUse(SetKeyAgentUseRequest) returns (SetKeyAgentUseResponse);
+
+  // SendKey hands a portable key to a paired peer (decision S). The store
+  // passphrase travels with the call and is checked before anything is sent:
+  // the store is already open, so what it gates is deliberateness, and this is
+  // the only management call in which that is the point.
+  rpc SendKey(SendKeyRequest) returns (SendKeyResponse);
+
+  // ListKeyOffers reports the portable keys peers have handed this instance and
+  // nobody has answered yet.
+  rpc ListKeyOffers(ListKeyOffersRequest) returns (ListKeyOffersResponse);
+
+  // AnswerKeyOffer accepts an offered key into the store, or refuses it. A
+  // refusal is a deletion: nothing is kept about a key this instance declined
+  // to hold, since the only record worth having is on the side that sent it.
+  rpc AnswerKeyOffer(AnswerKeyOfferRequest) returns (AnswerKeyOfferResponse);
+
+  // ListGrants reports the TTL grants that have not expired yet. A grant is the
+  // approver's standing promise (§19) and lives in the store, so listing one is
+  // the daemon's to answer like every other read.
+  rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
+
+  // RevokeGrant takes a promise back before it runs out. The engine consults
+  // the store on every decision, so a revocation through the daemon is in
+  // force for the next request rather than for the next restart.
+  rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
+
+  // ExtendGrant puts more time on a promise before it runs out: the same
+  // promise, the same identifier, the same account of what it has covered,
+  // running until later. One that was handed over is re-signed and delivered
+  // to the machine holding it, and an extension that could not be delivered is
+  // an extension that did not happen — the record here would otherwise say
+  // more than the machine acting on it will do.
+  rpc ExtendGrant(ExtendGrantRequest) returns (ExtendGrantResponse);
+
+  // ListDelegations reports the standing permissions this instance was given
+  // by somebody else and is acting on itself (§19, decision P). They are the
+  // other half of ListGrants and are deliberately a separate verb: a grant is
+  // a promise made here and can be taken back here, and a delegation is one
+  // made elsewhere that this instance can only stop using. An instance that
+  // self-approves for an hour has to be able to say which promise it is
+  // using, or the promise is one nobody here can audit.
+  rpc ListDelegations(ListDelegationsRequest) returns (ListDelegationsResponse);
+
+  // BeginPairing displays a pairing code and waits for a peer to arrive. The
+  // stream carries the code first and then the exchange as it happens; the
+  // caller answers the confirmation with AnswerPairing.
+  rpc BeginPairing(BeginPairingRequest) returns (stream PairingProgress);
+
+  // PairWithPeer dials a peer that is displaying a code. Same stream, same
+  // confirmation.
+  rpc PairWithPeer(PairWithPeerRequest) returns (stream PairingProgress);
+
+  // AnswerPairing settles the confirmation a PairingProgress asked for, by the
+  // request id of the prompt. It is the surface a pairing command uses while it
+  // is still on screen; the pairings verbs below are the surface for everything
+  // that outlived the command that started it.
+  rpc AnswerPairing(AnswerPairingRequest) returns (AnswerPairingResponse);
+
+  // ListPendingPairings reports the pairings that are under way: the ones this
+  // instance's user has still to answer, and the ones already answered here
+  // that are waiting for the other side. Nothing in the list expires, so
+  // nothing leaves it except by being answered, withdrawn or completed.
+  rpc ListPendingPairings(ListPendingPairingsRequest)
+      returns (ListPendingPairingsResponse);
+
+  // AnswerPendingPairing records this side's answer to a pairing, whether or
+  // not the command that started it is still running and whether or not the
+  // peer can be reached. The answer is written down first and reconciled with
+  // the peer afterwards.
+  rpc AnswerPendingPairing(AnswerPendingPairingRequest)
+      returns (AnswerPendingPairingResponse);
+
+  // WithdrawPairing calls an attempt off. It is a manual operation and the only
+  // way a pending pairing is ever removed without an answer; the peer is told
+  // if it can be reached, and finds out by asking if it cannot.
+  rpc WithdrawPairing(WithdrawPairingRequest) returns (WithdrawPairingResponse);
+
+  // SetPeerDirections changes what a paired peer is allowed to do.
+  rpc SetPeerDirections(SetPeerDirectionsRequest)
+      returns (SetPeerDirectionsResponse);
+
+  // RenamePeer changes the name a peer is known by here. The name is this
+  // side's own label, not the peer's, so nobody else is affected by it.
+  rpc RenamePeer(RenamePeerRequest) returns (RenamePeerResponse);
+
+  // RevokePeer forgets a peer and drops any connection it is holding.
+  rpc RevokePeer(RevokePeerRequest) returns (RevokePeerResponse);
+
+  // PublishProject marks a project as published to the peers that approve for
+  // this instance (§6). It sends nothing (decision Q).
+  rpc PublishProject(PublishProjectRequest) returns (PublishProjectResponse);
+
+  // ListPublications reports both halves of publishing: what this instance
+  // publishes, and what it has read of what others publish.
+  rpc ListPublications(ListPublicationsRequest) returns (ListPublicationsResponse);
+
+  // UnpublishProject stops publishing one of ours, or forgets what has been
+  // read of somebody else's.
+  rpc UnpublishProject(UnpublishProjectRequest) returns (UnpublishProjectResponse);
+
+  // SetAutoPublish turns the default of decision Q on or off: publish,
+  // automatically, any project this instance sends an approval request for. It
+  // is a setting rather than the only behaviour, because a machine that signs
+  // in repositories it would rather not name should be able to say so.
+  rpc SetAutoPublish(SetAutoPublishRequest) returns (SetAutoPublishResponse);
+
+  // WatchApprovals attaches a front end that answers prompts, and streams it
+  // everything a human at this machine is supposed to see (decision Z).
+  //
+  // The stream is the registration: while it is open the caller is a local
+  // approver in the engine's fan-out, exactly as an in-process tray window used
+  // to be, and closing it takes the approver away. That is what makes the
+  // desktop application a client of a daemon rather than a second copy of one —
+  // the store, the keys and the agent socket stay in the one process that owns
+  // them (decision L), and what crosses this socket is a card to draw and an
+  // answer to carry back.
+  //
+  // A request in flight when the stream drops loses this approver: the daemon
+  // withdraws the prompt from a screen that is no longer there, and whoever
+  // else could answer — a paired phone, a policy, a grant — answers as they
+  // would have. Restarting the front end does not re-raise it, because the
+  // question has already been asked of everyone it could be asked of and is
+  // waiting on the requester's own timeout.
+  rpc WatchApprovals(WatchApprovalsRequest) returns (stream ApprovalPrompt);
+
+  // AnswerApproval settles a request the stream raised. It is a separate call
+  // rather than the other half of a bidirectional stream so that an answer is
+  // an ordinary request with an ordinary error: a front end that could not be
+  // told its answer arrived can say so, and one that answers a request that has
+  // since been settled elsewhere is told which of the two happened.
+  rpc AnswerApproval(AnswerApprovalRequest) returns (AnswerApprovalResponse);
+
+  // FetchRequestDiff asks the requester for the rest of a diff the caps cut
+  // short, on behalf of the front end drawing the card (§5).
+  //
+  // It is the daemon that asks, because the connection to the requester is the
+  // daemon's and the request is the daemon's; the front end knows only the
+  // identifier it was handed.
+  rpc FetchRequestDiff(FetchRequestDiffRequest) returns (FetchRequestDiffResponse);
+
+  // The doc browser, for a front end that is not in the daemon's process
+  // (§6, decision Q). What a peer publishes is read through the peer channel
+  // and kept in a cache sealed with the store key, so both halves of an answer
+  // are the daemon's to give.
+  //
+  // The five calls are the five a browser makes: what is published, one
+  // project's identity, a directory, a search, and a page. Every one of them
+  // reports whether the answer came from the publishing machine or from what
+  // has been read of it before, because under decision Q those are different
+  // answers and a browser that blurred them would claim to know things it does
+  // not.
+  rpc ListPeerProjects(ListPeerProjectsRequest) returns (ListPeerProjectsResponse);
+
+  rpc OpenPeerProject(OpenPeerProjectRequest) returns (OpenPeerProjectResponse);
+
+  rpc ListPeerDirectory(ListPeerDirectoryRequest) returns (ListPeerDirectoryResponse);
+
+  rpc SearchPeerProject(SearchPeerProjectRequest) returns (SearchPeerProjectResponse);
+
+  rpc ReadPeerPage(ReadPeerPageRequest) returns (ReadPeerPageResponse);
+
+  // Reload re-reads the store and the policy from disk, which is the same thing
+  // SIGHUP does to the daemon. It is here because the front end offers it in a
+  // menu and a menu item may not depend on being able to signal a process.
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+}
+
+message StatusRequest {}
+
+// LockState is how much of the store is live (§10).
+enum LockState {
+  LOCK_STATE_UNSPECIFIED = 0;
+  // The data encryption key is not in memory. The agent lists nothing, the
+  // peer listener is down, and the control socket answers Status and Unlock
+  // and refuses everything else.
+  LOCK_STATE_SEALED = 1;
+  // Normal operation.
+  LOCK_STATE_UNLOCKED = 2;
+  // Soft lock: the key is still here, but the prompts at this instance have
+  // left the eligible-approver set, so decisions go to remote approvers or
+  // wait. Grants and auto-approve policies still fire.
+  LOCK_STATE_LOCKED = 3;
+  // There is no store at all yet. The daemon still starts and still serves:
+  // the surface is Status and Initialize and nothing else, because there is no
+  // store to touch and no identity key to sign anything with. A daemon that
+  // refused to start here would be one that a unit file enabled a minute too
+  // early could put in a restart loop.
+  LOCK_STATE_UNINITIALIZED = 4;
+}
+
+// PeerStatus is a paired peer as the running instance sees it.
+message PeerStatus {
+  string name = 1;
+  string fingerprint = 2;
+  repeated string addresses = 3;
+  bool may_approve = 4;
+  bool may_request = 5;
+  // Which of this instance's keys the peer may sign with, and whether it may
+  // use all of them.
+  repeated string allowed_keys = 10;
+  bool all_keys = 11;
+  // Keys the peer holds and offers to this instance, so a keyless box can say
+  // where the keys its agent lists actually live. Only known while a link is up.
+  repeated KeyRef offered_keys = 12;
+  // True when a link to the peer is up right now.
+  bool online = 6;
+  // Why the link is down, when it is.
+  string last_error = 7;
+  google.protobuf.Timestamp paired_at = 8;
+  google.protobuf.Timestamp last_seen_at = 9;
+}
+
+message StatusResponse {
+  string instance_name = 1;
+  string fingerprint = 2;
+  // Addresses the peer listener is bound to. Empty when peering is off, and
+  // when the store is sealed — the identity key lives in the store, so a
+  // sealed instance cannot authenticate a channel at all.
+  repeated string listen_addresses = 3;
+  repeated PeerStatus peers = 4;
+  LockState lock_state = 5;
+  // When the instance entered that state.
+  google.protobuf.Timestamp state_since = 6;
+  // Whether the store can be unlocked, and a backup recovered, with a
+  // passphrase, and whether this instance has enrolled the platform keychain
+  // ("unlock at login", §10 decision I).
+  bool passphrase_wrapping = 7;
+  bool keyring_enrolled = 8;
+  // What the store holds, so that a box driven over SSH gets a useful answer
+  // from the daemon rather than having to open the store a second time (§14).
+  // Zero while sealed, which is not the same as an instance holding nothing.
+  int32 keys = 9;
+  int32 grants = 10;
+  // Why the instance is in this state, when something other than a person put
+  // it there: "the machine was suspended", "the session was locked".
+  string state_reason = 11;
+  // How the instance is asking for the passphrase right now — "the terminal",
+  // "systemd-ask-password" — or empty when nothing is asking. A sealed daemon
+  // serves this call while its prompt is up (§14), so the difference between
+  // "answer the prompt that is already standing" and "nothing will happen
+  // until you unlock it" is worth being able to see.
+  string unlock_prompt = 12;
+  // How many pairings are under way. A pending pairing is something somebody
+  // has to do something about, so `status` says there is one rather than
+  // leaving it to be found (§7).
+  int32 pending_pairings = 13;
+  // The keys paired peers offer this instance, remembered across restarts and
+  // across the holder going away (decision N). Every one of them is listed
+  // whether or not its holder can be reached; available says which of them can
+  // actually sign right now.
+  repeated BorrowedKeyStatus borrowed_keys = 14;
+  // How many portable keys peers have handed this instance and nobody has
+  // answered (decision S). Counted here for the reason a pending pairing is: a
+  // key that arrived while nobody was looking would otherwise sit in the store
+  // until somebody happened to run `keys offers`, and the machine most likely
+  // to be handed one is a headless box somebody reaches over SSH.
+  int32 key_offers = 15;
+  // Where this instance's files are, as the process serving them sees them.
+  //
+  // A front end works them out for itself only if it was started with the same
+  // flags and the same environment as the daemon, and a desktop application
+  // started from a menu was not: the unit has LADULAS_DATA_DIR and the menu
+  // entry has nothing (decision Z). So the paths come from the process that
+  // opened them, which is also the only one that can be right about them.
+  InstanceLocations locations = 16;
+}
+
+// InstanceLocations is where a running instance keeps things.
+message InstanceLocations {
+  string store = 1;
+  string policy = 2;
+  string audit_log = 3;
+  // Where the pages this instance has read of its peers' projects are kept.
+  string projects_dir = 4;
+  string agent_socket = 5;
+  string control_socket = 6;
+}
+
+// BorrowedKeyStatus is a key a paired peer offers, as this instance last
+// learned it (§10, decision N).
+//
+// It is reported whether or not the holder is reachable, because a key that
+// cannot be used right now is still a key somebody needs to be able to find —
+// its fingerprint, which machine has it, and when that machine last said so.
+// Availability is a separate field rather than a reason to leave the row out:
+// the complaint this answers is that a phone's keys disappeared from every
+// listing whenever the app was not in the foreground, which is most of the
+// time.
+message BorrowedKeyStatus {
+  KeyRef key = 1;
+  // The name this instance gave the holder, and the identity behind the name.
+  string peer = 2;
+  string peer_fingerprint = 3;
+  // True when the holder is reachable and still offering the key, which is the
+  // only state in which asking it to sign will get anywhere.
+  bool available = 4;
+  // When the holder last confirmed it offers this key.
+  google.protobuf.Timestamp last_seen_at = 5;
+  // True when this instance holds the same key itself, which makes the row a
+  // note about where else the key lives rather than a key to reach for: the
+  // copy here is what signs, and nothing is asked of the holder (§10).
+  bool held_here = 6;
+}
+
+message InitializeRequest {
+  // The name this instance is known by, in prompts and to peers. Empty takes
+  // the hostname.
+  string instance_name = 1;
+  // The passphrase the new store is wrapped with. It travels over the
+  // uid-checked socket exactly as Unlock's does, and is wiped the same way.
+  // Confirming it is the caller's job: it is the caller that has a person in
+  // front of it.
+  bytes passphrase = 2;
+}
+
+message InitializeResponse {
+  string instance_name = 1;
+  string fingerprint = 2;
+  LockState state = 3;
+  // Where the store, the policy and the audit log ended up, so the caller can
+  // say what it just created without guessing at the daemon's paths.
+  string store_path = 4;
+  string policy_path = 5;
+  // Anything worth saying that was not a failure — a peer listener that could
+  // not bind, most likely.
+  string message = 6;
+}
+
+message UnlockRequest {
+  // The store passphrase, as bytes so that the daemon can wipe the buffer it
+  // was given rather than leave a string behind (§14). Empty means "use the
+  // keychain".
+  bytes passphrase = 1;
+}
+
+message UnlockResponse {
+  LockState state = 1;
+  // Anything worth saying that is not a failure: the peer listener that could
+  // not bind, the keychain that was tried first.
+  string message = 2;
+}
+
+message LockRequest {
+  // Seal wipes the data encryption key instead of only suspending local
+  // approval authority.
+  bool seal = 1;
+}
+
+message LockResponse {
+  LockState state = 1;
+}
+
+message AwaitStateRequest {
+  // Any of these ends the wait. Empty means unlocked, which is the only state
+  // in which everything works and is what anybody waiting is waiting for.
+  repeated LockState states = 1;
+  // How long to hold the call open. Zero waits for as long as the caller keeps
+  // the connection, which is what a monitor wants.
+  google.protobuf.Duration timeout = 2;
+}
+
+message AwaitStateResponse {
+  // The state when the call returned, whether or not it is one that was asked
+  // for.
+  LockState state = 1;
+  // False when the timeout ran out first.
+  bool reached = 2;
+  google.protobuf.Timestamp state_since = 3;
+  string state_reason = 4;
+}
+
+message KeyringStatusRequest {}
+
+message KeyringStatusResponse {
+  // True when the data encryption key is in the platform keychain, so the
+  // daemon comes up unsealed with nothing typed.
+  bool enrolled = 1;
+  // True when the passphrase still opens the store. It always should be: the
+  // keychain is enrolled beside a passphrase, never instead of one.
+  bool passphrase_wrapping = 2;
+}
+
+message SetUnlockAtLoginRequest {
+  bool enrol = 1;
+}
+
+message SetUnlockAtLoginResponse {
+  bool enrolled = 1;
+}
+
+// KeyOrigin says where a key came from. It mirrors the store's own enum, which
+// this file cannot import: the store document imports this one, for the
+// publications it holds.
+enum KeyOrigin {
+  KEY_ORIGIN_UNSPECIFIED = 0;
+  KEY_ORIGIN_IMPORTED = 1;
+  KEY_ORIGIN_GENERATED = 2;
+  KEY_ORIGIN_RECEIVED = 3;
+}
+
+// KeyTransferInfo is a portable key having changed machines (decision S), in
+// either direction: a peer, its name at the time, and when.
+message KeyTransferInfo {
+  string peer_fingerprint = 1;
+  string peer_name = 2;
+  google.protobuf.Timestamp at = 3;
+}
+
+// KeyInfo is one of this instance's own keys as the management surface reports
+// it: everything `ladulas keys list` prints, and nothing the private half would
+// add. The private key never leaves the daemon, not even over a socket only
+// this account can open.
+message KeyInfo {
+  string label = 1;
+  string fingerprint = 2;
+  string algorithm = 3;
+  string comment = 4;
+  // The public half in SSH wire format, which is what an authorized_keys line
+  // is rendered from.
+  bytes public_key = 5;
+  KeyOrigin origin = 6;
+  // A disabled key is still stored but is not offered by the agent.
+  bool disabled = 7;
+  // Whether the key is in the agent's identity list (decision T). Unset means
+  // yes, as it does in the store.
+  optional bool agent_use = 12;
+  google.protobuf.Timestamp added_at = 8;
+  // Set when the private half lives in a platform secure element (§10). A key
+  // without it is portable: bytes in the store, and therefore something that
+  // can be handed to a peer (decision S).
+  bool hardware = 9;
+  // Every peer this key has been handed to, and where it came from if it was
+  // handed here. A listing that left these out would show two keys that look
+  // identical and are not: one exists on one machine, and the other is on
+  // somebody else's disk as well.
+  repeated KeyTransferInfo handed_to = 10;
+  KeyTransferInfo received_from = 11;
+}
+
+message ListStoredKeysRequest {}
+
+message ListStoredKeysResponse {
+  repeated KeyInfo keys = 1;
+}
+
+message GenerateKeyRequest {
+  string label = 1;
+  string comment = 2;
+}
+
+message GenerateKeyResponse {
+  KeyInfo key = 1;
+}
+
+message ImportKeyRequest {
+  // The private key file as it was read, in whatever format it arrived in.
+  bytes private_key = 1;
+  // The name for it inside Ladulås. Empty takes one from the key's comment.
+  string label = 2;
+  // The passphrase the key file itself is encrypted with, when it is one.
+  bytes passphrase = 3;
+}
+
+message ImportKeyResponse {
+  KeyInfo key = 1;
+  // True when the key file is passphrase protected and none was sent. Not an
+  // error: the daemon did everything it could with what it was given, and the
+  // caller is the one with a terminal to ask on.
+  bool passphrase_required = 2;
+}
+
+message RemoveKeyRequest {
+  // Key label or fingerprint.
+  string key = 1;
+}
+
+message RemoveKeyResponse {
+  string fingerprint = 1;
+}
+
+message SetKeyEnabledRequest {
+  string key = 1;
+  bool enabled = 2;
+}
+
+message SetKeyEnabledResponse {
+  KeyInfo key = 1;
+}
+
+message SetKeyAgentUseRequest {
+  string key = 1;
+  bool agent_use = 2;
+}
+
+message SetKeyAgentUseResponse {
+  KeyInfo key = 1;
+}
+
+message SendKeyRequest {
+  // Key label or fingerprint. A hardware key is refused rather than explained
+  // away: there are no bytes to send.
+  string key = 1;
+  // Peer name or identity fingerprint.
+  string peer = 2;
+  // The store passphrase, re-entered. Checked against the wrapping and wiped;
+  // it unlocks nothing, because the store is open (decision S).
+  bytes passphrase = 3;
+}
+
+message SendKeyResponse {
+  string fingerprint = 1;
+  // The peer's name as it is written down here, so the confirmation says who
+  // rather than repeating what was typed.
+  string peer_name = 2;
+  // What the far side is calling the offer while it waits to be answered.
+  string offer_id = 3;
+}
+
+// KeyOfferInfo is a portable key a peer has handed this instance, as the
+// management surface reports it. The private half is not here for the same
+// reason it is not in KeyInfo.
+message KeyOfferInfo {
+  string id = 1;
+  string peer_fingerprint = 2;
+  string peer_name = 3;
+  string label = 4;
+  string comment = 5;
+  string algorithm = 6;
+  string fingerprint = 7;
+  bytes public_key = 8;
+  google.protobuf.Timestamp received_at = 9;
+}
+
+message ListKeyOffersRequest {}
+
+message ListKeyOffersResponse {
+  repeated KeyOfferInfo offers = 1;
+}
+
+message AnswerKeyOfferRequest {
+  string id = 1;
+  bool accept = 2;
+  // What to call the key here. Empty keeps the sender's label, unless this
+  // store already has one by that name.
+  string label = 3;
+}
+
+message AnswerKeyOfferResponse {
+  // The key as it was stored. Absent on a refusal, which stores nothing.
+  KeyInfo key = 1;
+}
+
+message ListGrantsRequest {}
+
+message ListGrantsResponse {
+  repeated Grant grants = 1;
+}
+
+message ExtendGrantRequest {
+  string grant_id = 1;
+  // How long it should run from now, rather than how much to add to what is
+  // left: that is what somebody setting a clock means by it, and it is what
+  // lets the same ceiling apply to extending as to granting. An extension can
+  // top a promise back up to the longest this instance makes, and never past.
+  google.protobuf.Duration extend_by = 2;
+}
+
+message ExtendGrantResponse {
+  Grant grant = 1;
+}
+
+message ListDelegationsRequest {}
+
+message ListDelegationsResponse {
+  repeated HeldDelegationInfo delegations = 1;
+}
+
+// HeldDelegationInfo is one standing permission this instance holds, as a
+// reader needs it.
+//
+// The signed artifact itself is not here. It is what the store keeps and what
+// the peer channel carried, and a listing has no use for the bytes — what a
+// listing answers is which promise is being acted on, who made it, when it
+// runs out, and how much has been done under it.
+message HeldDelegationInfo {
+  Delegation delegation = 1;
+  // When it arrived.
+  google.protobuf.Timestamp received_at = 2;
+  // Everything self-approved under it, and how much of that the approver has
+  // not been told about yet. The second number is a machine that has been
+  // out of touch rather than a fault, and reads as one.
+  uint32 use_count = 3;
+  uint32 unreported_uses = 4;
+}
+
+message RevokeGrantRequest {
+  string grant_id = 1;
+}
+
+message RevokeGrantResponse {
+  string grant_id = 1;
+  // Set when the grant was delegated and the machine holding it could not be
+  // told. The revocation stands here and is delivered at the next contact; the
+  // holder goes on signing until then, which is what the caller has to be able
+  // to say out loud rather than report as done.
+  bool pending = 2;
+  // Why it could not be delivered, in the words the peer channel used.
+  string detail = 3;
+}
+
+message BeginPairingRequest {
+  // What the arriving peer will be granted, subject to the confirmation.
+  bool peer_may_approve = 1;
+  bool peer_may_request = 2;
+}
+
+message PairWithPeerRequest {
+  // host:port of the instance displaying the code. May be empty when the code
+  // is a full one, which carries the address.
+  string address = 1;
+  // The code as it was displayed: either the short typed secret or the full
+  // string a QR would carry.
+  string code = 2;
+  bool peer_may_approve = 3;
+  bool peer_may_request = 4;
+}
+
+// PairingProgressKind is where a pairing exchange has got to.
+enum PairingProgressKind {
+  PAIRING_PROGRESS_KIND_UNSPECIFIED = 0;
+  // The code to show the other side. Only on BeginPairing.
+  PAIRING_PROGRESS_KIND_CODE = 1;
+  // A peer has arrived, or has answered, and this side's user must confirm.
+  PAIRING_PROGRESS_KIND_CONFIRM = 2;
+  // Paired.
+  PAIRING_PROGRESS_KIND_DONE = 3;
+  // Not paired, and why.
+  PAIRING_PROGRESS_KIND_FAILED = 4;
+  // Answered on this side, and the other side has not answered yet. It is not
+  // a failure and not an end: the pairing is written down on both sides and the
+  // daemon goes on reconciling it, so the command says so and gives the
+  // terminal back rather than occupying it until somebody walks to the other
+  // machine (§7).
+  PAIRING_PROGRESS_KIND_WAITING = 5;
+}
+
+message PairingProgress {
+  PairingProgressKind kind = 1;
+  // The short typed code, and the full string a QR would carry. Both name the
+  // same secret; the full one also carries the address and the identity key.
+  string code = 2;
+  string full_code = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  repeated string listen_addresses = 5;
+  // The confirmation this side's user has to answer, rendered the same way
+  // every other approval prompt is.
+  ApprovalRequest confirmation = 6;
+  // Set on DONE.
+  PeerStatus peer = 7;
+  string message = 8;
+}
+
+message AnswerPairingRequest {
+  string request_id = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message AnswerPairingResponse {}
+
+// PendingPairingStatus is one pairing under way, as the management surface
+// reports it.
+//
+// Both fingerprints are here for the same reason the confirmation card carries
+// both: the integrity of a trust-on-first-use pairing is that two screens show
+// the same two fingerprints, and a listing showing only the other side's would
+// leave nothing to compare it against (§7).
+message PendingPairingStatus {
+  string session_id = 1;
+  string name = 2;
+  string fingerprint = 3;
+  repeated string addresses = 4;
+  string remote_address = 5;
+  // What this instance will grant the peer if it is approved.
+  bool may_approve = 6;
+  bool may_request = 7;
+  bool we_dialled = 8;
+  bool key_from_code = 9;
+  PairingAnswer our_answer = 10;
+  PairingAnswer their_answer = 11;
+  google.protobuf.Timestamp started_at = 12;
+  google.protobuf.Timestamp answered_at = 13;
+  // This instance's own name and identity, so a listing can be compared with
+  // what the other machine is showing.
+  string local_name = 14;
+  string local_fingerprint = 15;
+  // The confirmation prompt this pairing raised, when one is still up.
+  string confirmation_request_id = 16;
+}
+
+message ListPendingPairingsRequest {}
+
+message ListPendingPairingsResponse {
+  repeated PendingPairingStatus pairings = 1;
+}
+
+message AnswerPendingPairingRequest {
+  // The pairing, by session id, peer fingerprint or peer name.
+  string pairing = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message AnswerPendingPairingResponse {
+  // How it stands after the answer: still pending when the other side has not
+  // answered, gone when the answer settled it, and the peer when it completed.
+  PairingRecordState state = 1;
+  PendingPairingStatus pairing = 2;
+  PeerStatus peer = 3;
+  string message = 4;
+}
+
+message WithdrawPairingRequest {
+  // The pairing, by session id, peer fingerprint or peer name.
+  string pairing = 1;
+  string reason = 2;
+}
+
+message WithdrawPairingResponse {
+  string session_id = 1;
+  string fingerprint = 2;
+  // Whether the peer was reachable and has been told. A peer that was not is
+  // told the next time either side asks, which is not an error (§7).
+  bool peer_told = 3;
+  string message = 4;
+}
+
+message SetPeerDirectionsRequest {
+  // Peer name or fingerprint.
+  string peer = 1;
+  bool may_approve = 2;
+  bool may_request = 3;
+  // Which of this instance's keys the peer may ask for signatures with, by
+  // label or fingerprint (§7). The list is the whole permission: a call that
+  // names none takes away whatever the peer had, in keeping with every other
+  // field here describing the state wanted rather than a change to make.
+  repeated string allowed_keys = 4;
+  // True lets the peer use every key this instance holds, including keys added
+  // later. Convenient for a desktop that signs for its own headless box, and a
+  // decision worth making explicitly rather than arriving at by listing.
+  bool all_keys = 5;
+}
+
+message SetPeerDirectionsResponse {
+  PeerStatus peer = 1;
+}
+
+message RenamePeerRequest {
+  // Peer name or fingerprint.
+  string peer = 1;
+  string name = 2;
+}
+
+message RenamePeerResponse {
+  PeerStatus peer = 1;
+}
+
+message RevokePeerRequest {
+  string peer = 1;
+}
+
+message RevokePeerResponse {
+  string fingerprint = 1;
+}
+
+// CachedProject is what this instance has read of a project somebody else
+// publishes (decision Q).
+//
+// It is a record of reading rather than of receiving. Nothing is here because a
+// peer sent it; everything is here because somebody opened it, which is what
+// makes it readable again with no signal and what keeps a phone from holding
+// the doc set of every machine it approves for.
+message CachedProject {
+  // Names the project inside this instance: the publisher and the project id
+  // together, since two peers may well both have a project called "docs".
+  string key = 1;
+  string peer = 2;
+  string peer_fingerprint = 3;
+  // The project as it was described the last time the publisher was reached.
+  Publication project = 4;
+  google.protobuf.Timestamp first_read_at = 5;
+  google.protobuf.Timestamp last_read_at = 6;
+  // The pages that have a reader here, newest first.
+  repeated CachedFile files = 7;
+}
+
+// CachedFile is one page that has been read, and when.
+message CachedFile {
+  string path = 1;
+  // SHA-256 of the contents, computed here rather than taken from the
+  // publisher: it is what the blob is stored under, and a digest somebody else
+  // chose would be somebody else choosing the file name.
+  bytes digest = 2;
+  int64 size = 3;
+  google.protobuf.Timestamp modified_at = 4;
+  google.protobuf.Timestamp read_at = 5;
+  // The commit the project was at when this page was read, which is what "the
+  // documentation you have is from before this change" is computed against.
+  string commit = 6;
+}
+
+message PublishProjectRequest {
+  // The directory to publish, as an absolute path. The caller resolves it:
+  // the daemon's working directory is its own, not the one somebody typing
+  // `ladulas projects publish ../notes` is standing in, so a relative path
+  // here would name a different directory than the one they meant. A path
+  // that is not absolute is refused rather than guessed at.
+  string path = 1;
+  // A name for the project. Empty means the directory's own name.
+  string name = 2;
+}
+
+message PublishProjectResponse {
+  Publication publication = 1;
+}
+
+message ListPublicationsRequest {}
+
+message ListPublicationsResponse {
+  repeated Publication published = 1;
+  // What has been read of other instances' projects, which is the only sense in
+  // which this one holds any of them.
+  repeated CachedProject cached = 2;
+  // Whether projects this instance asks for signatures in are published
+  // automatically (decision Q). On unless somebody turned it off.
+  bool auto_publish = 3;
+}
+
+message SetAutoPublishRequest {
+  bool enabled = 1;
+}
+
+message SetAutoPublishResponse {
+  bool enabled = 1;
+}
+
+message UnpublishProjectRequest {
+  // A publication's name or project id, or a cached project's key. One verb for
+  // both directions, because "stop showing me these documents" is one intent
+  // whichever end of the pairing it is typed at.
+  string project = 1;
+}
+
+message UnpublishProjectResponse {
+  string project_id = 1;
+  // True when what was withdrawn was one of ours. Nobody is told either way:
+  // there is no copy anywhere to take back (decision Q), and an approver that
+  // asks next is told there is no such project.
+  bool published_here = 2;
+  // How many pages were forgotten, when what was named was a cached project.
+  int32 forgotten = 3;
+}
+
+// WatchApprovalsRequest attaches a front end.
+message WatchApprovalsRequest {
+  // What to call this approver in the audit log: "desktop". The daemon does not
+  // check it, for the reason nothing else on this socket is checked — the uid
+  // is the whole gate (§14) — and a front end that lied about it would be
+  // lying to its own user's log.
+  string approver_id = 1;
+}
+
+// ApprovalPromptKind is what an event on the stream is for.
+enum ApprovalPromptKind {
+  APPROVAL_PROMPT_KIND_UNSPECIFIED = 0;
+  // The stream is live and the approver is registered. It carries nothing, and
+  // it exists so that a front end can tell "attached, nothing pending" from
+  // "still dialling" — which is the difference between a machine that is
+  // waiting for you and one that is not going to ask.
+  APPROVAL_PROMPT_KIND_ATTACHED = 1;
+  // Somebody has to answer this.
+  APPROVAL_PROMPT_KIND_PROMPT = 2;
+  // Take it off the screen: another approver answered, the requester gave up,
+  // or it ran out of time. The reason says which.
+  APPROVAL_PROMPT_KIND_WITHDRAWN = 3;
+  // A request that was decided without asking — a policy rule or a standing
+  // grant — which a front end announces rather than prompts (§9). Silent
+  // auto-approval is how approval fatigue turns into an unnoticed compromise.
+  APPROVAL_PROMPT_KIND_DECIDED = 4;
+}
+
+message ApprovalPrompt {
+  ApprovalPromptKind kind = 1;
+  string request_id = 2;
+  // The serialized ApprovalRequest, for the same reason the peer channel
+  // carries one: the card is drawn from the bytes the digest covers, so the
+  // front end and the daemon are looking at the same material rather than at
+  // two serializations of it.
+  bytes request = 3;
+  // What may be promised, when a promise may be made at all (decisions U, V).
+  GrantOffer grant = 4;
+  // Set on DECIDED: what was decided, and on whose authority.
+  ApprovalResponse response = 5;
+  // Set on WITHDRAWN: "not answered in time", "answered on another device".
+  string reason = 6;
+}
+
+// GrantOffer is the "approve for a while" offer as the engine sized it for this
+// request. Absent when the request may not be promised for at all.
+message GrantOffer {
+  // The lengths worth one tap. Suggestions rather than the whole of what may be
+  // agreed to (decision V).
+  repeated google.protobuf.Duration ttls = 1;
+  // The longest promise this instance will make. A front end offers nothing
+  // past it, and the daemon refuses anything past it — the front end draws the
+  // bound, it does not own it.
+  google.protobuf.Duration max_ttl = 2;
+  // Who a session-wide promise would be made to, worded for a button: "emacs",
+  // "this kitty window". Empty when the request names no session.
+  string session_subject = 3;
+  // Who a machine-wide promise would be made to.
+  string machine = 4;
+}
+
+// GrantReach is how far a promise made at a prompt carries (decision V).
+enum GrantReach {
+  // The session the request came from, and the default: an answer that says
+  // nothing about reach means the narrower of the two.
+  GRANT_REACH_UNSPECIFIED = 0;
+  GRANT_REACH_SESSION = 1;
+  GRANT_REACH_MACHINE = 2;
+}
+
+message AnswerApprovalRequest {
+  string request_id = 1;
+  Decision decision = 2;
+  // The approver's own words, for the log.
+  string reason = 3;
+  // A promise, when one was made and the decision is an approval. Bounded by
+  // the offer's max_ttl, and refused rather than trimmed if it is longer: a
+  // promise that was quietly shortened is a promise nobody made.
+  google.protobuf.Duration grant_ttl = 4;
+  GrantReach grant_reach = 5;
+  // The documentation panel that was on screen when this was answered, kept as
+  // it was shown rather than recomputed later (§6).
+  PresentedProject presented = 6;
+}
+
+message AnswerApprovalResponse {}
+
+message FetchRequestDiffRequest {
+  string request_id = 1;
+  // One file to expand, or empty for the whole diff at the larger cap.
+  string path = 2;
+}
+
+message FetchRequestDiffResponse {
+  GitDiff diff = 1;
+}
+
+// PeerProject is a project a paired instance publishes, as this instance can
+// currently account for it (§6).
+message PeerProject {
+  string fingerprint = 1;
+  // The name this instance gave the publisher.
+  string peer = 2;
+  Publication project = 3;
+  // The publisher answered just now, so the commit and the branch are what that
+  // machine is standing on rather than what it was standing on when somebody
+  // last read a page.
+  bool live = 4;
+  // The publisher answered and did not name this project: it has stopped
+  // publishing, and what is left is what was read before it did.
+  bool withdrawn = 5;
+  // How many pages have been read here, and when the last one was.
+  int32 kept = 6;
+  google.protobuf.Timestamp read = 7;
+  // Why the publisher could not be asked, in the words to show. A project with
+  // this set is still listed: what has been read of it is still readable.
+  string error = 8;
+}
+
+// PeerListing is one directory, or one search.
+message PeerListing {
+  string path = 1;
+  repeated ProjectEntry entries = 2;
+  // The token that fetches the next page, empty at the end.
+  string next = 3;
+  int32 total = 4;
+  bool truncated = 5;
+  // Whether this came from the publisher. When it is false the entries are the
+  // pages that have been read here, which is a different and much shorter list
+  // than the directory.
+  bool live = 6;
+  string error = 7;
+  // The publishing machine's account of itself, taken in the same exchange as
+  // the entries, and unset when they did not come from it. Both halves of what
+  // a browser puts above a listing have their own provenance, and a header
+  // assembled out of the pages somebody read once would put the commit those
+  // were read at over a directory the publisher answered just now (§6).
+  PeerProject publisher = 8;
+}
+
+// PeerPage is one document.
+message PeerPage {
+  string path = 1;
+  bytes content = 2;
+  google.protobuf.Timestamp modified = 3;
+  google.protobuf.Timestamp read_at = 4;
+  // The commit the project was at when this was read.
+  string commit = 5;
+  bool live = 6;
+  string error = 7;
+}
+
+message ListPeerProjectsRequest {
+  // One publisher, or empty for all of them.
+  string fingerprint = 1;
+}
+
+message ListPeerProjectsResponse {
+  repeated PeerProject projects = 1;
+}
+
+message OpenPeerProjectRequest {
+  string fingerprint = 1;
+  string project_id = 2;
+  // Answer from what has been read here without asking the publisher, which is
+  // what drawing a card does: somebody is waiting in front of it (decision Q).
+  bool cached_only = 3;
+}
+
+message OpenPeerProjectResponse {
+  PeerProject project = 1;
+  // False when cached_only was asked for and nothing has been read of it.
+  bool found = 2;
+}
+
+message ListPeerDirectoryRequest {
+  string fingerprint = 1;
+  string project_id = 2;
+  string path = 3;
+  // A filename filter applied by the publisher, so a directory of ten thousand
+  // files costs one page either way.
+  string filter = 4;
+  string token = 5;
+  int32 size = 6;
+}
+
+message ListPeerDirectoryResponse {
+  PeerListing listing = 1;
+}
+
+message SearchPeerProjectRequest {
+  string fingerprint = 1;
+  string project_id = 2;
+  string query = 3;
+  string token = 4;
+  int32 size = 5;
+}
+
+message SearchPeerProjectResponse {
+  PeerListing listing = 1;
+}
+
+message ReadPeerPageRequest {
+  string fingerprint = 1;
+  string project_id = 2;
+  string path = 3;
+}
+
+message ReadPeerPageResponse {
+  PeerPage page = 1;
+}
+
+message ReloadRequest {}
+
+message ReloadResponse {}

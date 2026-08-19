@@ -1,0 +1,27 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Ladulås enum names are already scoped by the ladulas.v1 package and read
+    # badly with a mandatory type prefix (ACTION_APPROVE, not
+    # ACTION_ACTION_APPROVE). The zero values still carry the _UNSPECIFIED
+    # suffix that matters.
+    - ENUM_VALUE_PREFIX
+    - ENUM_ZERO_VALUE_SUFFIX
+  ignore_only:
+    # RequestApproval streams lifecycle events rather than returning one
+    # response, and ApprovalEvent says that where RequestApprovalResponse
+    # would not. The same goes for the two pairing commands on the control
+    # socket: both drive the same exchange and report the same progress, so
+    # one PairingProgress is the honest response type for both.
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/ladulas/v1/service.proto
+      - proto/ladulas/v1/local.proto
+    RPC_REQUEST_RESPONSE_UNIQUE:
+      - proto/ladulas/v1/local.proto
+breaking:
+  use:
+    - FILE

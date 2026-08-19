@@ -1,0 +1,34 @@
+[Desktop Entry]
+Type=Application
+Name=Ladulås
+GenericName=SSH agent approvals
+Comment=Approve SSH signatures and git commits
+# The desktop application, and not a service (decision Z). It draws the tray
+# icon, the queued prompt popups and one application window with a sidebar in it
+# (decision AA), and answers over the control socket of the daemon that
+# ladulas.service starts — it holds no keys and serves no agent, so nothing
+# breaks if it is started twice, late, or never.
+#
+# It is installed twice on purpose: in /usr/share/applications, where it is a
+# menu entry somebody can launch, and in /etc/xdg/autostart, where every
+# desktop environment starts it at login. The systemd user unit it replaces
+# was pulled in by graphical-session.target, which nothing reaches on its own
+# in most sessions — so the unit was enabled and never started, reported as
+# inactive with no error, and the first anybody knew of it was a prompt that
+# did not appear.
+Exec=/usr/bin/ladulas gui
+# The window's icon, and the one in a launcher's menu. It is a name in the icon
+# theme rather than a path, and it is the only way a GTK 4 application has of
+# having one: GTK 4 removed the per-window icon APIs, so nothing the program does
+# at runtime can set it and this entry is what draws it. The name has to match
+# what the process puts in WM_CLASS — LinuxOptions.ProgramName, also `ladulas` —
+# or a window manager has no way to tell that this entry describes that window.
+Icon=ladulas
+Terminal=false
+Categories=Utility;Security;
+Keywords=ssh;git;signing;approval;agent;
+StartupNotify=false
+# X-GNOME-Autostart-enabled is what the GNOME and Cinnamon startup-applications
+# panels toggle. Leaving it out would leave somebody who does not want this at
+# login with nothing to click but the file.
+X-GNOME-Autostart-enabled=true

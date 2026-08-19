@@ -1,0 +1,98 @@
+[Unit]
+Description=Ladulås SSH agent and approval daemon
+Documentation=https://github.com/hugowetterberg/ladulas
+After=graphical-session.target
+PartOf=graphical-session.target
+
+# This is the only unit, on a desktop as well as on a headless box. It used to
+# have an alternative — ladulas-tray.service, which ran a desktop application
+# that was an instance in its own right — and the two fought over the agent
+# socket, so they declared Conflicts= on each other and a desktop had to pick
+# one. Since decision Z the desktop application is a client of this daemon and
+# is started by a .desktop entry rather than by systemd, so there is nothing
+# left to conflict with: enable this, and the window attaches when it starts.
+
+[Service]
+Type=simple
+# The daemon takes over the SSH agent socket; approvals come from the terminal
+# on a headless box, from a paired peer, and from the desktop application when
+# one is attached over the control socket.
+#
+# Enable this before or after `ladulas init` — the order does not matter. A
+# daemon with no store starts and serves anyway, answering `ladulas status` and
+# `ladulas init`, and picks the store up without a restart when one is made
+# (§10, §14). Nothing but this process ever writes the store.
+ExecStart=%h/go/bin/ladulasd run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+
+# While it is unlocked this process holds the store key and the portable keys
+# in its heap, so a core dump is a copy of them that outlives the seal on disk.
+# The daemon also marks itself undumpable at startup (PR_SET_DUMPABLE); this is
+# the portable backstop for a launch that does not go through that path.
+LimitCORE=0
+
+# Everything lives under XDG paths; set these only to move the store.
+# Environment=LADULAS_DATA_DIR=%h/.local/share/ladulas
+# Environment=LADULAS_CONFIG_DIR=%h/.config/ladulas
+Environment=LADULAS_AGENT_SOCK=%t/ladulas/agent.sock
+# The signing socket is what ladulas-sign submits commits to, so it has to be
+# the same path the shell exports to git.
+Environment=LADULAS_SOCK=%t/ladulas/control.sock
+
+# The store is sealed at boot and this is how the unit asks for the passphrase
+# (§10, §14). `auto` is the same thing: with no terminal under systemd it uses
+# systemd-ask-password, which — running unprivileged — puts the request in
+# %t/systemd/ask-password for any agent of this user to answer:
+#
+#	systemd-tty-ask-password-agent --query      # in an SSH session
+#	ladulas unlock                              # the same thing, over the socket
+#
+# They really are the same thing, because the daemon opens its sockets before
+# it asks: whichever arrives first unseals the store, and the loser is taken
+# down rather than left standing. So a box that nobody has unlocked yet can
+# still be asked what is wrong with it, and a prompt that expired unanswered
+# costs nothing — `ladulas unlock` still works. `none` starts sealed without
+# asking at all.
+#
+# One thing a sealed instance cannot do is answer a pairing. Pairings under way
+# are written into the encrypted store beside the trust records (§7), so a box
+# that came back sealed with one waiting shows it — and can be told about it —
+# only once it is unlocked. `ladulas pairings list` says so rather than
+# answering emptily.
+Environment=LADULAS_UNLOCK=ask-password
+
+# Automatic locks (decision J). The defaults are what these lines say; they are
+# here to be edited rather than looked up.
+#
+#   lock  suspends approval at this machine and leaves the keys usable by a
+#         paired approver, which is what keeps a desktop reachable over SSH
+#         while its screen is locked;
+#   seal  wipes the store key. On suspend it takes a logind inhibitor so the
+#         key is gone before the machine goes down — the answer to a stolen
+#         sleeping laptop, at the cost of a passphrase on every wake and no
+#         remote signing while it is asleep;
+#   off   leaves the store alone.
+Environment=LADULAS_ON_SUSPEND=lock
+Environment=LADULAS_ON_SESSION_LOCK=lock
+# Off by default. A duration such as 30m locks after that long with nothing
+# decided.
+# Environment=LADULAS_IDLE_LOCK=30m
+# Environment=LADULAS_IDLE_LOCK_ACTION=lock
+
+# Prometheus metrics and pprof, on a port of their own and off unless this
+# line is uncommented (§14). Two reasons it is not a default: this is one
+# daemon per logged-in account, so a default port is a port two people on the
+# same box fight over, and while the store is unlocked the heap holds the store
+# key — a heap profile is a copy of the heap. Bind it somewhere only this
+# machine can reach unless there is a reason not to.
+# Environment=LADULAS_DEBUG_ADDR=127.0.0.1:9855
+
+# An instance that has run `ladulas keyring enrol` unlocks from the platform
+# keychain at start and never asks. That is an explicit opt-down, not a
+# default: read what `ladulas keyring` says it gives up first. Like every other
+# management verb it goes through this daemon, so run it against a running one.
+
+[Install]
+WantedBy=default.target
