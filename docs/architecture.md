@@ -1668,7 +1668,14 @@ it, each answering a way this could go wrong quietly:
   item and does not enter the store until somebody at that end says yes,
   because key material appearing unasked in a store is precisely the
   surprise the rest of this design refuses to allow, and because a paired
-  peer may well be a machine nobody is sitting at.
+  peer may well be a machine nobody is sitting at. Saying yes is
+  `ladulas keys accept`, and — since 2026-08-19 — the Keys screen of the
+  desktop window, where the offer is a count on the sidebar, a row above
+  the keys and a sheet with the fingerprint to compare in it (decision AF).
+  It was the command line alone for a milestone, on the one surface whose
+  premise is that somebody is sitting in front of it: the desktop could be
+  *sent* a key and had nowhere to answer, which reads from the outside as a
+  send that did nothing.
 * **Both ends audit it**, with the peer, the label, the fingerprint and
   the time — the sender at the send and the recipient at the acceptance.
 * **The sender keeps the key and writes down where it went.** A transfer
@@ -2167,16 +2174,35 @@ display rather than spending a second one. What arrives when the other
 machine uses it is an ordinary approval card, drawn by the renderer that
 draws every other one.
 
-*Make a key* is a name, a comment and a button on the Keys screen, and
-generation only: importing one is a file to pick and a passphrase to type
-into a webview, and `ladulas keys import` is where both belong. The Keys
-screen left the set of screens the poll may redraw when it grew that form —
-a name is typed a character at a time, any decision anywhere changes the
-instance payload, and a repaint four seconds later would empty the box.
+*Make a key* is a name, a comment and a button behind the **+** in the Keys
+screen's title bar (decision AF), and generation only: importing one is a
+file to pick and a passphrase to type into a webview, and `ladulas keys
+import` is where both belong. It was a card on the screen, above the keys,
+for one milestone, and that cost the Keys screen its place in the set the
+poll may redraw — a name is typed a character at a time, any decision
+anywhere changes the instance payload, and a repaint four seconds later
+emptied the box. A sheet is outside the pane, so the screen is back in the
+set and there is nothing under the poll to empty. **What must not come back
+is a text field drawn into a screen the poll repaints**, whichever screen
+grows one next.
 
-**Ending one is on the peer screen**, and it asks twice. The screen used to
-say, in as many words, that revoking was `ladulas peers revoke` and that a
-window able to do it is a window a stray click can unpair a machine from.
+*Accept a key* is the third, and it is the receiving half of decision S. A
+portable key handed over by a paired machine waits in the store and is not
+a key here until somebody at this end says so — and until 2026-08-19 the
+only thing anywhere that could say so was `ladulas keys accept`, on the one
+surface whose whole premise is that somebody is sitting in front of it. It
+is now a count on the Keys entry in the sidebar, a row at the top of the
+Keys screen and a section on Home, and answering one is a sheet: the
+fingerprint to compare, who sent it, a name to give it here — the store
+refuses a label it already holds, and the sender chose theirs on a machine
+that could not know what is here — and what each answer costs. Accepting is
+final in the sense the transfer already was; refusing keeps nothing, and
+the sender is not told and still holds the key.
+
+**Ending one is on the peer screen**, behind the cog in its title bar, and
+it asks twice. The screen used to say, in as many words, that revoking was
+`ladulas peers revoke` and that a window able to do it is a window a stray
+click can unpair a machine from.
 The premise was right and the conclusion was not: a machine somebody wants
 rid of — a lost phone, a rebuilt laptop — is exactly the case where the
 person is looking at the window and the terminal is the thing they have to
@@ -2187,6 +2213,15 @@ screens that cannot be undone by doing it again — it drops the direction,
 the borrowed keys, the promises made under the pairing and the connection
 it is holding — and it is the only one that asks twice, which is what keeps
 the asking meaningful.
+
+It shares the cog with the pairing's own facts — the fingerprint the two
+machines compared, which keys the peer may use, the addresses, when it was
+last connected. Both were rows down the screen, under everything a peer is
+*for*: the keys it lends and what it publishes. They are read once each, when
+two fingerprints are being compared or somebody is working out why a machine
+cannot be reached, and once ever, when a phone is lost — which is the
+definition of what belongs behind a cog rather than in front of one
+(decision AF).
 
 **Three rules the sidebar screens follow, all three learned on the phone.**
 A poll that found nothing new redraws nothing: the instance is re-read every
@@ -2894,6 +2929,7 @@ Added 2026-08-19:
 | AC | What a peer's "nobody to ask" counts as | **a report, not a decision: first *decision* wins.** An answer of `NO_APPROVER` from a paired peer goes where an approver that could not be reached goes — the request is denied only once every eligible approver has gone that way, and the prompts that are up stay up. It qualifies §2's "first response wins", which was flat and wrong in one case that turned out to be ordinary: a peer runs this same engine, and one with no approver of its own answers instantly because nothing was asked of anybody, so it won every race against a desktop prompt waiting on a person. An instance paired to a box like that had every signature and every SSH login denied, deterministically, with the peer's name on the refusal — pairing had removed the only way to get an answer instead of adding a second one. Narrow deliberately: only `NO_APPROVER`, only from a peer, and never an approval. A peer's timeout means somebody was asked and did not answer; a policy denial, a hard rule and a human saying no are decisions and settle the request as they always did. Rejected: excluding a peer with no approver from the eligible set up front, which is cheaper but needs the peer to keep advertising a fact that changes when somebody closes a laptop lid, and would still need this rule for the moment in between. Rationale in §9; the report is in `bugs/` |
 | AD | Who decides what a pairing is for | **the side displaying the code, once, for both sides.** `ladulas pair --listen --intent approver\|requester\|mutual` — an approver for this instance, an instance to approve for, or both — and the side that uses the code declares nothing: it is shown the sentence on its own confirmation and either agrees to that pairing or does not. Each record is that one answer and its mirror, because a peer that may ask us to approve is a peer we approve for. It replaces two independent declarations, one per side, each defaulting to "both", with nothing making them agree and neither side ever shown what the other had chosen — which is how an instance came to record "may approve for me" about a box with nobody at it and hand decision AC its veto. The intent is required rather than defaulted: guessing here is the thing being fixed. Changing what a pairing is for means removing the peer and pairing again, which is a limit and is meant to be one; `ladulas peers allow` still edits a record for somebody who knows exactly what they are doing. On the wire the joining side's direction fields are reserved rather than reused, and the answer it gets carries the intent it is agreeing to. Rationale in §7 |
 | AE | Where the pairing QR comes from | **a Go dependency, drawn by the bridge.** `rsc.io/qr` encodes and this repository renders the matrix to SVG, served on `/api/v1/pairings/qr` the way `pkg/avatar` serves a face — so the viewer bundle keeps its no-dependencies rule, which its own tests assert, and the phone gets the picture for nothing by being the other host of the same handler. It settles open question 6, which had been "the viewer takes its first dependency, or somebody writes an encoder, or `qrencode` stays the documented step" since M3, with the phone able to read a QR nothing here could draw. `qrencode` stays the documented step for a headless box, where the terminal's pixels are not Ladulås's to choose. The one response the bridge serves `no-store`: the string behind the picture is a five-minute single-use secret. Rejected: writing the encoder, which is Reed–Solomon over GF(256) plus four tables to be got exactly right, against a dependency that is 700 lines, unchanged since 2015 and read in an afternoon |
+| AF | Where a screen puts what it can start, and what it can take apart | **an icon in the pane's title bar, and a modal sheet behind it.** A screen in this window lists what is true; a form is neither a fact nor a list, and a screen that leads with one is a screen whose first line is not what somebody opened it for — the Keys pane greeted a reader with an empty text box above the keys they had come to look at, and the peer screen kept the pairing's own facts and the button that ends it below everything the peer is *for*. So: a **+** on Keys opens "make a new key", a **cog** on a machine opens the pairing and the way to end it, and both are `dialog` elements shown with `showModal`. Three things come with that and none of them is decoration. Escape closes a sheet and the window behind it is inert while one is up, neither of which this bundle has to implement. A sheet lives outside the pane, so the four-second poll cannot repaint a box somebody is typing into — which is what took the Keys screen out of the redrawn set when the form was on it, and what puts it back now the form is not (decision AA). And a sheet is thrown away when it closes, so reopening one starts again, which is the right answer for a form and would be the wrong one for a screen. The rule it sets: what a screen can *do* goes in the title bar, what a screen *is* stays in the pane, and a text field is never drawn into a screen the poll repaints. Rejected: a disclosure inside the pane, which is the same box on the same screen one click further away; and a route of its own per form, which the shell can carry — a fingerprint is base64 and the router takes everything after the first slash as the identifier, so `peer/<fp>/settings` is a peer named `<fp>/settings`. Extends decision AA; the sheets themselves are `ui.sheet` in the viewer bundle. Rationale in §12 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
@@ -3534,7 +3570,11 @@ Still open, to resolve during early implementation:
     paired peer — passphrase on the way out, an explicit acceptance on the
     way in, and the transfer written into both audit logs. The desktop half
     is a receiver and a `keys send`, because the store code is already the
-    same code (§10).
+    same code (§10). The receiver had no window until 2026-08-19: the
+    control calls were there from the start and the CLI used them, and the
+    desktop application listed neither what had arrived nor a way to answer
+    it, so a key sent to a laptop looked from the sending side like a key
+    sent into nothing.
 
     What it turned out to be: almost nothing in the store. `Vault` already
     decided per key rather than per instance, so a portable key on a phone

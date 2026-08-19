@@ -93,6 +93,14 @@ export const bridge = {
   // type, and neither belongs in a webview.
   generateKey: (label, comment) =>
     call("POST", "/keys", { label, comment: comment || "" }),
+  // Answering a key a paired machine handed this one (decision S). Accepting
+  // takes it into the store under the name given here, and refusing forgets it
+  // — the sender is not told either way, and still holds the key.
+  answerKeyOffer: (id, accept, label) =>
+    call("POST", "/keys/offers/" + encodeURIComponent(id) + "/answer", {
+      accept: Boolean(accept),
+      label: label || "",
+    }),
   reload: () => call("POST", "/reload"),
 
   // The two things that can be done to a promise already made (decision P):

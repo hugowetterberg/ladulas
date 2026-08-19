@@ -45,6 +45,8 @@ const ICONS = {
   given: ["M17 7 7 17", "M17 16.5V7H7.5"],
   taken: ["M7 17 17 7", "M7 7.5V17h9.5"],
   chevron: ["m9.5 6 6 6-6 6"],
+  plus: ["M12 5.5v13M5.5 12h13"],
+  close: ["M6.5 6.5l11 11M17.5 6.5l-11 11"],
   warning: ["M12 3.5 22 20H2z", "M12 9.5v4.5M12 17h.01"],
 };
 
@@ -77,6 +79,68 @@ export function icon(name, className) {
   }
 
   return svg;
+}
+
+// action is a button in the pane's title bar: an icon, and the word it means in
+// a tooltip rather than beside it (decision AF).
+//
+// It is where a screen puts the thing it can *start*, as opposed to the things
+// it lists. A form that is on the screen is a form that is in the way of the
+// screen — the Keys pane led with an empty text box above the keys somebody had
+// come to look at — and a title bar is the one place a desktop application has
+// always kept "and one more of these".
+export function action(iconName, label, onClick) {
+  const button = el("button", "action");
+
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(icon(iconName));
+  button.onclick = onClick;
+
+  return button;
+}
+
+// sheet is a modal over the pane: what an action in the title bar opens.
+//
+// It is a `dialog` rather than a pane of its own, and that is what buys the
+// three things a form needs and a screen cannot give it — Escape closes it, the
+// rest of the window is inert while it is up, and it lives outside the pane, so
+// the four-second poll repainting the screen underneath does not empty a box
+// somebody is halfway through typing into (§12). The Keys screen was taken out
+// of the redrawn set for exactly that reason and is back in it now.
+//
+// The node is thrown away when it closes: a sheet holds a form and a form holds
+// what was typed, and reopening one is asking to start again.
+export function sheet(title, ...children) {
+  const root = document.createElement("dialog");
+
+  root.className = "sheet";
+
+  const close = el("button", "sheet-close");
+
+  close.title = "Close";
+  close.setAttribute("aria-label", "Close");
+  close.append(icon("close"));
+  close.onclick = () => root.close();
+
+  append(root,
+    append(el("header", "sheet-head"), el("h2", null, title), close),
+    append(el("div", "sheet-body"), ...children));
+
+  root.addEventListener("close", () => root.remove());
+
+  document.body.append(root);
+
+  // showModal is what makes the rest of the window inert and Escape close it.
+  // A host whose webview does not have it gets a dialog that is merely on top,
+  // which is worse in every way except the one that matters: the form works.
+  if (typeof root.showModal === "function") {
+    root.showModal();
+  } else {
+    root.setAttribute("open", "");
+  }
+
+  return root;
 }
 
 // card is the panel everything sits in.

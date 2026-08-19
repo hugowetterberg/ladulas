@@ -40,14 +40,15 @@ const REFRESH_MS = 4000;
 // decision out of the log — and redrawing those would throw away what somebody is
 // looking at to show them the same thing again.
 //
-// Keys is not among them any more, and the reason is the form on it: a key's
-// name is typed a character at a time, and any decision anywhere changes the
-// instance payload, so a poll four seconds later would empty the box somebody
-// was halfway through filling. What it costs is a key generated at the command
-// line not appearing until the screen is opened again, which is the same thing
-// every other screen that fetches its own state already does. A key made here
-// still appears at once: answering asks for a repaint of its own.
-const LIVE = new Set(["home", "activity", "settings"]);
+// Keys is among them again. It was taken out when the "make a new key" form was
+// on the screen: a name is typed a character at a time, any decision anywhere
+// changes the instance payload, and a poll four seconds later emptied the box
+// somebody was halfway through filling. The form is a sheet now (decision AF)
+// and sheets live outside the pane, so there is no box under the poll to empty
+// — and the screen has something that has to arrive on its own again, which is
+// a key a paired machine has handed this one (decision S). What must not come
+// back is a text field drawn into a screen in this set.
+const LIVE = new Set(["home", "keys", "activity", "settings"]);
 
 // The store states that leave nothing else worth drawing (§10). A locked store
 // still has its keys, still lists its peers and can still be approved for by a
@@ -206,7 +207,12 @@ class Shell {
 
     append(items,
       this.navItem("home", "Home", "home", pending),
-      this.navItem("keys", "Keys", "key"),
+      // A key a paired machine has handed this one waits on the Keys screen and
+      // is counted here, the way a request waiting for an answer is counted on
+      // Home: it is the only part of a handover this end can do, and until the
+      // count was on the sidebar there was nothing anywhere to say one had
+      // arrived (decision S).
+      this.navItem("keys", "Keys", "key", (instance.offers || []).length),
       this.navItem("activity", "Activity", "clock"),
       this.navItem("documents", "Documents", "book"));
 
@@ -308,6 +314,12 @@ class Shell {
     }
 
     head.append(el("h1", null, screen.title));
+
+    // What the screen can start, or take apart, in the corner a desktop
+    // application has always kept it in (decision AF).
+    if (screen.actions && screen.actions.length) {
+      head.append(append(el("div", "pane-actions"), ...screen.actions));
+    }
 
     const body = append(
       el("div", screen.wide ? "pane-body wide" : "pane-body"), ...screen.body);

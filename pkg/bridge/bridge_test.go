@@ -1111,3 +1111,133 @@ func TestPairingsSectionShowsWhatHasNoCard(t *testing.T) {
 		t.Error("nothing was called off")
 	}
 }
+
+// A key a paired machine handed this instance is listed as waiting rather than
+// as held, and answering it is the one thing this end can do about a handover
+// (decision S).
+func TestKeyOffersAreListedAndAnswered(t *testing.T) {
+	arrived := time.Date(2026, 8, 19, 9, 30, 0, 0, time.UTC)
+
+	type answer struct {
+		id     string
+		accept bool
+		label  string
+	}
+
+	var answers []answer
+
+	session := bridge.NewSession(bridge.Options{
+		Name: "workstation",
+		KeyOffers: func() []*ladulasv1.KeyOfferInfo {
+			return []*ladulasv1.KeyOfferInfo{{
+				Id:              "offer-1",
+				PeerFingerprint: "SHA256:phone",
+				PeerName:        "iPhone",
+				Label:           "github",
+				Algorithm:       "ssh-ed25519",
+				Fingerprint:     "SHA256:portable",
+				ReceivedAt:      timestamppb.New(arrived),
+			}}
+		},
+		AnswerKeyOffer: func(
+			_ context.Context, id string, accept bool, label string,
+		) error {
+			answers = append(answers, answer{id, accept, label})
+
+			if id != "offer-1" {
+				return errors.New("no such offer")
+			}
+
+			return nil
+		},
+		Presenter: &presenter{},
+	})
+
+	server := httptest.NewServer(session.Handler())
+	t.Cleanup(server.Close)
+
+	resp, err := server.Client().Get(server.URL + "/api/v1/instance")
+	if err != nil {
+		t.Fatalf("get the instance: %v", err)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the instance: %v", err)
+	}
+
+	_ = resp.Body.Close()
+
+	var view bridge.InstanceView
+
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Waiting, not held: an offer that turned up among the keys would be a
+	// window saying the store holds something it does not.
+	if len(view.Keys) != 0 {
+		t.Errorf("an offer turned up among the keys: %+v", view.Keys)
+	}
+
+	if len(view.Offers) != 1 {
+		t.Fatalf("the instance lists %d offers", len(view.Offers))
+	}
+
+	offer := view.Offers[0]
+
+	if offer.ID != "offer-1" || offer.Peer != "iPhone" ||
+		offer.Fingerprint != "SHA256:portable" {
+		t.Errorf("the offer reads %+v", offer)
+	}
+
+	// When it arrived, twice: a sentence for the card and a stamp for the
+	// shell's own clock.
+	if offer.Received == "" {
+		t.Error("the offer does not say when it arrived")
+	}
+
+	if _, err := time.Parse(time.RFC3339, offer.ReceivedAt); err != nil {
+		t.Errorf("receivedAt is not a timestamp: %q", offer.ReceivedAt)
+	}
+
+	for _, tc := range []struct {
+		id     string
+		body   string
+		status int
+	}{
+		{"offer-1", `{"accept":true,"label":"  work  "}`, http.StatusOK},
+		{"offer-1", `{"accept":false}`, http.StatusOK},
+		{"gone", `{"accept":true}`, http.StatusBadRequest},
+	} {
+		resp, err := server.Client().Post(
+			server.URL+"/api/v1/keys/offers/"+tc.id+"/answer",
+			"application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatalf("answer %s: %v", tc.id, err)
+		}
+
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != tc.status {
+			t.Errorf("answering %q: status %d, want %d",
+				tc.id, resp.StatusCode, tc.status)
+		}
+	}
+
+	want := []answer{
+		{"offer-1", true, "work"},
+		{"offer-1", false, ""},
+		{"gone", true, ""},
+	}
+
+	if len(answers) != len(want) {
+		t.Fatalf("the host was asked %d times: %+v", len(answers), answers)
+	}
+
+	for i, got := range answers {
+		if got != want[i] {
+			t.Errorf("answer %d was %+v, want %+v", i, got, want[i])
+		}
+	}
+}

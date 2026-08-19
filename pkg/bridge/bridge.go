@@ -200,6 +200,20 @@ type Options struct {
 	// Borrowed lists the keys paired instances offer, reachable or not (§10,
 	// decision N). Optional: an instance with peering off borrows nothing.
 	Borrowed func() []*ladulasv1.BorrowedKeyStatus
+	// KeyOffers lists the portable keys paired machines have handed this
+	// instance and nobody has answered yet (decision S). Optional: a host
+	// attached to nothing, or to an instance with peering off, has none.
+	KeyOffers func() []*ladulasv1.KeyOfferInfo
+	// AnswerKeyOffer takes one into the store, or forgets it. Optional and
+	// separate from KeyOffers: a host can say a key is waiting without being
+	// where it is answered.
+	//
+	// Label is what to call the key here, and empty keeps the sender's — which
+	// the store refuses when it already holds a key by that name, so a surface
+	// that offers this should offer somewhere to type another one.
+	AnswerKeyOffer func(
+		ctx context.Context, id string, accept bool, label string,
+	) error
 	// Grants lists the live TTL grants, and RevokeGrant takes one back (§9).
 	// Both optional, and optional separately: a host can show what it has
 	// promised without being the place the promise is withdrawn.
@@ -790,6 +804,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
 	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
 	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
+	mux.HandleFunc("POST /api/v1/keys/offers/{id}/answer", s.handleAnswerKeyOffer)
 	// {session} is last of the /pairings/ routes by convention rather than by
 	// necessity — ServeMux prefers the more specific pattern — but a reader
 	// checking that "invite" cannot be read as a session id should not have to
@@ -1015,6 +1030,12 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	if s.opts.KeyOffers != nil {
+		for _, offer := range s.opts.KeyOffers() {
+			view.Offers = append(view.Offers, keyOfferView(offer))
+		}
+	}
+
 	if s.opts.Grants != nil {
 		grants, err := s.opts.Grants()
 		if err != nil {
@@ -1213,6 +1234,49 @@ func (s *Session) handleGenerateKey(w http.ResponseWriter, r *http.Request) {
 		Algorithm:   key.GetAlgorithm(),
 		Comment:     key.GetComment(),
 	})
+}
+
+// handleAnswerKeyOffer takes a key a peer handed over into the store, or
+// forgets it (decision S).
+//
+// It is the receiving half of the one transfer in this system that moves key
+// material, and the reason it needs a surface at all is that the sender cannot
+// finish it: a key arrives and waits, and until somebody at this end says yes
+// it is not a key here. That was `ladulas keys accept` and nothing else, on a
+// machine whose owner was looking at a window.
+//
+// Refusing is a deletion and reports nothing back to the sender, which is
+// deliberate — the record worth having is on the side that still holds the key
+// (decision S) — so the surface says what it costs rather than asking twice.
+func (s *Session) handleAnswerKeyOffer(w http.ResponseWriter, r *http.Request) {
+	if s.opts.AnswerKeyOffer == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot answer a key offer")
+
+		return
+	}
+
+	var body struct {
+		Accept bool   `json:"accept"`
+		Label  string `json:"label"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	err := s.opts.AnswerKeyOffer(r.Context(),
+		r.PathValue("id"), body.Accept, strings.TrimSpace(body.Label))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleWithdraw calls a pairing off from the viewer.

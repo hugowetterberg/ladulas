@@ -1073,8 +1073,29 @@ body.app > main {
   border-bottom: 1px solid var(--border);
 }
 
-.pane-head h1 { font-size: 19px; margin: 0; }
+.pane-head h1 { font-size: 19px; margin: 0; flex: 1 1 auto; min-width: 0; }
 .pane-head button.back { font-size: 12px; padding: 5px 10px; }
+
+/* What a screen can start, or take apart, in the corner of its own title bar
+   (decision AF). An icon and a tooltip: the pane already says which screen this
+   is, so a + on Keys and a cog on a machine need no second word beside them —
+   and a title bar with two words in it is a toolbar, which is the thing this is
+   deliberately not. */
+.pane-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+
+button.action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--text-dim);
+}
+
+button.action:hover:not(:disabled) { color: var(--text); }
+button.action .icon { width: 17px; height: 17px; }
 
 .pane-body {
   display: flex;
@@ -1402,11 +1423,87 @@ button.danger:hover:not(:disabled) {
 
 .field input:focus { outline: 2px solid var(--border-strong); }
 
-.card.new-key .section-label:first-child { margin-top: 0; }
-
 button.primary {
   border-color: var(--accent);
   color: var(--accent);
 }
 
 button.primary:hover:not(:disabled) { background: var(--control-hover); }
+
+/* Sheets ------------------------------------------------------------------
+
+   A modal over the pane, opened by an action in the title bar (decision AF). It
+   is a `dialog`, so the rest of the window is inert while it is up and Escape
+   closes it without anything here having to say so — and it is outside the pane,
+   so the four-second poll repainting the screen underneath cannot empty a box
+   somebody is typing into.
+
+   Positioned by hand rather than by the user agent's centring, because a form
+   that is taller than the window has to scroll inside itself: the height is
+   capped and the body is what overflows, so the heading and the close button
+   stay where they were put. */
+dialog.sheet {
+  width: min(520px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 13px;
+  background: var(--bg-raised);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* Only while it is open: an author rule beats the user agent's
+   `dialog:not([open]) { display: none }` whatever its specificity, so a bare
+   `display: flex` here would draw every sheet the moment it was built. */
+dialog.sheet[open] { display: flex; flex-direction: column; }
+
+dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 12px 17px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* A sheet's title is a title, not a section label: the bundle's h2 is the small
+   uppercase heading a prompt card divides itself with, and this is the same
+   thing the pane's h1 is one size down. */
+.sheet-head h2 {
+  font-size: 15px;
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+button.sheet-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--text-dim);
+}
+
+button.sheet-close:hover:not(:disabled) { color: var(--text); }
+button.sheet-close .icon { width: 15px; height: 15px; }
+
+.sheet-body {
+  padding: 14px 17px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The first heading in a sheet has the header above it and needs no air of its
+   own; the ones after it separate the parts of the form. */
+.sheet-body > .section-label:first-child { margin-top: 0; }

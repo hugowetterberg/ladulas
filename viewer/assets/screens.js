@@ -54,6 +54,21 @@ export function home(state, go) {
       ui.ticking(el("span", "when"), item.since)));
   }
 
+  // A key a paired machine has handed this one is waiting for somebody here too,
+  // and it is the half of a handover that this end alone can finish (decision
+  // S). It is not in the section above because that one is approval requests,
+  // each with a card and a popup of its own; this has neither and would
+  // otherwise be visible only on the Keys screen. Drawn only when there is one.
+  const offers = instance.offers || [];
+
+  if (offers.length) {
+    body.push(ui.heading("Keys handed to this instance", offers.length));
+
+    for (const offer of offers) {
+      body.push(offerRow(offer, state));
+    }
+  }
+
   // A pairing this side has already answered has no card and never will: what it
   // is waiting for is a person at the other machine. Without a row here there
   // would be no way to see one, let alone call it off (§7).
@@ -300,13 +315,30 @@ export function keys(state) {
   const body = [];
   const instance = state.instance;
   const held = instance.keys || [];
+  const offers = instance.offers || [];
+
+  // A key a paired machine has handed this one is the only thing on this screen
+  // that is a question rather than a fact, so it is above the answers (§12,
+  // decision S). The section is drawn only when there is one: an instance
+  // nobody has ever sent a key would otherwise carry a heading about a
+  // mechanism instead of about itself.
+  if (offers.length) {
+    body.push(ui.heading("Handed to this instance", offers.length));
+    body.push(ui.note("A paired machine has copied a key here. It is not in "
+      + "the store, signs nothing and is offered to no agent until somebody "
+      + "at this end accepts it."));
+
+    for (const offer of offers) {
+      body.push(offerRow(offer, state));
+    }
+  }
 
   body.push(ui.heading("In this instance's store", held.length));
 
   if (!held.length) {
     body.push(ui.empty("No keys",
-      "Making one below puts it in the daemon's store. This window shows "
-      + "keys and never holds one."));
+      "The + above makes one in the daemon's store. This window shows keys "
+      + "and never holds one."));
   }
 
   for (const key of held) {
@@ -319,8 +351,6 @@ export function keys(state) {
         key.algorithm ? el("span", "algorithm", key.algorithm) : null),
       ui.fingerprint(key.fingerprint, true)));
   }
-
-  body.push(newKeyCard(state));
 
   // Every key a peer offers is listed whether or not its holder is there, which
   // is the whole point of remembering them: a phone is out of reach most of the
@@ -352,17 +382,121 @@ export function keys(state) {
         : null));
   }
 
-  return { title: "Keys", body };
+  return {
+    title: "Keys",
+    actions: [ui.action("plus", "Make a new key", () => newKeySheet(state))],
+    body,
+  };
 }
 
-// newKeyCard makes a key in the daemon's store.
+// offerRow is one key waiting to be answered, and answering it is a sheet
+// rather than two buttons on the row.
+//
+// Accepting is the one thing this window does that puts key material into the
+// store, and what makes it safe to do is comparing the fingerprint with the
+// machine that sent it — which is not something a row has room for. The sheet
+// is where the fingerprint, the sender and what accepting costs are all on
+// screen at the moment the button is pressed.
+function offerRow(offer, state) {
+  return ui.row("wants-answer",
+    () => offerSheet(offer, state),
+    ui.icon("taken", "kind"),
+    ui.stack(
+      ui.title(offer.label || "A key"),
+      ui.sub("From " + offer.peer)),
+    ui.ticking(el("span", "when"), offer.receivedAt));
+}
+
+// offerSheet takes a key into the store, or forgets it (decision S).
+//
+// Both answers are final in their own direction and the sheet says so rather
+// than asking twice: accepting means the key exists on two machines from then
+// on and there is no un-sending it, and refusing keeps nothing here — the
+// sender is not told, still holds the key, and would have to send it again.
+//
+// The name is a field because the store refuses a label it already holds, and
+// the sender chose this one on a machine that could not know what is here. It
+// starts as the sender's, which is what the command line does when nobody says
+// otherwise.
+function offerSheet(offer, state) {
+  const name = field("Name here", offer.label || "a key", "text");
+
+  name.input.value = offer.label || "";
+
+  const accept = el("button", "primary", "Accept the key");
+  const refuse = el("button", "danger", "Refuse and forget it");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  const sheet = ui.sheet("A key from " + offer.peer,
+    ui.card("key-card",
+      append(el("div", "card-head"),
+        ui.icon("key", "kind"),
+        ui.stack(
+          ui.title(offer.label || "A key"),
+          offer.comment ? ui.sub(offer.comment) : null),
+        offer.algorithm ? el("span", "algorithm", offer.algorithm) : null),
+      ui.fingerprint(offer.fingerprint, true)),
+    ui.note("Compare that fingerprint with the machine that sent it. Nothing "
+      + "else about this key was checked: the transfer proves which paired "
+      + "machine it came from and not which key was meant."),
+    facts([
+      { label: "Sent by", value: offer.peer },
+      { label: "Its fingerprint", value: offer.peerFingerprint, mono: true },
+      { label: "Arrived", value: offer.received },
+    ]),
+    ui.heading("Accepting"),
+    name.root,
+    ui.note("Accepting copies the private half into this instance's store, "
+      + "where it signs like any other key. The key then exists on both "
+      + "machines and nothing can take it back — a key sent to the wrong "
+      + "machine has to be rotated, exactly like one that leaked. Refusing "
+      + "keeps nothing here; " + offer.peer + " is not told and still holds "
+      + "it."),
+    append(el("div", "card-actions"), accept, refuse),
+    said);
+
+  const answer = (yes) => {
+    accept.disabled = true;
+    refuse.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .answerKeyOffer(offer.id, yes, yes ? name.input.value : "")
+      .then(() => {
+        sheet.close();
+        state.refresh();
+      })
+      .catch((error) => {
+        accept.disabled = false;
+        refuse.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  accept.onclick = () => answer(true);
+  refuse.onclick = () => answer(false);
+
+  name.input.focus();
+}
+
+// newKeySheet makes a key in the daemon's store, behind the + in the title bar
+// (decision AF).
 //
 // A name and, optionally, the comment that rides along in the public half —
 // which is what an `authorized_keys` line says the key is, so it is worth
 // filling in and is nobody's secret. Importing an existing key is not here:
 // that is a file to pick and a passphrase to type into a webview, and `ladulas
 // keys import` is where both belong (decision S).
-function newKeyCard(state) {
+//
+// It used to be a card on the screen, above the keys. Two things were wrong
+// with that and only one of them was the clutter: an empty form is not what
+// somebody who opened Keys came to read, and a text box on a screen the poll
+// repaints is a box that empties itself, which is why Keys had to be taken out
+// of the redrawn set to hold it (shell.js).
+function newKeySheet(state) {
   const label = field("Name", "work", "text");
   const comment = field("Comment", "hugo@guppy", "text");
   const make = el("button", "primary", "Generate a key");
@@ -370,19 +504,26 @@ function newKeyCard(state) {
 
   said.hidden = true;
 
+  const sheet = ui.sheet("Make a new key",
+    label.root,
+    comment.root,
+    ui.note("An ed25519 key, generated by the daemon and kept in its "
+      + "encrypted store. Nothing offers it to an agent or lends it to a "
+      + "paired machine until you say so."),
+    append(el("div", "card-actions"), make),
+    said);
+
   make.onclick = () => {
     make.disabled = true;
     said.hidden = true;
 
     bridge
       .generateKey(label.input.value, comment.input.value)
-      .then((key) => {
-        label.input.value = "";
-        comment.input.value = "";
-        said.textContent = key.label + " — " + key.fingerprint;
-        said.hidden = false;
-        make.disabled = false;
-
+      .then(() => {
+        // The confirmation is the key itself, at the bottom of the list the
+        // sheet was covering — so this closes rather than reporting a
+        // fingerprint nobody can compare with anything yet.
+        sheet.close();
         state.refresh();
       })
       .catch((error) => {
@@ -392,15 +533,7 @@ function newKeyCard(state) {
       });
   };
 
-  return ui.card("new-key",
-    ui.heading("Make a new key"),
-    label.root,
-    comment.root,
-    ui.note("An ed25519 key, generated by the daemon and kept in its "
-      + "encrypted store. Nothing offers it to an agent or lends it to a "
-      + "paired machine until you say so."),
-    append(el("div", "card-actions"), make),
-    said);
+  label.input.focus();
 }
 
 // field is a labelled input. The label is a real one rather than a placeholder:
@@ -543,24 +676,6 @@ export async function peer(state, fingerprint, go) {
           + "connected is not the same as not being available."))));
   }
 
-  body.push(ui.heading("The pairing"));
-  body.push(ui.card(null, facts([
-    { label: "Fingerprint", value: found.fingerprint, mono: true },
-    { label: "May use keys", value: keyAccess(found) },
-    ...(found.addresses || []).map((address, index) => ({
-      label: index === 0 ? "Addresses" : "",
-      value: address,
-      mono: true,
-    })),
-    // Only for a peer this instance dials: for one that dials in, the card above
-    // has already said it, in a sentence rather than as a row.
-    found.dialable
-      ? { label: "Last connected", value: found.lastSeen }
-      : null,
-  ]),
-  ui.note("The fingerprint is what the two machines compared when they "
-    + "paired.")));
-
   const borrowed = (state.instance.borrowed || [])
     .filter((key) => key.peer === found.name);
 
@@ -616,10 +731,48 @@ export async function peer(state, fingerprint, go) {
         ui.empty("Could not ask " + found.name, error.message));
     });
 
-  body.push(ui.heading("End the pairing"));
-  body.push(revokeCard(found, state, go));
+  return {
+    title: found.name,
+    actions: [ui.action("gear", "The pairing",
+      () => pairingSheet(found, state, go))],
+    body,
+  };
+}
 
-  return { title: found.name, body };
+// pairingSheet is what the cog on the peer screen opens (decision AF): what the
+// pairing is, and the one way to end it.
+//
+// Both were down the screen, under everything a peer is *for* — the keys it
+// lends and what it publishes — and they belong together rather than apart. The
+// facts are read once, when two machines are being compared or somebody is
+// working out why a peer cannot be reached; ending the pairing is read once
+// ever. What a person opens a peer for is what it does, and neither of these
+// is that.
+function pairingSheet(peer, state, go) {
+  const sheet = ui.sheet("Paired with " + peer.name,
+    ui.card(null, facts([
+      { label: "Fingerprint", value: peer.fingerprint, mono: true },
+      { label: "May use keys", value: keyAccess(peer) },
+      ...(peer.addresses || []).map((address, index) => ({
+        label: index === 0 ? "Addresses" : "",
+        value: address,
+        mono: true,
+      })),
+      // Only for a peer this instance dials: for one that dials in, the screen
+      // behind this has already said it, in a sentence rather than as a row.
+      peer.dialable
+        ? { label: "Last connected", value: peer.lastSeen }
+        : null,
+    ]),
+    ui.note("The fingerprint is what the two machines compared when they "
+      + "paired.")),
+    ui.heading("End the pairing"),
+    revokeCard(peer, state, () => {
+      sheet.close();
+      go("home");
+    }));
+
+  return sheet;
 }
 
 // revokeCard forgets a machine, and asks twice before it does.
@@ -629,7 +782,7 @@ export async function peer(state, fingerprint, go) {
 // the promises made under it and the connection it is holding, and getting any
 // of it back means pairing from scratch at both machines. The second press is
 // what a stray click cannot produce.
-function revokeCard(peer, state, go) {
+function revokeCard(peer, state, done) {
   const revoke = el("button", "danger", "Revoke this pairing");
   const sure = ui.note("");
 
@@ -654,7 +807,7 @@ function revokeCard(peer, state, go) {
       .revokePeer(peer.fingerprint)
       .then(() => {
         state.refresh();
-        go("home");
+        done();
       })
       .catch((error) => {
         revoke.disabled = false;

@@ -368,6 +368,19 @@ fingerprint, where its files are, and the lock, seal and reload verbs. A sealed
 store shows the passphrase panel in place of the screens, and the window opens
 itself once when it attaches to an instance that is sealed.
 
+**What a screen can do is an icon in its title bar** (decision AF), and a sheet
+opens behind it: **+** on Keys makes a key, and the **cog** on a paired machine
+holds the pairing's fingerprint, addresses and key access, and the button that
+ends it. What a screen *is* stays in the pane.
+
+**A key another machine handed this one** — `ladulas keys send` at that end
+(decision S) — waits on the Keys screen and is counted beside `Keys` in the
+sidebar. Accepting it is a sheet: the fingerprint to compare with the sending
+machine, the name it takes here, and what each answer costs. Accepting puts the
+private half in this store, where it signs like any other key; refusing keeps
+nothing, and the sender is not told and still holds it. `ladulas keys offers`,
+`keys accept` and `keys refuse` are the same thing at a terminal.
+
 **A popup per request**, small, centred and above the others, the way 1Password
 and OpenSnitch ask. Only one is on screen at a time: the rest queue, and the
 closing of the one in front starts the next, so a burst of signatures is never a

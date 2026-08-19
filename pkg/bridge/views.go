@@ -415,14 +415,65 @@ type BorrowedKeyView struct {
 	HeldHere bool `json:"heldHere,omitempty"`
 }
 
+// KeyOfferView is a portable key a paired machine has handed this instance and
+// nobody here has answered yet (decision S).
+//
+// It is not a KeyView with a flag on it: an offer is not a key this instance
+// holds, and the whole point of the design is that it does not become one until
+// somebody says so. What the surface needs is the fingerprint to compare, who
+// sent it, and when it arrived — the private half never reaches a viewer, which
+// is the same rule KeyView follows for the keys that were accepted.
+type KeyOfferView struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Comment     string `json:"comment,omitempty"`
+	Algorithm   string `json:"algorithm,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	// Peer is the name this instance gave the machine that sent it, and
+	// PeerFingerprint what the two compared when they paired.
+	Peer            string `json:"peer"`
+	PeerFingerprint string `json:"peerFingerprint,omitempty"`
+	// Received says when it arrived twice, for the same reason a grant says
+	// when it runs out twice: the sentence is what a card wants, and the
+	// timestamp is what a shell counting the minutes needs.
+	Received   string `json:"received,omitempty"`
+	ReceivedAt string `json:"receivedAt,omitempty"`
+}
+
+// keyOfferView renders one offer for a viewer.
+func keyOfferView(offer *ladulasv1.KeyOfferInfo) KeyOfferView {
+	view := KeyOfferView{
+		ID:              offer.GetId(),
+		Label:           offer.GetLabel(),
+		Comment:         offer.GetComment(),
+		Algorithm:       offer.GetAlgorithm(),
+		Fingerprint:     offer.GetFingerprint(),
+		Peer:            offer.GetPeerName(),
+		PeerFingerprint: offer.GetPeerFingerprint(),
+	}
+
+	if at := offer.GetReceivedAt(); at != nil {
+		local := at.AsTime().Local()
+
+		view.Received = local.Format(time.RFC1123)
+		view.ReceivedAt = local.Format(time.RFC3339)
+	}
+
+	return view
+}
+
 // InstanceView is the status pane.
 type InstanceView struct {
-	Name        string             `json:"name"`
-	Fingerprint string             `json:"fingerprint"`
-	Locations   []LocationView     `json:"locations,omitempty"`
-	Keys        []KeyView          `json:"keys,omitempty"`
-	Borrowed    []BorrowedKeyView  `json:"borrowed,omitempty"`
-	Grants      []GrantSummaryView `json:"grants,omitempty"`
+	Name        string            `json:"name"`
+	Fingerprint string            `json:"fingerprint"`
+	Locations   []LocationView    `json:"locations,omitempty"`
+	Keys        []KeyView         `json:"keys,omitempty"`
+	Borrowed    []BorrowedKeyView `json:"borrowed,omitempty"`
+	// Offers are the portable keys paired machines have handed this instance
+	// and nobody has answered (decision S). Waiting for somebody rather than
+	// held, which is why they are not in Keys.
+	Offers []KeyOfferView     `json:"offers,omitempty"`
+	Grants []GrantSummaryView `json:"grants,omitempty"`
 	// Delegations are the promises somebody else made about this instance,
 	// which it keeps for itself (decision P). The other side of Grants, and a
 	// separate list because they are answered from here and revoked elsewhere.

@@ -137,6 +137,51 @@ func (f *Frontend) borrowed() []*ladulasv1.BorrowedKeyStatus {
 	return status.GetBorrowedKeys()
 }
 
+// keyOffers and answerKeyOffer are the receiving half of decision S over the
+// socket: what paired machines have handed this instance, and taking one into
+// the store or forgetting it.
+//
+// A sealed instance has nothing to list rather than a failure to report, which
+// is what the keys listing above already does — the window is one of the things
+// somebody opens to find out why nothing works.
+func (f *Frontend) keyOffers() []*ladulasv1.KeyOfferInfo {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := f.client.ListKeyOffers(ctx,
+		connect.NewRequest(&ladulasv1.ListKeyOffersRequest{}))
+	if err != nil {
+		f.log.Debug("could not list the key offers", "error", err.Error())
+
+		return nil
+	}
+
+	return resp.Msg.GetOffers()
+}
+
+func (f *Frontend) answerKeyOffer(
+	ctx context.Context, id string, accept bool, label string,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	_, err := f.client.AnswerKeyOffer(ctx, connect.NewRequest(
+		&ladulasv1.AnswerKeyOfferRequest{
+			Id:     id,
+			Accept: accept,
+			Label:  label,
+		}))
+	if err != nil {
+		if accept {
+			return fmt.Errorf("accept the key: %w", err)
+		}
+
+		return fmt.Errorf("refuse the key: %w", err)
+	}
+
+	return nil
+}
+
 func (f *Frontend) grants() ([]*ladulasv1.Grant, error) {
 	ctx, cancel := call()
 	defer cancel()
