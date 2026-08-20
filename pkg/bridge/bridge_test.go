@@ -194,6 +194,18 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) decide(t *testing.T, req *approval.Request) chan *approval.Answer {
 	t.Helper()
 
+	// What this waits for is one *more* request on screen, not the first one.
+	//
+	// It waited for `count() == 0` to stop being true, and the presenter's
+	// count never goes down — so on a fixture that decides twice the second
+	// call went straight through the wait and returned before the deciding
+	// goroutine had registered anything. Every read after that raced the
+	// registration, and losing the race is a 404 from
+	// `/api/v1/requests/{id}` saying the request is no longer waiting. It lost
+	// it on a loaded CI runner and took a release with it, having passed
+	// thirty runs in a row on a quiet machine.
+	before := f.presenter.count()
+
 	answers := make(chan *approval.Answer, 1)
 
 	go func() {
@@ -208,11 +220,11 @@ func (f *fixture) decide(t *testing.T, req *approval.Request) chan *approval.Ans
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for f.presenter.count() == 0 && time.Now().Before(deadline) {
+	for f.presenter.count() == before && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 
-	if f.presenter.count() == 0 {
+	if f.presenter.count() == before {
 		t.Fatal("the request was never presented")
 	}
 
