@@ -63,16 +63,18 @@ func (k *KnownHosts) Annotate(hostKey *ladulasv1.HostKey) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	blobKey := string(hostKey.GetBlob())
-
-	if names, ok := k.entries[blobKey]; ok {
+	// The conversion is written out at each lookup rather than kept in a
+	// variable, which reads worse and allocates less: indexing a map with
+	// `string(b)` is the one case the compiler is allowed to skip the copy for,
+	// and it cannot do that for a string somebody named first.
+	if names, ok := k.entries[string(hostKey.GetBlob())]; ok {
 		hostKey.Known = true
 		hostKey.KnownHostsNames = names
 
 		return
 	}
 
-	if k.hashed[blobKey] {
+	if k.hashed[string(hostKey.GetBlob())] {
 		hostKey.Known = true
 	}
 }

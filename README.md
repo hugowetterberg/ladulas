@@ -109,7 +109,7 @@ separately; the protoc plugins are `go tool` entries in `go.mod`.
 | `make build` | Builds every binary into a scratch directory, never the tree |
 | `make gui` | Builds `ladulas` with the desktop application (`GUI_TAGS=gui,gtk3` for GTK 3) |
 | `make install` | `go install`s the desktop binary, the daemon and the signer |
-| `make lint` | `golangci-lint run`, which must be clean |
+| `make lint` | `golangci-lint run`, which must be clean. CI pins **v2.13.0**; a local copy that is older will pass things the release job fails |
 | `make test` | `go test ./...` |
 | `make generate` | `buf lint`, `buf generate`, `go mod tidy` — the only way protobuf is regenerated |
 | `make viewer` | The checks that keep the viewer bundle self-contained |

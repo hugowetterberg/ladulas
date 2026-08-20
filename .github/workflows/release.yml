@@ -59,10 +59,18 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Pinned, and not to `latest`, because `latest` makes a linter release a
+      # commit nobody made to this repository. v2.13.0 turned four files red
+      # that had been green for months — three staticcheck findings the older
+      # version did not report, and one gofmt disagreement that only its own
+      # embedded gofmt has — and the first anybody heard of it was a failed
+      # release over an already-published tag. A linter upgrade is a change to
+      # this tree and belongs in a commit that can be tested before a tag
+      # depends on it.
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.13.0
 
       # The GTK packages are built from source on the user's machine, which
       # means a compile error in the tray does not surface here — it surfaces

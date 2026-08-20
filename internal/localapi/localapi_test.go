@@ -64,13 +64,22 @@ func (a *approver) SubmitSigned(
 ) (*ladulasv1.ApprovalResponse, *ladulasv1.SignedApproval, error) {
 	a.requests = append(a.requests, req)
 
-	return &ladulasv1.ApprovalResponse{
-			Decision: a.decision,
-			Source:   ladulasv1.DecisionSource_DECISION_SOURCE_POLICY,
-			Reason:   "the test said so",
-		}, &ladulasv1.SignedApproval{
-			ApproverFingerprint: "SHA256:test",
-		}, nil
+	// Named rather than returned as three literals on one statement. The
+	// indentation gofmt wants for a composite literal inside a multi-value
+	// return has changed between Go versions, and CI's linter carries a gofmt
+	// of its own — so the shape that is formatted the same way by every one of
+	// them is the shape that does not have the construct in it.
+	resp := &ladulasv1.ApprovalResponse{
+		Decision: a.decision,
+		Source:   ladulasv1.DecisionSource_DECISION_SOURCE_POLICY,
+		Reason:   "the test said so",
+	}
+
+	signed := &ladulasv1.SignedApproval{
+		ApproverFingerprint: "SHA256:test",
+	}
+
+	return resp, signed, nil
 }
 
 type fixture struct {

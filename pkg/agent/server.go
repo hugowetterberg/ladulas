@@ -283,10 +283,15 @@ func (s *Server) handle(conn net.Conn) {
 	c := &connAgent{server: s, peer: peer}
 
 	// ServeAgent returns when the connection closes, which is an ordinary EOF
-	// rather than a problem.
-	err = sshagent.ServeAgent(c, conn)
-	if err != nil && !errors.Is(err, io.EOF) {
-		s.log.Debug("agent connection ended", "error", err.Error())
+	// rather than a problem — and it never returns nil, because the only way
+	// out of its loop is a read that failed. So what is sorted here is which
+	// kind of ending it was; the `err != nil` that used to be in front of this
+	// was a comparison that could not be false, which is what staticcheck's
+	// SA4023 is for. The value is handed to the logger rather than its
+	// Error(), so that a future version of x/crypto returning nil is a line
+	// reading <nil> instead of a panic in the accept loop.
+	if err := sshagent.ServeAgent(c, conn); !errors.Is(err, io.EOF) {
+		s.log.Debug("agent connection ended", "error", err)
 	}
 }
 
