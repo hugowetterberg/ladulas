@@ -26,40 +26,59 @@ renumbered, and a decision letter is never reused. A new decision takes the
 next free letter and goes in the table at the end of §19 with a dated
 heading.
 
-## The daemon on this machine is not the tree
+## Nothing here describes a particular machine
 
-Hugo's own instance runs as a systemd **user** unit, and as of 2026-08-19
-that unit is the **package's**: `/usr/lib/systemd/user/ladulas.service`,
-installed by `ladulas-bin`, running `/usr/bin/ladulasd`. So
+**This file is committed, and Ladulås runs on more than one box** — which
+is the whole point of it, a laptop approving for a headless box approving
+for a phone. So a paragraph here that says "this machine" is a paragraph
+that is wrong on every machine but one, and it will be read on all of
+them. Unit paths, drop-ins, which package is installed, which webkit is
+present, which host the relay is on: **none of that goes in this file.**
+It goes in `CLAUDE.local.md`, which is untracked, is loaded after this file
+on the box it is written on, and is the right place for "the daemon here
+runs from …". Facts about a deployment that outlive one machine's setup
+belong in [ops.md](docs/ops.md).
 
-```
-make install
-systemctl --user restart ladulas.service
-```
+This is written down because it went the other way for a while: this file
+carried a section describing Hugo's own box, and it drifted — it named the
+wrong package and claimed a GTK 4 webkit the box did not have, so the
+build it prescribed could not run there at all. A machine description in a
+shared file is not merely misplaced, it is unverifiable by anyone standing
+anywhere else, and it goes stale silently.
 
-**installs into `~/go/bin` and then restarts a binary in `/usr/bin`, and
-changes nothing that is running.** This file used to claim the unit ran
-from `~/go/bin`; it did not, and the sequence above was being run as if it
-were a deployment for some time before anybody checked.
+## The daemon you are debugging is not the tree
 
-**Check `ExecStart` before believing anything about live behaviour:**
+Ladulås is usually **installed** on the machine it is developed on, so the
+running daemon and the checkout are two different things and a change is
+not live until you have shown that it is.
 
-```
-systemctl --user show ladulas.service -p ExecStart --value
-ls -l /usr/bin/ladulasd ~/go/bin/ladulasd
-```
+**Check what is actually running before believing anything about live
+behaviour.** `systemctl --user cat ladulas.service` is the one that
+answers it: which unit file is in force — a package's in
+`/usr/lib/systemd/user/`, a hand-copied one in `~/.config/systemd/user/`,
+plus any drop-in — and which binary its `ExecStart` names. ops.md's
+[installed from a package rather than `go install`](docs/ops.md#installed-from-a-package-rather-than-go-install)
+has the ways those get crossed. `ladulas status` is the other half, and
+note that `ladulas` on `$PATH` may not be the binary the daemon is —
+compare mtimes against the process start time before believing a symptom.
+"The feature does nothing", "the feature is not running" and "the feature
+is not installed where the unit looks" are indistinguishable from outside.
 
-`ladulas status` is the other half of the check, and note that `ladulas`
-on `$PATH` may not be the binary the daemon is — compare the mtimes
-against the process start time before believing a symptom. "The feature
-does nothing" and "the feature is not running" look identical from the
-outside, and so do "the feature is not installed where the unit looks".
+**Which build command is right depends on the box.** `make install`
+defaults to `GUI_TAGS=gui`, which is Wails' GTK 4 and wants
+`webkitgtk-6.0`; a GTK 3 box needs `make GUI_TAGS=gui,gtk3 install` and a
+headless one wants `make install-headless`. Getting it wrong is not a
+partial install — `make install` builds `ladulas` first, so a missing
+webkit fails in `pkg-config` and installs **nothing**, including
+`ladulasd`, which needs no GUI and would have built fine. README's
+[packages table](README.md) is which is which.
 
-**`make install`, not `go install`** — this machine has GTK 4 and
-`webkitgtk-6.0`, so `ladulas` here is always built with the desktop
-application in it (`-tags gui`, the Makefile's default `GUI_TAGS`). A
-binary installed without it is a binary whose `gui` command refuses to run,
-and the difference is invisible until somebody asks for a window.
+**Where a package owns the unit**, `ExecStart` names `/usr/bin/ladulasd`
+and installing into `$GOPATH/bin` changes nothing that runs.
+`make install-dropin` overrides `ExecStart` to the installed binary and
+`make uninstall-dropin` takes it back out. Neither restarts the service:
+that is deliberate, because a restart seals the store and somebody has to
+unlock it again.
 
 **The desktop application is a second process** (decision Z): `ladulas gui`
 is a client of the daemon, started from a `.desktop` entry rather than a
@@ -73,47 +92,30 @@ or the CLI, install it and restart the unit as part of the work — do not
 stop to ask whether now is a good time, and do not hand the restart back as
 a step for Hugo to run.
 
-But **say what that did and did not do.** While `ExecStart` is
-`/usr/bin/ladulasd`, the restart brings the package's binary back up and
-the change is in `~/go/bin` where nothing is looking at it. Reporting "the
+But **say what that did and did not do.** If the unit's `ExecStart` names a
+binary you did not just write to, the restart brought that one back up and
+the change is sitting unused wherever you installed it. Reporting "the
 change is running" after that sequence is the specific wrong claim to
-avoid. Making it actually run means pointing the unit at `~/go/bin` with a
-drop-in, or rebuilding the package — and which of those Hugo wants has not
-been decided, so ask rather than choose.
+avoid; check, rather than assume the two paths agree.
 
 ## Unlocking after a restart
 
-The store comes up **sealed**: `LADULAS_UNLOCK=ask-password` and login
-unlock is not enrolled, so the daemon has no key and the SSH agent offers
-nothing until somebody unlocks it. Ask Hugo, which is the only part that
-needs him — and do not wait for the `systemd-ask-password` prompt.
+Restarting the daemon **takes the keys away**: unless login unlock is
+enrolled, the store comes back **sealed** under
+`LADULAS_UNLOCK=ask-password`, so the daemon has no key and the SSH agent
+offers nothing until somebody unlocks it. An instance that was unlocked
+before a deployment is not after it.
 
-**Ask him to run it with the `!` prefix** (`! ladulas unlock`) so it runs in
-the session and its output lands in the conversation. The passphrase is his
-to type and must never be asked for, stored, or passed on a command line.
-`--stdin` exists for scripts and for a shell with no tty; it is not a way
-around that.
+Unlocking is the part that needs Hugo. Do not wait on the
+`systemd-ask-password` prompt — **ask him to run it with the `!` prefix**
+(`! ladulas unlock`) so it runs in the session and its output lands in the
+conversation. The passphrase is his to type and must never be asked for,
+stored, or passed on a command line. `--stdin` exists for scripts and for a
+shell with no tty; it is not a way around that.
 
-`ladulas lock` suspends approval here while leaving paired approvers able to
-answer, and `ladulas lock --seal` wipes the key. Plain `lock` is not a way
-to test sealed-state behaviour.
-
-## The relay on this machine
-
-`ladulas-relay.service`, a user unit bound to guppy's tailnet address,
-running from `~/.local/bin`. Its shape and failure modes are
-[ops.md](docs/ops.md#3-waking-a-phone); what matters when debugging a
-missing push is that `~/.local/state/ladulas-relay/devices.json` is the
-fastest way to tell the phone's half from the daemon's — an entry there
-means the phone reached the relay, so a missing push is the requester's
-problem.
-
-`contrib/ladulas-relay.service` exists but **is not the unit that is
-running**: it is the generic one the Arch packages install, taking its
-address and key ids from `~/.config/ladulas-relay/env`. The live one has
-those written into the unit body and lives only in
-`~/.config/systemd/user/`. So do not read `contrib/` as a description of
-guppy — `systemctl --user cat ladulas-relay` is that.
+`ladulas lock` suspends approval at that instance while leaving paired
+approvers able to answer, and `ladulas lock --seal` wipes the key. Plain
+`lock` is not a way to test sealed-state behaviour.
 
 ## Toolchain
 

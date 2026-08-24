@@ -82,6 +82,14 @@ then changes nothing, and the running daemon is whatever was last
 `go install`ed. `systemctl --user cat ladulas` says which file is in force,
 and that is the check when a packaged upgrade appears to have done nothing.
 
+The same crossing runs the other way when you want the tree on a box the
+package owns: `ExecStart` is `/usr/bin/ladulasd`, so installing into
+`~/go/bin` and restarting brings the packaged binary back up and changes
+nothing. `make install-dropin` writes a drop-in overriding `ExecStart` to
+the installed `ladulasd`, and `make uninstall-dropin` removes it;
+`systemctl --user show ladulas.service -p ExecStart --value` resolves the
+unit and every drop-in together, which `cat` does not.
+
 The packaged `contrib/ladulas-relay.service` is generic — site values in
 `~/.config/ladulas-relay/env`, the `.p8` at
 `~/.config/ladulas-relay/apns.p8`. The relay running on guppy predates it and

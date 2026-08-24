@@ -109,6 +109,8 @@ separately; the protoc plugins are `go tool` entries in `go.mod`.
 | `make build` | Builds every binary into a scratch directory, never the tree |
 | `make gui` | Builds `ladulas` with the desktop application (`GUI_TAGS=gui,gtk3` for GTK 3) |
 | `make install` | `go install`s the desktop binary, the daemon and the signer |
+| `make install-headless` | The same three with no desktop application in any of them, for a box with no display or no webkit |
+| `make install-dropin` | Points an already-installed `ladulas.service` at the `ladulasd` in `$GOPATH/bin`. `make uninstall-dropin` takes it back out |
 | `make lint` | `golangci-lint run`, which must be clean. CI pins **v2.13.0**; a local copy that is older will pass things the release job fails |
 | `make test` | `go test ./...` |
 | `make generate` | `buf lint`, `buf generate`, `go mod tidy` — the only way protobuf is regenerated |
@@ -154,11 +156,35 @@ git config --global gpg.ssh.program ladulas-sign
 git config --global user.signingkey "key::$(ladulas keys public work)"
 ```
 
+On a box with no display, or with a webkit that `GUI_TAGS` does not match,
+use **`make install-headless`** instead of `make install` — the package
+table under [Installing a release](#installing-a-release) says which webkit
+each build wants. It installs the same three commands and only `ladulas
+gui` refuses to run.
+
 Without the unit, `ladulasd run` in a terminal does the same thing and
 approves at the terminal. With a piece missing: no `ladulas-sign` and git
 still signs through the agent with a poorer prompt; no logind and the
 automatic locks are off and say so; no peer paired and everything still
 works locally, which is the single-machine 1Password replacement.
+
+### Running the tree on a box that has the package installed
+
+Where a package owns the unit, `ExecStart` is `/usr/bin/ladulasd`, so
+installing into `$GOPATH/bin` and restarting changes nothing that is
+running. **`make install-dropin`** writes a systemd drop-in that overrides
+`ExecStart` to the installed `ladulasd` and reloads the daemon:
+
+```
+make install-headless install-dropin
+systemctl --user restart ladulas.service
+```
+
+`make uninstall-dropin` removes it and hands the service back to whatever
+its unit names. Neither target restarts anything — that stays a separate
+step, because restarting seals the store (§10, §14) and somebody has to
+unlock it again. `systemctl --user show ladulas.service -p ExecStart
+--value` is how to check which binary is actually in force.
 
 ### Pairing a second instance
 

@@ -67,6 +67,71 @@ install:
 	go install ./cmd/ladulasd
 	go install ./cmd/ladulas-sign
 
+# install-headless installs the same three commands with no desktop application
+# in any of them, for a box that has no display or no webkit.
+#
+# It exists because `install` is not partially usable without one: it builds
+# `ladulas` first, so on a machine missing the webkit that $(GUI_TAGS) selects
+# the target fails in pkg-config and installs *nothing* — including `ladulasd`,
+# which has no GUI in it and would have built fine. Reaching for
+# `GUI_TAGS=gui,gtk3` is the answer when the machine has GTK 3; this is the
+# answer when it should not build a window at all. The `ladulas` it installs
+# still runs every other verb; only `ladulas gui` refuses.
+#
+# `ladulas-relay` is not here, the same as in `install` — it is a separate
+# service that runs on one host, not part of a workstation install.
+.PHONY: install-headless
+install-headless:
+	go install ./cmd/ladulas ./cmd/ladulasd ./cmd/ladulas-sign
+	@echo "installed ladulas, ladulasd and ladulas-sign into $(GOBIN) without the desktop application"
+
+# install-dropin points an already-installed ladulas.service at the binary this
+# tree just built, by overriding ExecStart in a systemd drop-in.
+#
+# It is for the case where the unit in force is a *package's* — the Arch
+# packages install /usr/lib/systemd/user/ladulas.service with
+# ExecStart=/usr/bin/ladulasd — because then `make install` and a restart are
+# not a deployment: the restart brings the packaged binary back up and the
+# freshly installed one in $(GOBIN) is never looked at. That sequence was run
+# as if it were a deployment for some time before anybody checked, which is why
+# this is a target and not a paragraph in a document.
+#
+# Nothing here is needed when the unit came from contrib/ladulas.service, which
+# already names %h/go/bin/ladulasd. Writing the drop-in anyway is harmless.
+#
+# The empty ExecStart= is required: it clears the unit's own value, and without
+# it systemd rejects the second one, because ExecStart may only be given once
+# for a Type=simple service.
+SYSTEMD_USER ?= $(HOME)/.config/systemd/user
+DROPIN = $(SYSTEMD_USER)/ladulas.service.d/dev-binary.conf
+
+.PHONY: install-dropin
+install-dropin:
+	@test -x $(GOBIN)/ladulasd || { \
+		echo "$(GOBIN)/ladulasd does not exist — run make install-headless (or make install) first."; \
+		echo "Writing the drop-in anyway would leave a unit that fails to start."; \
+		exit 1; \
+	}
+	@mkdir -p $(dir $(DROPIN))
+	@{ \
+		echo '# Written by `make install-dropin`; edits are lost on the next run.'; \
+		echo '# Points the unit at the development build instead of whatever'; \
+		echo '# ExecStart the installed unit names. `make uninstall-dropin`'; \
+		echo '# removes it and hands the service back to that binary.'; \
+		echo '[Service]'; \
+		echo 'ExecStart='; \
+		echo 'ExecStart=$(GOBIN)/ladulasd run'; \
+	} > $(DROPIN)
+	systemctl --user daemon-reload
+	@echo "ladulas.service now runs $(GOBIN)/ladulasd; restart it to pick that up"
+
+.PHONY: uninstall-dropin
+uninstall-dropin:
+	rm -f $(DROPIN)
+	@rmdir $(dir $(DROPIN)) 2>/dev/null || true
+	systemctl --user daemon-reload
+	@echo "ladulas.service runs its unit's own ExecStart again; restart it to pick that up"
+
 .PHONY: test-gui
 test-gui:
 	go test -tags $(GUI_TAGS) ./internal/gui/
