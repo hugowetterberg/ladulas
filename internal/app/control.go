@@ -305,6 +305,38 @@ func (s *controlService) SetUnlockAtLogin(
 	}), nil
 }
 
+// PeerListen answers in every state, because "nothing is bound" is what
+// somebody is looking at when they ask, and the reason differs (§14).
+func (s *controlService) PeerListen(
+	_ context.Context, _ *connect.Request[ladulasv1.PeerListenRequest],
+) (*connect.Response[ladulasv1.PeerListenResponse], error) {
+	return connect.NewResponse(&ladulasv1.PeerListenResponse{
+		State: s.app.PeerListenState(),
+	}), nil
+}
+
+// SetPeerListen needs the store, because that is where the setting goes. A
+// sealed instance is told to unseal rather than being given somewhere to write
+// it that the next unseal would not read.
+func (s *controlService) SetPeerListen(
+	_ context.Context, req *connect.Request[ladulasv1.SetPeerListenRequest],
+) (*connect.Response[ladulasv1.SetPeerListenResponse], error) {
+	if _, err := s.vault(); err != nil {
+		return nil, err
+	}
+
+	detail, err := s.app.SetPeerListen(
+		req.Msg.GetSpec(), req.Msg.GetAllowPublic(), req.Msg.GetClear())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.SetPeerListenResponse{
+		State:  s.app.PeerListenState(),
+		Detail: detail,
+	}), nil
+}
+
 // The grants live in the store, so listing and revoking them are the daemon's
 // too. They were the last verbs still opening the store behind a running
 // instance, which on a box with no terminal meant they simply did not work.

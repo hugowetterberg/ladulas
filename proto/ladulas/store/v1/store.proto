@@ -329,6 +329,25 @@ message WakeupSettings {
   google.protobuf.Timestamp registered_at = 6;
 }
 
+// PeerListenSettings is where this instance has been told to listen.
+//
+// It is the durable half of decision AH: the flag is for the process, this is
+// for the machine, and `ladulas listen` writes it. Absent — which is what every
+// store written before it says — means the flag or the automatic policy decides,
+// and that is not the same as `auto`: a stored `auto` is somebody having said
+// "choose for me" and outranks a flag saying nothing.
+message PeerListenSettings {
+  // The specification, in the same words the flag takes: `auto`, `off`, or a
+  // comma-separated list of addresses. Empty means nobody has said.
+  string spec = 1;
+  // Whether an address reachable from outside the local network may be bound
+  // (decision H). Stored beside the specification because an address that needs
+  // it is useless without it, and a person who set one and not the other has a
+  // listener that refuses to come up for a reason in another file.
+  bool allow_public = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
 // StoreDocument is the whole decrypted store.
 message StoreDocument {
   int32 version = 1;
@@ -405,6 +424,12 @@ message StoreDocument {
   // seen and taken back. One record covers both because the difference is not a
   // property of the artifact: it is whether this instance holds the key.
   repeated HeldEndorsement held_endorsements = 19;
+  // Where the peer channel has been told to listen, when somebody has said
+  // (decision AH). It is in the store rather than beside it because the
+  // control socket is the management surface (decision K) and the store is
+  // what that surface writes to; a sealed instance does not listen at all, so
+  // nothing needs it earlier than the unseal that reads it.
+  PeerListenSettings peer_listen = 21;
   // Retractions this instance has been told about, kept until what they take
   // back would have expired anyway (decision AG).
   //

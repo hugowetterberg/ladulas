@@ -747,15 +747,22 @@ hook exists and admits everything until the WhoIs half is built:
   bytes are processed. The gate seam is in place; the WhoIs lookup behind it
   is not, so today it admits every identity to the pairing surface and the
   app-level trust check is the whole of the door (§8, §15).
-* **TOFU labelling** (*not yet built*): WhoIs node names would make pairing
+* **TOFU labelling** (*half built*): WhoIs node names would make pairing
   prompts confirmable — "new identity `SHA256:…` connecting from tailnet
-  node `hugo-phone`" beats a bare fingerprint.
-* **Bind policy** (built, decision H): the listener binds where the user says.
-  Sensible
-  default to decide (§19): tailnet/private addresses when detectable,
-  with binding to public interfaces an explicit opt-in — listening on the
-  open internet is supported (the channel doesn't trust the network), but
-  it should never happen by accident.
+  node `hugo-phone`" beats a bare fingerprint. That half needs the WhoIs
+  lookup and is still design. The other half needs nothing: an instance can
+  find its *own* node name by asking the resolver what its own tailnet
+  address is called, and advertise that instead of the number, so the name is
+  what the peer records and shows (§8, decision AH). Reverse DNS and a forward
+  confirmation, no dependency, no daemon socket — and it is corroboration in
+  the same sense as everything else here, because the identity key is what a
+  pairing is checked against and an address list that has been lied to costs
+  a failed connection rather than a wrong peer.
+* **Bind policy** (built, decisions H and AH): the listener binds where the
+  user says, and where nobody has said it chooses one tier of addresses
+  rather than every address it can find. Binding to public interfaces is an
+  explicit opt-in — listening on the open internet is supported (the channel
+  doesn't trust the network), but it should never happen by accident.
 
 App-level identity keys stay authoritative in all cases: a compromised
 Tailscale control plane can insert a node that WhoIs vouches for, which is
@@ -808,6 +815,44 @@ mDNS announcement for LAN discovery during pairing, so the phone can find
 node) stays available as an *option* for exotic embedders of the library,
 but is not load-bearing — and embedding tsnet via gomobile on Android is
 currently broken anyway (tailscale/tailscale#17311).
+
+**What is bound and what is advertised are two lists** (decision AH). They
+were one until 2026-08-21, and one list cannot be both: what a socket is
+opened on is a fact about this machine, and what a peer is told to dial is
+an instruction to another one.
+
+The automatic policy picks **one tier**: the machine's tailnet addresses if
+it has any, otherwise its other private addresses, otherwise loopback —
+having first passed over every interface that is up but not running, and
+every interface whose name belongs to a container runtime or a virtual
+machine. It used to bind all of them at once. On a desktop with Docker and
+libvirt installed that was fourteen listeners, eleven of which no peer could
+reach, and the same fourteen addresses were handed to every peer that paired
+with it.
+
+What gets advertised is that list with two changes. A tailnet address is
+advertised under its **node name** first — `horatio.tailnet.ts.net:7373`
+before `100.74.235.31:7373` — which is the string a person recognises on the
+other machine and is stable in a way the address is not; the address stays
+behind it, because the name resolves only for a peer whose MagicDNS is on.
+And loopback is advertised only by an instance that has nothing else, since
+telling a peer on another machine to dial `127.0.0.1` is telling it to dial
+itself.
+
+Which it did, and the consequences were not confined to a wasted
+connection. **An address that answers with our own identity is not an
+impostor**: the dialler compares the pin it met against its own before it
+compares it against the peer's, and an address that turns out to be this
+machine is skipped rather than reported. And when every address fails, the
+one reported is the **most informative** — a peer that answered as somebody
+else over a connection that was refused, and a refusal over a name that would
+not resolve — rather than the last one tried, which by construction is the
+one nobody expected to work. All three of those are one bug's three parts,
+written up in `bugs/an-identity-mismatch-that-was-a-loopback-address.md`: an
+unreachable peer reported "the peer is not the expected identity", naming
+fingerprints that did not match because one of them was ours, and the store
+that was actually sealed went unmentioned. Do not report a peer's identity as
+wrong on evidence gathered from a socket on this machine.
 
 The protocol (sketch — to be specified precisely in a follow-up):
 
@@ -2499,6 +2544,20 @@ The surface (existing pieces from M2/M3 plus planned):
    — a script, a deploy, or an agent that has to stop and let somebody type
   a passphrase;
 * peers — list, rename, revoke, and set directions/roles (`allow`);
+* listen — `ladulas listen` says what the peer channel is bound to, what
+  peers are told to dial, and every address the automatic policy passed over
+  with the reason it did; `ladulas listen set <address...|auto|off>` changes
+  it and `ladulas listen clear` forgets the change (decision AH). The setting
+  is in the store, which puts it on this surface rather than in a unit file,
+  and the change rebinds the channel rather than waiting for a restart — a
+  management surface that needs a `systemctl restart` to finish a change is
+  one the person reaching a box over SSH cannot use. A bind that fails puts
+  the previous addresses back and says so, because the address somebody typed
+  wrongly is the one they are reaching the machine through. `--peer-listen`
+  on the daemon still wins over the stored setting, and the answer says so
+  when it does: a stored address on an interface that has been renamed is
+  exactly what needs a way back in. Answerable while sealed, where it reports
+  what the policy would choose and why nothing is bound;
 * keys — list, generate, import, remove, enable/disable, and the
   public half in `authorized_keys` form. `keys list` shows the keys
   paired instances lend this one under the keys it holds itself, with the
@@ -2927,7 +2986,7 @@ and only linked by the two server binaries.
 | E | 1Password key migration | **support import and fresh keys; recommend rotation** |
 | F | Project publication model | **snapshot + live refresh** |
 | G | Wake-up modes | **publisher-hosted FCM/APNs relay + opt-in Android foreground-service live connection**, on the always-present poll-on-open baseline; UnifiedPush deferred |
-| H | Listener bind default | **private/tailnet by default, public interfaces opt-in** |
+| H | Listener bind default | **private/tailnet by default, public interfaces opt-in** — which of them, and what gets advertised, is decision AH |
 
 Added 2026-08-09:
 
@@ -2998,6 +3057,12 @@ Added 2026-08-19:
 | AE | Where the pairing QR comes from | **a Go dependency, drawn by the bridge.** `rsc.io/qr` encodes and this repository renders the matrix to SVG, served on `/api/v1/pairings/qr` the way `pkg/avatar` serves a face — so the viewer bundle keeps its no-dependencies rule, which its own tests assert, and the phone gets the picture for nothing by being the other host of the same handler. It settles open question 6, which had been "the viewer takes its first dependency, or somebody writes an encoder, or `qrencode` stays the documented step" since M3, with the phone able to read a QR nothing here could draw. `qrencode` stays the documented step for a headless box, where the terminal's pixels are not Ladulås's to choose. The one response the bridge serves `no-store`: the string behind the picture is a five-minute single-use secret. Rejected: writing the encoder, which is Reed–Solomon over GF(256) plus four tables to be got exactly right, against a dependency that is 700 lines, unchanged since 2015 and read in an afternoon |
 | AF | Where a screen puts what it can start, and what it can take apart | **an icon in the pane's title bar, and a modal sheet behind it.** A screen in this window lists what is true; a form is neither a fact nor a list, and a screen that leads with one is a screen whose first line is not what somebody opened it for — the Keys pane greeted a reader with an empty text box above the keys they had come to look at, and the peer screen kept the pairing's own facts and the button that ends it below everything the peer is *for*. So: a **+** on Keys opens "make a new key", a **cog** on a machine opens the pairing and the way to end it, and both are `dialog` elements shown with `showModal`. Three things come with that and none of them is decoration. Escape closes a sheet and the window behind it is inert while one is up, neither of which this bundle has to implement. A sheet lives outside the pane, so the four-second poll cannot repaint a box somebody is typing into — which is what took the Keys screen out of the redrawn set when the form was on it, and what puts it back now the form is not (decision AA). And a sheet is thrown away when it closes, so reopening one starts again, which is the right answer for a form and would be the wrong one for a screen. The rule it sets: what a screen can *do* goes in the title bar, what a screen *is* stays in the pane, and a text field is never drawn into a screen the poll repaints. Rejected: a disclosure inside the pane, which is the same box on the same screen one click further away; and a route of its own per form, which the shell can carry — a fingerprint is base64 and the router takes everything after the first slash as the identifier, so `peer/<fp>/settings` is a peer named `<fp>/settings`. Extends decision AA; the sheets themselves are `ui.sheet` in the viewer bundle. Rationale in §12 |
 | AG | Where a TTL grant lives when several machines hold the key | **it travels with the key, signed by it.** Decision P follows the key and has two branches; a portable key held by several instances (decision S) falls through both — the requester holds no copy so nothing is delegated, and the private half has very much moved so the hardware branch's reasoning does not apply. The promise stayed on the machine that made it and every borrowed signature woke it, which is the cost decision P exists to remove. An **endorsement** is a holder's signed statement that one named requester may borrow one named key within a scope until a time, and any other holder of that key honours it. Two signatures, each closing a hole the other does not: **the key's** (SSHSIG, namespace `endorsement@ladulas`) proves the issuer held the key, so the promise adds no authority — a holder promises only what it could do itself, and an approver holding no copy cannot write a cheque on somebody else's key; **the issuer's identity key's** says which holder, because the receiving side honours one only from a peer it would have taken a live approval from. Possession-only was rejected: a key sold with an old laptop, or shared with a colleague, would make every holder an approver for every other with nobody having decided it. The security argument is then one sentence — an endorsement can produce no outcome that a live conversation with the same approver could not have produced, and what it removes is the round trip rather than the trust decision. Three checks at the point of spending: the requester against the identity the channel authenticated and never against the message, the scope by the same `covers()` a grant uses, and the expiry against **this** instance's own `grant_ttl_options` maximum, which is a ceiling nobody else can raise. **The asymmetry is the design.** The promise travels with the requester, which is the only road that works when the issuer and the acting holder are never awake at once; the retraction never does — the requester is precisely the party with no reason to stop presenting one — so it is pushed and gossiped between holders, honoured from any holder of the key whatever the trust records say, and remembered until its target would have expired. Honouring a retraction nobody wanted costs a prompt; ignoring one that was meant costs a signature. And an endorsement is **published** to every holder this instance knows of as well as carried — not because publishing is what makes it work, but because a promise nobody was told about is one a holder will keep and cannot see, and a promise nobody can see is a promise nobody can retract; the holders that could not be told are named on the grant rather than smoothed over. Extends decision P and qualifies decision V's wording, which now has to say the promise reaches anywhere the key is held. Rationale in §9 |
+
+Added 2026-08-21:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AH | Which addresses the peer channel binds, which it advertises, and who may change them | **one tier, chosen not swept; a name in front of a tailnet address; and a stored setting the control socket writes.** The automatic policy bound every private and tailnet address on the machine and loopback besides, and advertised the same list to every peer that paired. On a desktop with Docker and libvirt that is fourteen listeners, eleven of which nothing can reach, and fourteen addresses in every peer's trust record — of which the one that mattered was somewhere in the middle and the last one was the dialler's own loopback. It now takes the best tier present — tailnet, else other private, else loopback — after skipping interfaces that are up but not running (IFF_UP outlives a container runtime's bridge and IFF_RUNNING does not) and interfaces whose *name* belongs to a runtime or a hypervisor. The name test is a guess about a string and is admitted as one: `br-` with the hyphen is Docker's per-network bridge while a real `br0` is left alone, and every address passed over is reported with the rule that ate it, because a listener missing from where somebody expected it has to be a question with an answer. **Bind and advertise become two lists**, since what a socket was opened on is a fact about this machine and what a peer is told to dial is an instruction to another one: a tailnet address is advertised under its node name first, found by asking the resolver and confirming the answer forward, with the address behind it for a peer whose MagicDNS is off; and loopback is advertised only by an instance that has nothing else. Three related repairs on the dialling side, all from the same evening: an address answering with **our own** identity is an address on this machine and is skipped rather than reported as the peer being an impostor; the failure reported when every address fails is the most informative rather than the last, which was the worst by construction; and an identity mismatch prints a pin against a pin, having printed an SSH fingerprint against a pin, which reads as the two ends disagreeing about how to hash a key. Management is `ladulas listen`, keeping its setting in the store because the control socket is the whole management surface (decision K) and rebinding the channel on the spot, with the previous addresses restored if the new ones cannot be bound; `--peer-listen` still outranks it, deliberately, as the way back into a machine whose stored address no longer exists. Rejected: binding every tier and letting the dialler sort it out, which is what this replaced and what made a peer's stored list mostly unreachable; stripping loopback from the advertisement without the dialler's self check, which leaves every already-paired peer holding one; and reading the node name from tailscaled's LocalAPI, which is a dependency and a socket permission for a string the resolver already has. Qualifies decision H, whose "sensible default to decide" this is. Rationale in §8; the report is in `bugs/` |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

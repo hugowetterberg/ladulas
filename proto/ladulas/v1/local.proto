@@ -131,6 +131,24 @@ service ControlService {
   rpc SetUnlockAtLogin(SetUnlockAtLoginRequest)
       returns (SetUnlockAtLoginResponse);
 
+  // PeerListen reports where the peer channel is listening, what it tells a
+  // peer to dial, and every address the automatic policy passed over with the
+  // reason it did (decision AH).
+  //
+  // Answerable while sealed and while peering is off, because "nothing is
+  // bound" is the answer somebody is looking for in both cases and the reason
+  // differs. What is bound is only knowable to the process that bound it.
+  rpc PeerListen(PeerListenRequest) returns (PeerListenResponse);
+
+  // SetPeerListen changes where the peer channel listens and rebinds it, or
+  // clears the setting and goes back to the flag.
+  //
+  // It rebinds rather than taking effect on the next restart: a management
+  // surface that needs a `systemctl restart` to finish a change is one somebody
+  // reaching a box over SSH cannot use, and a bind that fails is exactly the
+  // thing they need to find out about while they are still looking (§14).
+  rpc SetPeerListen(SetPeerListenRequest) returns (SetPeerListenResponse);
+
   // ListStoredKeys reports the keys this instance holds. A read, and it goes
   // through the daemon like every other one: the running instance is the only
   // thing that can answer without asking for a passphrase it has already been
@@ -560,6 +578,81 @@ message SetUnlockAtLoginRequest {
 
 message SetUnlockAtLoginResponse {
   bool enrolled = 1;
+}
+
+// ListenSource says what decided where the peer channel listens.
+//
+// Three answers, and they are not the same conversation: a flag is this
+// process's and goes away when the unit is edited, a stored setting is the
+// machine's and outlives it, and automatic is nobody having said anything.
+enum ListenSource {
+  LISTEN_SOURCE_UNSPECIFIED = 0;
+  // A --peer-listen flag, or LADULAS_PEER_LISTEN. Beats the stored setting,
+  // because it is the way back in when a stored one is wrong.
+  LISTEN_SOURCE_FLAG = 1;
+  // `ladulas listen set`, in the store.
+  LISTEN_SOURCE_STORED = 2;
+  // The automatic policy of decision AH.
+  LISTEN_SOURCE_AUTOMATIC = 3;
+}
+
+// SkippedListenAddress is one address the automatic policy did not bind.
+message SkippedListenAddress {
+  string address = 1;
+  // The interface it was found on, empty when the address was skipped for
+  // being in a tier that a better one covered.
+  string interface = 2;
+  string reason = 3;
+}
+
+// PeerListenState is where the peer channel listens, as the process that bound
+// it sees things.
+message PeerListenState {
+  // The specification in force and where it came from.
+  string spec = 1;
+  ListenSource source = 2;
+  bool allow_public = 3;
+  // The stored setting, when there is one, whether or not it is in force. A
+  // flag overriding a stored setting is worth being able to see: the two
+  // together are why a change somebody made yesterday is doing nothing.
+  string stored_spec = 4;
+  bool stored_allow_public = 5;
+  // What is bound right now, and what a peer is told to dial. They differ by
+  // design: a tailnet address is advertised under its node name first, and
+  // loopback is advertised only by an instance that has nothing else (§8).
+  repeated string bound = 6;
+  repeated string advertised = 7;
+  // Which tier the automatic policy chose: tailnet, private, loopback, or
+  // explicit for a specification that named its own addresses.
+  string tier = 8;
+  repeated SkippedListenAddress skipped = 9;
+  // Why nothing is bound, when nothing is: "the store is sealed", "peering is
+  // switched off". Empty when the listener is up.
+  string detail = 10;
+}
+
+message PeerListenRequest {}
+
+message PeerListenResponse {
+  PeerListenState state = 1;
+}
+
+message SetPeerListenRequest {
+  // The specification: `auto`, `off`, `none`, or a comma-separated list of
+  // addresses. Empty clears the stored setting, which is not the same as
+  // `auto` — cleared means the flag decides again.
+  string spec = 1;
+  bool allow_public = 2;
+  // Clear removes the stored setting. It is a field rather than the empty spec
+  // meaning it, so that a caller cannot clear one by leaving a field out.
+  bool clear = 3;
+}
+
+message SetPeerListenResponse {
+  PeerListenState state = 1;
+  // What happened, in a sentence, including the words "the previous addresses
+  // are back" when a bind failed and the old ones were restored.
+  string detail = 2;
 }
 
 // KeyOrigin says where a key came from. It mirrors the store's own enum, which

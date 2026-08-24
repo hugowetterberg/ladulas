@@ -293,7 +293,7 @@ func (n *Node) BeginPairing(
 
 	defer n.closeWindow(window)
 
-	addresses := n.Addresses()
+	addresses := n.Advertised()
 
 	full, err := trust.EncodeCode(trust.NewCode(
 		secret, n.identity.Name(), n.identity.PublicKey(),

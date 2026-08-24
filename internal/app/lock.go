@@ -332,25 +332,11 @@ func (a *App) takeCore() *core {
 // tearDown stops what a core was running. It is called with the core already
 // detached, so nothing here is racing a request.
 func (a *App) tearDown(current *core) {
-	if current == nil || current.peer == nil {
+	if current == nil {
 		return
 	}
 
-	if current.stop != nil {
-		current.stop()
-	}
-
-	if err := current.peer.Close(); err != nil {
-		a.log.Debug("could not close the peer channel", "error", err.Error())
-	}
-
-	if current.served != nil {
-		select {
-		case <-current.served:
-		case <-time.After(10 * time.Second):
-			a.log.Warn("the peer channel did not stop")
-		}
-	}
+	a.stopPeer(current)
 
 	// Everything that could still be signing has stopped, so the store key and
 	// the private keys can be zeroed rather than merely dropped (M5). Best effort

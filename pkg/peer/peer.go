@@ -353,10 +353,23 @@ func (n *Node) Identity() *identity.Identity {
 	return n.identity
 }
 
-// Addresses returns what the peer listener bound to, which is also what pairing
-// advertises to a peer as the addresses to dial back on.
+// Addresses returns what the peer listener bound to.
 func (n *Node) Addresses() []string {
 	return n.server.Addresses()
+}
+
+// Advertised returns what to tell a peer to dial back on, which is what every
+// pairing and every announcement carries. It is not the bound list: a tailnet
+// address is advertised under its node name first, and loopback is only ever
+// advertised by an instance that has nothing else (§8, decision AH).
+func (n *Node) Advertised() []string {
+	return n.server.Advertised()
+}
+
+// ListenSelection reports what the last bind chose and what it passed over, for
+// the management surface. Nil before the listener has bound.
+func (n *Node) ListenSelection() *transport.Selection {
+	return n.server.Selection()
 }
 
 // Listen binds the peer listener without serving it, so that a caller can find

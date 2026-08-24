@@ -247,6 +247,7 @@ func Commands() []*cli.Command {
 		unlockCommand(),
 		waitCommand(),
 		keyringCommand(),
+		listenCommand(),
 		pairCommand(),
 		pairingsCommand(),
 		peersCommand(),

@@ -53,6 +53,17 @@ func (p Pin) Equal(other Pin) bool {
 // the expected one, or not one this instance knows at all.
 var ErrUnknownPeer = errors.New("transport: the peer is not the expected identity")
 
+// ErrSelfAddress is returned when an address answers with this instance's own
+// identity, which means the address belongs to this machine and not to the peer
+// it was recorded for.
+//
+// It is separate from ErrUnknownPeer because it is not the same event and does
+// not deserve the same alarm: a wrong identity means somebody is answering for
+// a peer, and this means an address list has our own loopback in it. Keeping
+// them apart is what lets a caller skip the address quietly and report the
+// failure that actually mattered.
+var ErrSelfAddress = errors.New("transport: that address is this instance")
+
 // PinFor computes the pin of an SSH public key, which is how a trust record —
 // which holds SSH public keys, because that is what the user sees a fingerprint
 // of — turns into something a TLS handshake can check.

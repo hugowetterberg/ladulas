@@ -61,6 +61,12 @@ const (
 	// ControlServiceSetUnlockAtLoginProcedure is the fully-qualified name of the ControlService's
 	// SetUnlockAtLogin RPC.
 	ControlServiceSetUnlockAtLoginProcedure = "/ladulas.v1.ControlService/SetUnlockAtLogin"
+	// ControlServicePeerListenProcedure is the fully-qualified name of the ControlService's PeerListen
+	// RPC.
+	ControlServicePeerListenProcedure = "/ladulas.v1.ControlService/PeerListen"
+	// ControlServiceSetPeerListenProcedure is the fully-qualified name of the ControlService's
+	// SetPeerListen RPC.
+	ControlServiceSetPeerListenProcedure = "/ladulas.v1.ControlService/SetPeerListen"
 	// ControlServiceListStoredKeysProcedure is the fully-qualified name of the ControlService's
 	// ListStoredKeys RPC.
 	ControlServiceListStoredKeysProcedure = "/ladulas.v1.ControlService/ListStoredKeys"
@@ -301,6 +307,22 @@ type ControlServiceClient interface {
 	// (decision I). Enrolling copies the data encryption key into the keychain,
 	// so it is the daemon's to do: it is the process holding that key.
 	SetUnlockAtLogin(context.Context, *connect.Request[ladulasv1.SetUnlockAtLoginRequest]) (*connect.Response[ladulasv1.SetUnlockAtLoginResponse], error)
+	// PeerListen reports where the peer channel is listening, what it tells a
+	// peer to dial, and every address the automatic policy passed over with the
+	// reason it did (decision AH).
+	//
+	// Answerable while sealed and while peering is off, because "nothing is
+	// bound" is the answer somebody is looking for in both cases and the reason
+	// differs. What is bound is only knowable to the process that bound it.
+	PeerListen(context.Context, *connect.Request[ladulasv1.PeerListenRequest]) (*connect.Response[ladulasv1.PeerListenResponse], error)
+	// SetPeerListen changes where the peer channel listens and rebinds it, or
+	// clears the setting and goes back to the flag.
+	//
+	// It rebinds rather than taking effect on the next restart: a management
+	// surface that needs a `systemctl restart` to finish a change is one somebody
+	// reaching a box over SSH cannot use, and a bind that fails is exactly the
+	// thing they need to find out about while they are still looking (§14).
+	SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error)
 	// ListStoredKeys reports the keys this instance holds. A read, and it goes
 	// through the daemon like every other one: the running instance is the only
 	// thing that can answer without asking for a passphrase it has already been
@@ -521,6 +543,18 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+ControlServiceSetUnlockAtLoginProcedure,
 			connect.WithSchema(controlServiceMethods.ByName("SetUnlockAtLogin")),
+			connect.WithClientOptions(opts...),
+		),
+		peerListen: connect.NewClient[ladulasv1.PeerListenRequest, ladulasv1.PeerListenResponse](
+			httpClient,
+			baseURL+ControlServicePeerListenProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("PeerListen")),
+			connect.WithClientOptions(opts...),
+		),
+		setPeerListen: connect.NewClient[ladulasv1.SetPeerListenRequest, ladulasv1.SetPeerListenResponse](
+			httpClient,
+			baseURL+ControlServiceSetPeerListenProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("SetPeerListen")),
 			connect.WithClientOptions(opts...),
 		),
 		listStoredKeys: connect.NewClient[ladulasv1.ListStoredKeysRequest, ladulasv1.ListStoredKeysResponse](
@@ -757,6 +791,8 @@ type controlServiceClient struct {
 	awaitState           *connect.Client[ladulasv1.AwaitStateRequest, ladulasv1.AwaitStateResponse]
 	keyringStatus        *connect.Client[ladulasv1.KeyringStatusRequest, ladulasv1.KeyringStatusResponse]
 	setUnlockAtLogin     *connect.Client[ladulasv1.SetUnlockAtLoginRequest, ladulasv1.SetUnlockAtLoginResponse]
+	peerListen           *connect.Client[ladulasv1.PeerListenRequest, ladulasv1.PeerListenResponse]
+	setPeerListen        *connect.Client[ladulasv1.SetPeerListenRequest, ladulasv1.SetPeerListenResponse]
 	listStoredKeys       *connect.Client[ladulasv1.ListStoredKeysRequest, ladulasv1.ListStoredKeysResponse]
 	generateKey          *connect.Client[ladulasv1.GenerateKeyRequest, ladulasv1.GenerateKeyResponse]
 	importKey            *connect.Client[ladulasv1.ImportKeyRequest, ladulasv1.ImportKeyResponse]
@@ -829,6 +865,16 @@ func (c *controlServiceClient) KeyringStatus(ctx context.Context, req *connect.R
 // SetUnlockAtLogin calls ladulas.v1.ControlService.SetUnlockAtLogin.
 func (c *controlServiceClient) SetUnlockAtLogin(ctx context.Context, req *connect.Request[ladulasv1.SetUnlockAtLoginRequest]) (*connect.Response[ladulasv1.SetUnlockAtLoginResponse], error) {
 	return c.setUnlockAtLogin.CallUnary(ctx, req)
+}
+
+// PeerListen calls ladulas.v1.ControlService.PeerListen.
+func (c *controlServiceClient) PeerListen(ctx context.Context, req *connect.Request[ladulasv1.PeerListenRequest]) (*connect.Response[ladulasv1.PeerListenResponse], error) {
+	return c.peerListen.CallUnary(ctx, req)
+}
+
+// SetPeerListen calls ladulas.v1.ControlService.SetPeerListen.
+func (c *controlServiceClient) SetPeerListen(ctx context.Context, req *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error) {
+	return c.setPeerListen.CallUnary(ctx, req)
 }
 
 // ListStoredKeys calls ladulas.v1.ControlService.ListStoredKeys.
@@ -1059,6 +1105,22 @@ type ControlServiceHandler interface {
 	// (decision I). Enrolling copies the data encryption key into the keychain,
 	// so it is the daemon's to do: it is the process holding that key.
 	SetUnlockAtLogin(context.Context, *connect.Request[ladulasv1.SetUnlockAtLoginRequest]) (*connect.Response[ladulasv1.SetUnlockAtLoginResponse], error)
+	// PeerListen reports where the peer channel is listening, what it tells a
+	// peer to dial, and every address the automatic policy passed over with the
+	// reason it did (decision AH).
+	//
+	// Answerable while sealed and while peering is off, because "nothing is
+	// bound" is the answer somebody is looking for in both cases and the reason
+	// differs. What is bound is only knowable to the process that bound it.
+	PeerListen(context.Context, *connect.Request[ladulasv1.PeerListenRequest]) (*connect.Response[ladulasv1.PeerListenResponse], error)
+	// SetPeerListen changes where the peer channel listens and rebinds it, or
+	// clears the setting and goes back to the flag.
+	//
+	// It rebinds rather than taking effect on the next restart: a management
+	// surface that needs a `systemctl restart` to finish a change is one somebody
+	// reaching a box over SSH cannot use, and a bind that fails is exactly the
+	// thing they need to find out about while they are still looking (§14).
+	SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error)
 	// ListStoredKeys reports the keys this instance holds. A read, and it goes
 	// through the daemon like every other one: the running instance is the only
 	// thing that can answer without asking for a passphrase it has already been
@@ -1275,6 +1337,18 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		ControlServiceSetUnlockAtLoginProcedure,
 		svc.SetUnlockAtLogin,
 		connect.WithSchema(controlServiceMethods.ByName("SetUnlockAtLogin")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServicePeerListenHandler := connect.NewUnaryHandler(
+		ControlServicePeerListenProcedure,
+		svc.PeerListen,
+		connect.WithSchema(controlServiceMethods.ByName("PeerListen")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServiceSetPeerListenHandler := connect.NewUnaryHandler(
+		ControlServiceSetPeerListenProcedure,
+		svc.SetPeerListen,
+		connect.WithSchema(controlServiceMethods.ByName("SetPeerListen")),
 		connect.WithHandlerOptions(opts...),
 	)
 	controlServiceListStoredKeysHandler := connect.NewUnaryHandler(
@@ -1515,6 +1589,10 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceKeyringStatusHandler.ServeHTTP(w, r)
 		case ControlServiceSetUnlockAtLoginProcedure:
 			controlServiceSetUnlockAtLoginHandler.ServeHTTP(w, r)
+		case ControlServicePeerListenProcedure:
+			controlServicePeerListenHandler.ServeHTTP(w, r)
+		case ControlServiceSetPeerListenProcedure:
+			controlServiceSetPeerListenHandler.ServeHTTP(w, r)
 		case ControlServiceListStoredKeysProcedure:
 			controlServiceListStoredKeysHandler.ServeHTTP(w, r)
 		case ControlServiceGenerateKeyProcedure:
@@ -1624,6 +1702,14 @@ func (UnimplementedControlServiceHandler) KeyringStatus(context.Context, *connec
 
 func (UnimplementedControlServiceHandler) SetUnlockAtLogin(context.Context, *connect.Request[ladulasv1.SetUnlockAtLoginRequest]) (*connect.Response[ladulasv1.SetUnlockAtLoginResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.SetUnlockAtLogin is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) PeerListen(context.Context, *connect.Request[ladulasv1.PeerListenRequest]) (*connect.Response[ladulasv1.PeerListenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.PeerListen is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.SetPeerListen is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) ListStoredKeys(context.Context, *connect.Request[ladulasv1.ListStoredKeysRequest]) (*connect.Response[ladulasv1.ListStoredKeysResponse], error) {

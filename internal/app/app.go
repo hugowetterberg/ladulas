@@ -35,6 +35,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/project"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 )
 
 // Config locates everything on disk.
@@ -213,9 +214,20 @@ type core struct {
 	projects *project.Cache
 	// peer is nil when peering is switched off.
 	peer *peer.Node
+	// listen is where the peer channel was told to bind, and what said so. It
+	// is on the core rather than on the App because it is settled when the
+	// store opens: the stored half of it is inside the store.
+	listen listenSetting
 	// stop and served are the peer listener's lifetime, when one is running.
 	stop   context.CancelFunc
 	served chan error
+}
+
+// listenSetting is a peer-channel bind specification and where it came from.
+type listenSetting struct {
+	spec        string
+	allowPublic bool
+	source      ladulasv1.ListenSource
 }
 
 // ErrNotInitialised is returned by everything that needs a store on an
@@ -414,22 +426,83 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 
 	built := &core{vault: vault, engine: engine, projects: projects}
 
-	if cfg.PeerListen == PeeringOff {
-		return built, nil
+	built.listen = a.listenSetting(vault)
+
+	node, err := a.buildPeerNode(built)
+	if err != nil {
+		return nil, err
 	}
 
-	built.peer, err = peer.New(peer.Options{
-		Identity:     vault.Identity(),
-		Trust:        vault,
-		Engine:       engine,
-		Keys:         vault,
-		Projects:     projects,
-		Delegations:  vault,
-		Wakeups:      vault,
-		Handovers:    vault,
-		Endorsements: vault,
-		Listen:       cfg.PeerListen,
-		AllowPublic:  cfg.PeerAllowPublic,
+	// Nothing else can see this core yet, so the assignment needs no lock. A
+	// rebind of a core that is already serving is the other caller, and it takes
+	// one (see startPeerOn).
+	built.peer = node
+
+	return built, nil
+}
+
+// listenSetting works out where the peer channel is to listen, and what decided
+// it (decision AH).
+//
+// Three sources and one order, and the order is the point. A flag wins, because
+// it is the way back into a machine whose stored setting names an address that
+// no longer exists — an interface renamed, a tailnet left, an address typed
+// wrong — and the alternative is a daemon that cannot be told anything without
+// a store it will not listen without. A stored setting beats the automatic
+// policy, including a stored `auto`, which is somebody having said "choose for
+// me" rather than nobody having said anything.
+func (a *App) listenSetting(vault *keystore.Vault) listenSetting {
+	if a.Config.PeerListen != "" {
+		return listenSetting{
+			spec:        a.Config.PeerListen,
+			allowPublic: a.Config.PeerAllowPublic,
+			source:      ladulasv1.ListenSource_LISTEN_SOURCE_FLAG,
+		}
+	}
+
+	if stored := vault.PeerListen(); stored.GetSpec() != "" {
+		return listenSetting{
+			spec:        stored.GetSpec(),
+			allowPublic: stored.GetAllowPublic(),
+			source:      ladulasv1.ListenSource_LISTEN_SOURCE_STORED,
+		}
+	}
+
+	return listenSetting{
+		spec:        transport.ListenAuto,
+		allowPublic: a.Config.PeerAllowPublic,
+		source:      ladulasv1.ListenSource_LISTEN_SOURCE_AUTOMATIC,
+	}
+}
+
+// buildPeerNode builds the peer node for a core's current listen setting, or
+// returns nil when peering is off.
+//
+// It is separate from buildCore because a listen setting can change while the
+// instance is running, and putting the channel somewhere else is then this
+// function again rather than an unseal (§14). It returns the node rather than
+// assigning it, because the core it is building for may be one that requests are
+// already reaching, and which field of it holds the channel is not something to
+// change without the lock.
+func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
+	cfg := a.Config
+
+	if built.listen.spec == PeeringOff {
+		return nil, nil
+	}
+
+	node, err := peer.New(peer.Options{
+		Identity:     built.vault.Identity(),
+		Trust:        built.vault,
+		Engine:       built.engine,
+		Keys:         built.vault,
+		Projects:     built.projects,
+		Delegations:  built.vault,
+		Wakeups:      built.vault,
+		Handovers:    built.vault,
+		Endorsements: built.vault,
+		Listen:       built.listen.spec,
+		AllowPublic:  built.listen.allowPublic,
 		Headless:     cfg.Headless,
 		Logger:       cfg.Logger,
 	})
@@ -440,14 +513,14 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 	// The engine decides and the node reaches; a delegated use needs both, and
 	// the node is built around the engine, so this is where the two are
 	// introduced (decision P).
-	engine.ReportDelegatedUse(built.peer.PushGrantActivity)
-	engine.RenewDelegations(built.peer.RenewDelegation)
+	built.engine.ReportDelegatedUse(node.PushGrantActivity)
+	built.engine.RenewDelegations(node.RenewDelegation)
 
 	// And a promise about a portable key has to reach the other machines that
 	// hold it, or it is one they will keep and cannot see (decision AG).
-	engine.PublishEndorsements(built.peer.PublishEndorsement)
+	built.engine.PublishEndorsements(node.PublishEndorsement)
 
-	return built, nil
+	return node, nil
 }
 
 // Log returns the logger the instance was built with.

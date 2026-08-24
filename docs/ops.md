@@ -129,7 +129,7 @@ calls a normal state.
 |---|---|---|
 | Agent socket | `$XDG_RUNTIME_DIR/ladulas/agent.sock` | The SSH agent. `SSH_AUTH_SOCK` points here. 0600 in a 0700 directory, plus a peer-uid check |
 | Control socket | `$XDG_RUNTIME_DIR/ladulas/control.sock` | `SigningService` (`ladulas-sign`) and `ControlService` (the CLI). Same gate |
-| Peer channel | TCP 7373, private and tailnet addresses only | Pinned-TLS connect RPCs from paired instances. Public binds need `--peer-listen-public` |
+| Peer channel | TCP 7373, on **one tier** of addresses: the tailnet if there is one, else other private ones, else loopback | Pinned-TLS connect RPCs from paired instances. `ladulas listen` says what was chosen and what was passed over; public binds need `--peer-listen-public` |
 | Daemon debug | **off** | Prometheus metrics and pprof, when `LADULAS_DEBUG_ADDR` names an address |
 | Relay API | TCP 8443 (guppy's tailnet address) | `RelayService`, cleartext HTTP/2 by design — WireGuard is the transport security |
 | Relay debug | `127.0.0.1:8444` | Prometheus metrics and pprof |
@@ -338,6 +338,47 @@ through and every one after it is swallowed, while every log on the sending
 side reports success. It cost most of a day, and it was settled in a minute
 by sending three pushes six seconds apart and counting banners.
 
+### A peer is reported as the wrong identity
+
+**Signal:** a peer screen or a log saying `the peer is not the expected
+identity`, with two hashes that do not match.
+
+**Action:** read the two prefixes first. Both should say `SPKI256:`. A
+`SHA256:` on one side is a build from before 2026-08-21, where the message
+printed the SSH fingerprint of the identity it met against the pin it
+wanted — two hashes of two different encodings, which reads as the two ends
+disagreeing about how to hash a key and is not what it means (decision AH).
+
+Then check whether the identity it met is **this machine's own**, which is
+what `ladulas status` prints as `Identity`. A current build says "that
+address is this instance" and skips it; an older one dialled its own
+loopback, because the address list a peer recorded at pairing time ended
+with the loopback address the other machine advertised. In that case the
+peer is not an impostor and nothing is wrong with the pairing: something
+else made it unreachable, and the store being sealed is the usual something.
+`bugs/an-identity-mismatch-that-was-a-loopback-address.md` is the whole
+story.
+
+A genuine mismatch — a pin that is neither ours nor the peer's — is a peer
+that was reinstalled and has a new identity key, and the answer is `ladulas
+peers forget` and a new pairing. Nothing about it is repaired by editing a
+trust record.
+
+### A peer's address list is full of addresses nothing can reach
+
+**Signal:** `ladulas peers list` showing a peer with a dozen addresses,
+`172.17.0.1` and friends among them, and reconnections that take a while.
+
+**Action:** expected on a record written before 2026-08-21, and nothing
+here refreshes it: a trust record keeps the addresses the peer advertised
+when it paired, and a peer that has since pruned its own list has no way to
+say so (there is no address-refresh RPC, and adding one is unbuilt). The
+cost is bounded — an address that is one of this machine's own is skipped
+outright, and a link puts the address that last worked first — so the
+choice is to leave it or to `ladulas peers forget` and pair again. Check
+what the peer advertises *now* on the peer itself, with `ladulas listen`:
+the "Peers dial" line is exactly what a new pairing would record.
+
 ### A pairing never completes
 
 **Signal:** `ladulas_pending_pairings` non-zero and staying there.
@@ -523,6 +564,17 @@ build reattaches to the new daemon perfectly happily.
 * **Pick up a policy or store change without a restart.** `systemctl --user
   reload ladulas.service`, or SIGHUP. Key and grant changes made through
   the CLI need neither — they land in the document the daemon is serving.
+* **Move the peer channel.** `ladulas listen` shows what is bound, what
+  peers are told to dial, and every address the automatic policy passed
+  over; `ladulas listen set <address...>` binds something else and rebinds
+  on the spot, and `ladulas listen clear` goes back to the policy. Two
+  things to know before using it on a machine you are not sitting at. A
+  bind that fails restores the previous addresses and says so — but a
+  daemon started with `--peer-listen` or `LADULAS_PEER_LISTEN` ignores the
+  stored setting entirely, and the unit installed by the package does not
+  set either, so on this machine the stored setting is what decides. And
+  the peer channel is not how the CLI reaches the daemon: getting the
+  addresses wrong cannot lock you out of `ladulas`, only out of peering.
 * **Read what happened.** `ladulas audit -n 50`. The metrics say a decision
   was made; this says which and to whom.
 * **Keep `main` compiling.** A consumer of `pkg/` builds against a

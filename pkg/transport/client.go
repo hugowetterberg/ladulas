@@ -42,6 +42,7 @@ type Client struct {
 	http   *http.Client
 	tls    *tls.Config
 	expect *Pin
+	self   Pin
 
 	mu   sync.Mutex
 	peer *PeerIdentity
@@ -58,7 +59,12 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		return nil, err
 	}
 
-	client := &Client{}
+	self, err := PinFor(opts.Identity.PublicKey())
+	if err != nil {
+		return nil, err
+	}
+
+	client := &Client{self: self}
 
 	if opts.Expect != nil {
 		pin, err := PinFor(opts.Expect)
@@ -177,6 +183,16 @@ func (c *Client) verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		return err
 	}
 
+	// An address that answers with this instance's own identity is this
+	// instance, and that is a fact about the address rather than about the peer
+	// (§8). Every listener binds loopback when it has nothing else, and a peer
+	// on another machine that recorded ours dials its own; the caller skips such
+	// an address rather than reporting that the peer is an impostor, which is
+	// what it did until 2026-08-21.
+	if peer.Pin.Equal(c.self) {
+		return fmt.Errorf("%w: %s", ErrSelfAddress, peer.Pin)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -190,8 +206,12 @@ func (c *Client) verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	}
 
 	if expect != nil && !expect.Equal(peer.Pin) {
+		// Both sides of this are pins, and both are printed as pins. They were
+		// an SSH fingerprint and a pin until 2026-08-21, which reads as the two
+		// ends disagreeing about how to hash a key rather than as two different
+		// keys, and cost an evening on exactly that reading.
 		return fmt.Errorf("%w: got %s, expected %s",
-			ErrUnknownPeer, peer.Fingerprint, expect)
+			ErrUnknownPeer, peer.Pin, expect)
 	}
 
 	c.peer = peer

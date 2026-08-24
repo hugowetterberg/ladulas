@@ -68,6 +68,7 @@ type Server struct {
 	mu        sync.Mutex
 	listeners []net.Listener
 	addresses []string
+	selection *Selection
 	http      *http.Server
 
 	closeOnce sync.Once
@@ -112,10 +113,12 @@ func NewServer(opts ServerOptions) (*Server, error) {
 // that was never opened is a stronger statement of that than one that opens and
 // then refuses.
 func (s *Server) Listen() error {
-	addresses, err := ResolveBindAddresses(s.listenSpec, s.allowPublic)
+	selection, err := Select(s.listenSpec, s.allowPublic)
 	if err != nil {
 		return err
 	}
+
+	addresses := selection.Bind
 
 	var (
 		listeners []net.Listener
@@ -146,18 +149,60 @@ func (s *Server) Listen() error {
 	s.mu.Lock()
 	s.listeners = listeners
 	s.addresses = bound
+	// What to advertise is worked out from what was bound rather than from what
+	// was asked for, because a specification may name port 0 and a test does.
+	s.selection = &Selection{
+		Bind:      bound,
+		Advertise: advertise(bound),
+		Skipped:   selection.Skipped,
+		Tier:      selection.Tier,
+	}
 	s.mu.Unlock()
 
 	return nil
 }
 
-// Addresses returns what the listener bound, which is also what pairing
-// advertises to a peer as the addresses to dial back on.
+// Addresses returns what the listener bound.
 func (s *Server) Addresses() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	return append([]string(nil), s.addresses...)
+}
+
+// Advertised returns what to tell a peer to dial, which is not always what was
+// bound: a tailnet address is advertised under its node name as well, and the
+// name goes first (§8).
+//
+// Nothing advertises the bound list any more. It held loopback on every machine
+// that had nothing better, so a peer recorded an address that reached its own
+// instance, and dialling it produced an identity mismatch naming the peer —
+// which is how a pruned interface list came to be a debugging session about the
+// crypto stack. See bugs/an-identity-mismatch-that-was-a-loopback-address.md.
+func (s *Server) Advertised() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.selection == nil {
+		return append([]string(nil), s.addresses...)
+	}
+
+	return append([]string(nil), s.selection.Advertise...)
+}
+
+// Selection reports what the last bind decided and what it decided against, for
+// the management surface to show. Nil until Listen has run.
+func (s *Server) Selection() *Selection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.selection == nil {
+		return nil
+	}
+
+	copied := *s.selection
+
+	return &copied
 }
 
 // Serve accepts connections until the context is done or Close is called.

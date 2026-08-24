@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
@@ -121,6 +124,26 @@ func (n *Node) call(
 	return err
 }
 
+// callOver tries a peer's addresses in turn and reports the most informative
+// failure, which is not the last one.
+//
+// It returned the last error until 2026-08-21, and the last address is the worst
+// one by construction — the list is ordered best first, so the final attempt is
+// the one nobody expected to work. On a machine whose peer had recorded its
+// loopback address, the last attempt reached *this instance*, and what got
+// reported for an unreachable peer was an identity mismatch naming that peer,
+// with the real failure — a refused connection on the address that mattered —
+// discarded on the way past. A whole evening went on reading the crypto stack
+// for a fault that was a sealed store four addresses earlier. So:
+//
+//   - an address that answers with our own identity is not a failure at all. It
+//     is an address that belongs to this machine, and it is skipped; a peer whose
+//     every address is one of ours gets an error saying exactly that;
+//   - of the real failures, the one that got furthest is reported, because a
+//     name that would not resolve says less than a connection that was refused,
+//     and a refusal says less than a peer that answered and complained;
+//   - the count of the others goes in the message, so that "there were four
+//     more" is visible without a log level.
 func (n *Node) callOver(
 	ctx context.Context,
 	client *transport.Client,
@@ -131,7 +154,12 @@ func (n *Node) callOver(
 		return ErrNoAddress
 	}
 
-	var lastErr error
+	var (
+		best      error
+		bestRank  int
+		attempted int
+		ourselves int
+	)
 
 	for _, address := range addresses {
 		err := fn(ctx, client.HTTP(), client.URL(address))
@@ -143,8 +171,65 @@ func (n *Node) callOver(
 			return err
 		}
 
-		lastErr = fmt.Errorf("peer: reach %s: %w", address, err)
+		if errors.Is(err, transport.ErrSelfAddress) {
+			ourselves++
+
+			continue
+		}
+
+		attempted++
+
+		if rank := failureRank(err); best == nil || rank >= bestRank {
+			best = fmt.Errorf("peer: reach %s: %w", address, err)
+			bestRank = rank
+		}
 	}
 
-	return lastErr
+	switch {
+	case best != nil && attempted > 1:
+		return fmt.Errorf("%w (%d more addresses also failed)",
+			best, attempted-1)
+	case best != nil:
+		return best
+	case ourselves > 0:
+		// Every address the peer advertises is one of this machine's own, which
+		// is a trust record to repair rather than a peer to wait for.
+		return fmt.Errorf(
+			"peer: every address recorded for this peer is one of ours, so it "+
+				"was never dialled: %w", transport.ErrSelfAddress)
+	default:
+		return ErrNoAddress
+	}
+}
+
+// failureRank orders dial failures by how far the attempt got, so that the most
+// informative one is the one reported.
+//
+// It is deliberately coarse. The distinction worth drawing is between an address
+// that was never reached at all and one that answered, because the first says
+// nothing about the peer and the second is the peer talking.
+func failureRank(err error) int {
+	var dns *net.DNSError
+
+	switch {
+	case errors.As(err, &dns):
+		// A name that does not resolve. Ordinary and uninformative: an
+		// advertised tailnet name is unresolvable to a peer with MagicDNS off,
+		// and the addresses behind it are what that peer uses.
+		return 1
+	case errors.Is(err, syscall.ECONNREFUSED),
+		errors.Is(err, syscall.EHOSTUNREACH),
+		errors.Is(err, syscall.ENETUNREACH),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, os.ErrDeadlineExceeded):
+		// The address is real and nothing is listening, or nothing answered.
+		return 2
+	case errors.Is(err, transport.ErrUnknownPeer):
+		// Somebody answered as the wrong identity. Rare, serious, and the one
+		// failure worth reporting over a refusal.
+		return 4
+	default:
+		// A handshake or an RPC that got an answer it did not like.
+		return 3
+	}
 }

@@ -250,7 +250,7 @@ func (s *peerService) Pair(
 		IdentityPublicKey: ours.Marshal(),
 		MayApprove:        window.intent.PeerMayApprove(),
 		MayRequest:        window.intent.PeerMayRequest(),
-		ListenAddresses:   s.node.Addresses(),
+		ListenAddresses:   s.node.Advertised(),
 		Confirmation:      trust.Confirmation(window.secret, ours, peer.PublicKey),
 	}), nil
 }
@@ -414,7 +414,7 @@ func (n *Node) PairWith(
 		Proof:             trust.Proof(secret, peer.PublicKey, ours),
 		InstanceName:      n.identity.Name(),
 		IdentityPublicKey: ours.Marshal(),
-		ListenAddresses:   n.Addresses(),
+		ListenAddresses:   n.Advertised(),
 	}))
 	if err != nil {
 		return nil, fmt.Errorf("peer: pair with %s: %w", address, err)

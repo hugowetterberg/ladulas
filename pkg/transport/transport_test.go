@@ -427,6 +427,76 @@ func TestDisconnectDropsLiveConnections(t *testing.T) {
 	}
 }
 
+// TestOurOwnAddressIsNotAnImpostor is the dial half of the loopback bug: an
+// address that answers with this instance's own identity is an address that
+// belongs to this machine, and it says so instead of accusing the peer.
+//
+// Every listener binds loopback when it has nothing better, and peers used to be
+// told about it — so a peer's stored addresses ended in one that reached the
+// dialler itself, and the error that came back named the peer as the wrong
+// identity. See bugs/an-identity-mismatch-that-was-a-loopback-address.md.
+func TestOurOwnAddressIsNotAnImpostor(t *testing.T) {
+	self := newIdentity(t, "one-instance")
+	peerID := newIdentity(t, "the-peer-we-wanted")
+
+	var reached bool
+
+	_, address := serve(t, transport.ServerOptions{
+		Identity: self,
+		Handler:  echoHandler(&reached),
+	})
+
+	// The dialler is this instance, expecting somebody else, and the address it
+	// has for that somebody else is its own.
+	client, err := transport.NewClient(transport.ClientOptions{
+		Identity: self,
+		Expect:   peerID.PublicKey(),
+	})
+	if err != nil {
+		t.Fatalf("create the client: %v", err)
+	}
+
+	_, err = get(client, address)
+	if err == nil {
+		t.Fatal("dialling ourselves succeeded")
+	}
+
+	if !errors.Is(err, transport.ErrSelfAddress) {
+		t.Errorf("dialling ourselves failed with %v, want a self-address error",
+			err)
+	}
+
+	if errors.Is(err, transport.ErrUnknownPeer) {
+		t.Error("dialling ourselves is reported as the peer being an impostor, " +
+			"which is the reading that cost an evening")
+	}
+
+	// And the message names pins on both sides when the peer really is somebody
+	// else, rather than a fingerprint against a pin.
+	other := newIdentity(t, "somebody-else")
+
+	stranger, err := transport.NewClient(transport.ClientOptions{
+		Identity: other,
+		Expect:   peerID.PublicKey(),
+	})
+	if err != nil {
+		t.Fatalf("create the second client: %v", err)
+	}
+
+	_, err = get(stranger, address)
+	if !errors.Is(err, transport.ErrUnknownPeer) {
+		t.Fatalf("the wrong identity was accepted: %v", err)
+	}
+
+	if strings.Contains(err.Error(), "SHA256:") {
+		t.Errorf("the mismatch mixes fingerprint and pin formats: %v", err)
+	}
+
+	if strings.Count(err.Error(), "SPKI256:") != 2 {
+		t.Errorf("the mismatch does not name both pins: %v", err)
+	}
+}
+
 // TestBindPolicyKeepsThePublicInternetOptIn covers decision H.
 func TestBindPolicyKeepsThePublicInternetOptIn(t *testing.T) {
 	private, err := transport.ResolveBindAddresses("", false)
@@ -462,14 +532,24 @@ func TestBindPolicyKeepsThePublicInternetOptIn(t *testing.T) {
 		}
 	}
 
-	// Loopback comes last, because a peer on another machine cannot use it.
-	if len(private) > 1 {
-		last := private[len(private)-1]
+	// One tier and not a sweep (decision AH): loopback is bound when it is all
+	// there is, and never alongside an address a peer on another machine could
+	// have used.
+	var loopback, routable int
 
-		host, _, _ := net.SplitHostPort(last)
-		if !net.ParseIP(host).IsLoopback() {
-			t.Errorf("the default bind ends with %q rather than loopback", last)
+	for _, address := range private {
+		host, _, _ := net.SplitHostPort(address)
+
+		if net.ParseIP(host).IsLoopback() {
+			loopback++
+		} else {
+			routable++
 		}
+	}
+
+	if loopback > 0 && routable > 0 {
+		t.Errorf("the default bind mixes loopback with routable addresses: %v",
+			private)
 	}
 
 	cases := []struct {

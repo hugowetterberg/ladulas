@@ -25,6 +25,14 @@ const DefaultPort = 7373
 // other side to expect to be visited rather than to visit.
 const ListenNone = "none"
 
+// ListenAuto is the bind specification that asks for the automatic policy, and
+// is what an empty specification means.
+//
+// It exists so that a stored setting can say "go back to choosing for me"
+// without the setting being empty, which is indistinguishable from unset
+// (decision AH).
+const ListenAuto = "auto"
+
 // ErrPublicBind is returned when a bind would put the listener on an address
 // reachable from outside the local network, without that having been asked for.
 //
@@ -71,55 +79,223 @@ func IsLocalIP(ip net.IP) bool {
 		IsTailnetIP(ip)
 }
 
-// ResolveBindAddresses turns a listen specification into the addresses to
-// actually bind, applying decision H.
+// The tiers the automatic policy chooses between, best first, and the headline
+// of decision AH: it picks one tier rather than binding every address it can
+// find. TierExplicit is what a specification that named its own addresses gets,
+// since nothing was chosen for it.
 //
-// The default — an empty specification, or one that names only a port — does
-// not bind a wildcard. It enumerates the machine's own private and tailnet
-// addresses and binds each of them, so that the socket is not merely
-// unauthenticated-but-refusing on a public interface: it is not there. A
-// wildcard bind, or an explicit public address, is available and has to be
-// asked for with allowPublic.
-//
-// Ordering matters beyond the bind itself, because the same list is what gets
-// advertised to a peer during pairing as the addresses to dial back on. Tailnet
-// addresses come first (they work from anywhere the peer also is), then other
-// private ones, and loopback last, since it is only useful to a peer on this
-// same machine — which is exactly the case the tests run in.
-func ResolveBindAddresses(spec string, allowPublic bool) ([]string, error) {
-	if strings.TrimSpace(spec) == ListenNone {
-		return nil, nil
-	}
+// Plain strings and not a named type, because §21: a named string type is one
+// `gomobile` cannot bind, and nothing here is worth a field the phone's bind
+// silently drops.
+const (
+	TierExplicit = "explicit"
+	TierTailnet  = "tailnet"
+	TierPrivate  = "private"
+	TierLoopback = "loopback"
+	TierNone     = "none"
+)
 
-	host, port, err := splitBindSpec(spec)
+// SkippedAddress is one address the automatic policy passed over, with the
+// interface it was found on and why it was not bound.
+//
+// It is reported rather than dropped because the cost of this policy is a
+// listener that is missing from somewhere somebody expected it, and the first
+// question then is which rule ate it. A machine with a container runtime on it
+// has a dozen addresses that look local and reach nobody; the answer "it was a
+// container bridge" has to be available without a packet capture.
+type SkippedAddress struct {
+	// Address is the host:port that would have been bound.
+	Address string
+	// Interface is where it was found, which is usually the whole answer.
+	Interface string
+	// Reason is one clause, written to be read in a table.
+	Reason string
+}
+
+// Selection is what a listen specification resolved to.
+//
+// Bind and Advertise are two lists and not one, which they were until 2026-08-21.
+// What a peer should dial is not always what was bound: a tailnet address has a
+// name, and the name is what a person recognises (§7), while loopback is bound
+// on a machine that has nothing else and is a lie told to anybody off it.
+type Selection struct {
+	// Bind is what to open sockets on, best first.
+	Bind []string
+	// Advertise is what to tell a peer to dial, best first.
+	Advertise []string
+	// Skipped is what the automatic policy did not bind, and why.
+	Skipped []SkippedAddress
+	// Tier says which kind of address was chosen.
+	Tier string
+}
+
+// ResolveBindAddresses turns a listen specification into the addresses to
+// actually bind, applying decisions H and AH.
+//
+// It is Select without the reasoning, kept because binding is all most callers
+// want and the reasoning is only worth carrying to a management surface.
+func ResolveBindAddresses(spec string, allowPublic bool) ([]string, error) {
+	selection, err := Select(spec, allowPublic)
 	if err != nil {
 		return nil, err
 	}
 
-	if host == "" || host == "*" {
-		if allowPublic {
-			return []string{net.JoinHostPort("", port)}, nil
-		}
+	return selection.Bind, nil
+}
 
-		return localBindAddresses(port)
-	}
-
-	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		if !allowPublic {
-			return nil, fmt.Errorf(
-				"%w: %s binds every interface; drop the host to bind only the "+
-					"private ones, or say so explicitly",
-				ErrPublicBind, host)
-		}
-
-		return []string{net.JoinHostPort(host, port)}, nil
-	}
-
-	if err := checkBindHost(host, allowPublic); err != nil {
+// Select resolves a listen specification, keeping what it decided against.
+//
+// The specification is `off`/`none` for nothing at all, `auto` or empty for the
+// automatic policy, or a comma-separated list of addresses. An element with no
+// host is a port for the automatic policy to use, so `7373` and
+// `auto,192.168.1.5` both mean something sensible and can be combined.
+//
+// The automatic policy is decision AH, and it is a cascade rather than a sweep:
+//
+//   - an interface that is up but not running is skipped, which is what takes
+//     out the bridge a container runtime left behind when the last container
+//     stopped. IFF_UP survives that and IFF_RUNNING does not;
+//   - an interface whose name belongs to a container runtime or a virtual
+//     machine is skipped whether or not it is running, because a bridge with a
+//     container on it is running and still reaches nobody who could pair;
+//   - what is left is grouped into tailnet, other private, and loopback, and
+//     **only the best group present is bound**. A machine on a tailnet binds
+//     its tailnet addresses and nothing else: the tailnet reaches the peer from
+//     wherever it is, the LAN address reaches it only from the same building,
+//     and binding both meant every peer holding a list of both spent its
+//     reconnection attempts on the address that could not work.
+//
+// Before 2026-08-21 it bound every private and tailnet address the machine had,
+// and loopback besides. On a desktop with Docker and libvirt on it that was
+// fourteen sockets, eleven of which no peer could ever connect to, and the list
+// was also what got advertised — so a peer's stored addresses were mostly
+// unreachable, its reconnections mostly failed, and the error it reported was
+// whichever address happened to be last. Do not go back to binding a tier that
+// a better one is already covering; add an address on purpose instead.
+func Select(spec string, allowPublic bool) (*Selection, error) {
+	elements, err := splitSpec(spec)
+	if err != nil {
 		return nil, err
 	}
 
-	return []string{net.JoinHostPort(host, port)}, nil
+	if len(elements) == 0 {
+		return &Selection{Tier: TierNone}, nil
+	}
+
+	var (
+		explicit []string
+		automate string
+	)
+
+	for _, element := range elements {
+		host, port, err := splitBindSpec(element)
+		if err != nil {
+			return nil, err
+		}
+
+		if host == "" || host == ListenAuto {
+			// Asking for the public internet and naming no address is the one
+			// way to get a wildcard, and predates the automatic policy having
+			// anything to choose between: decision H's "a wildcard bind is
+			// available and has to be asked for" is this line.
+			if allowPublic {
+				explicit = append(explicit, net.JoinHostPort("", port))
+
+				continue
+			}
+
+			automate = port
+
+			continue
+		}
+
+		address, err := explicitAddress(host, port, allowPublic)
+		if err != nil {
+			return nil, err
+		}
+
+		explicit = append(explicit, address)
+	}
+
+	selection := &Selection{Tier: TierExplicit, Bind: explicit}
+
+	if automate != "" {
+		automatic, err := automaticAddresses(automate)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(explicit) == 0 {
+			selection.Tier = automatic.Tier
+		}
+
+		selection.Bind = append(selection.Bind, automatic.Bind...)
+		selection.Skipped = automatic.Skipped
+	}
+
+	selection.Bind = dedupe(selection.Bind)
+	selection.Advertise = advertise(selection.Bind)
+
+	return selection, nil
+}
+
+// explicitAddress resolves one address somebody named outright. A wildcard is
+// the one that has to be asked for twice: `*` and an empty host mean the
+// automatic policy, and only an unspecified address spelled out means every
+// interface.
+func explicitAddress(host, port string, allowPublic bool) (string, error) {
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		if !allowPublic {
+			return "", fmt.Errorf(
+				"%w: %s binds every interface; drop the host to let the "+
+					"automatic policy choose, or say so explicitly",
+				ErrPublicBind, host)
+		}
+
+		return net.JoinHostPort(host, port), nil
+	}
+
+	if err := checkBindHost(host, allowPublic); err != nil {
+		return "", err
+	}
+
+	return net.JoinHostPort(host, port), nil
+}
+
+// splitSpec breaks a specification into its elements, resolving the two words
+// that mean something on their own.
+func splitSpec(spec string) ([]string, error) {
+	spec = strings.TrimSpace(spec)
+
+	switch spec {
+	case ListenNone, "off":
+		return nil, nil
+	case "", ListenAuto:
+		return []string{""}, nil
+	}
+
+	var out []string
+
+	for element := range strings.SplitSeq(spec, ",") {
+		element = strings.TrimSpace(element)
+		if element == "" {
+			continue
+		}
+
+		if element == ListenNone || element == "off" {
+			return nil, fmt.Errorf(
+				"transport: %q switches the listener off and cannot be one "+
+					"address among several", element)
+		}
+
+		out = append(out, element)
+	}
+
+	if len(out) == 0 {
+		return nil, errors.New("transport: the listen specification is empty")
+	}
+
+	return out, nil
 }
 
 func splitBindSpec(spec string) (string, string, error) {
@@ -148,6 +324,10 @@ func splitBindSpec(spec string) (string, string, error) {
 		port = strconv.Itoa(DefaultPort)
 	}
 
+	if host == "*" {
+		host = ""
+	}
+
 	return host, port, nil
 }
 
@@ -173,15 +353,41 @@ func checkBindHost(host string, allowPublic bool) error {
 	return nil
 }
 
-// localBindAddresses is the default policy: every private and tailnet address
-// the machine has, and loopback as the fallback that always exists.
-func localBindAddresses(port string) ([]string, error) {
+// virtualInterface reports whether an interface belongs to a container runtime
+// or a virtual machine, by the only signal available without asking a runtime
+// this package will not depend on: what it is called.
+//
+// The names are the ones the runtimes pick for themselves. `br-` with the
+// hyphen is Docker's per-network bridge and a real LAN bridge is `br0` or
+// `bridge0`, so the hyphen is doing work and is not a typo. A `tap` or a `dummy`
+// with an address a peer could use is possible and is the honest cost of the
+// rule; an explicit address always wins, and every skip is reported with its
+// reason so that a listener missing from somewhere is a question with an answer.
+func virtualInterface(name string) bool {
+	for _, prefix := range []string{
+		"docker", "br-", "veth", "virbr", "vnet", "podman", "cni", "flannel",
+		"kube", "lxcbr", "lxdbr", "vboxnet", "vmnet", "mpqemubr", "tap", "dummy",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// automaticAddresses is the policy of decision AH: one tier, and a note of
+// everything it went past.
+func automaticAddresses(port string) (*Selection, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("transport: list network interfaces: %w", err)
 	}
 
-	var tailnet, private, loopback []string
+	var (
+		tailnet, private, loopback []string
+		skipped                    []SkippedAddress
+	)
 
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 {
@@ -202,18 +408,34 @@ func localBindAddresses(port string) ([]string, error) {
 			ip := ipNet.IP
 
 			// An IPv6 link-local address only means anything together with the
-			// interface it was learned on, and a peer cannot type that.
+			// interface it was learned on, and a peer cannot type that. It is
+			// dropped without a note: every interface has one, and a table of
+			// them would bury the skips somebody is looking for.
 			if ip.IsLinkLocalUnicast() && ip.To4() == nil {
-				continue
-			}
-
-			if !IsLocalIP(ip) {
 				continue
 			}
 
 			address := net.JoinHostPort(ip.String(), port)
 
 			switch {
+			case !IsLocalIP(ip):
+				skipped = append(skipped, SkippedAddress{
+					Address:   address,
+					Interface: iface.Name,
+					Reason:    "reachable from outside the local network",
+				})
+			case virtualInterface(iface.Name):
+				skipped = append(skipped, SkippedAddress{
+					Address:   address,
+					Interface: iface.Name,
+					Reason:    "a container or virtual machine interface",
+				})
+			case iface.Flags&net.FlagRunning == 0:
+				skipped = append(skipped, SkippedAddress{
+					Address:   address,
+					Interface: iface.Name,
+					Reason:    "the interface is up but not running",
+				})
 			case IsTailnetIP(ip):
 				tailnet = append(tailnet, address)
 			case ip.IsLoopback():
@@ -224,16 +446,68 @@ func localBindAddresses(port string) ([]string, error) {
 		}
 	}
 
-	out := make([]string, 0, len(tailnet)+len(private)+len(loopback))
-	out = append(out, tailnet...)
-	out = append(out, private...)
-	out = append(out, loopback...)
+	return chooseTier(port, tailnet, private, loopback, skipped), nil
+}
 
-	if len(out) == 0 {
-		// A machine with no addresses at all is not a machine peers can reach,
-		// but it can still pair with something on itself.
-		out = append(out, net.JoinHostPort("127.0.0.1", port))
+// chooseTier takes the best group that has anything in it, and writes down why
+// the others were left.
+func chooseTier(
+	port string,
+	tailnet, private, loopback []string,
+	skipped []SkippedAddress,
+) *Selection {
+	tiers := []struct {
+		tier      string
+		addresses []string
+		because   string
+	}{
+		{TierTailnet, tailnet, "a tailnet address is bound instead"},
+		{TierPrivate, private, "a local network address is bound instead"},
+		{TierLoopback, loopback, ""},
 	}
 
-	return out, nil
+	for i, candidate := range tiers {
+		if len(candidate.addresses) == 0 {
+			continue
+		}
+
+		for _, worse := range tiers[i+1:] {
+			for _, address := range worse.addresses {
+				skipped = append(skipped, SkippedAddress{
+					Address: address,
+					Reason:  candidate.because,
+				})
+			}
+		}
+
+		return &Selection{
+			Tier:    candidate.tier,
+			Bind:    candidate.addresses,
+			Skipped: skipped,
+		}
+	}
+
+	// A machine with no addresses at all is not a machine peers can reach, but
+	// it can still pair with something on itself.
+	return &Selection{
+		Tier:    TierLoopback,
+		Bind:    []string{net.JoinHostPort("127.0.0.1", port)},
+		Skipped: skipped,
+	}
+}
+
+func dedupe(addresses []string) []string {
+	seen := make(map[string]bool, len(addresses))
+	out := make([]string, 0, len(addresses))
+
+	for _, address := range addresses {
+		if seen[address] {
+			continue
+		}
+
+		seen[address] = true
+		out = append(out, address)
+	}
+
+	return out
 }
