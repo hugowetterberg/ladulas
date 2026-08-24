@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestOneTierIsChosen is decision AH: the best group of addresses present is
@@ -112,8 +113,12 @@ func TestContainerInterfacesAreNotBound(t *testing.T) {
 func TestTailnetNameIsAdvertisedInFrontOfTheAddress(t *testing.T) {
 	previous := tailnetName
 
+	forgetTailnetNames()
+
 	t.Cleanup(func() {
 		tailnetName = previous
+
+		forgetTailnetNames()
 	})
 
 	tailnetName = func(host string) string {
@@ -126,7 +131,7 @@ func TestTailnetNameIsAdvertisedInFrontOfTheAddress(t *testing.T) {
 
 	got := advertise([]string{
 		"100.74.235.31:7373", "[fd7a:115c:a1e0::9701:eb1f]:7373",
-	})
+	}, nil)
 
 	want := []string{
 		"horatio.tail97712.ts.net:7373",
@@ -144,7 +149,7 @@ func TestTailnetNameIsAdvertisedInFrontOfTheAddress(t *testing.T) {
 
 	// A LAN address is advertised as itself. Its reverse name is somebody's
 	// router's idea of a hostname and resolves nowhere a peer can use.
-	lan := advertise([]string{"192.168.1.201:7373"})
+	lan := advertise([]string{"192.168.1.201:7373"}, nil)
 	if !slices.Equal(lan, []string{"192.168.1.201:7373"}) {
 		t.Errorf("advertised %v for a local network address", lan)
 	}
@@ -245,5 +250,99 @@ func TestTheAutomaticPolicyBindsNothingItCannotExplain(t *testing.T) {
 					address, iface.Name)
 			}
 		}
+	}
+}
+
+// TestAFailedNameLookupIsAskedAgain is the bug the lazy lookup exists for.
+//
+// The name used to be resolved once, when the channel bound, and a resolver
+// that was a second from being ready — which is the ordinary state of a machine
+// that has just restarted the daemon — cost the node name for as long as the
+// channel stayed up. A pairing made in that window wrote the number into the
+// peer's trust record, and nothing refreshes one.
+//
+// So: a miss must not be final, and a hit must not be re-asked every time
+// somebody looks. Both halves are here, because the cheap fix for either one
+// alone is the other one's bug.
+func TestAFailedNameLookupIsAskedAgain(t *testing.T) {
+	previous := tailnetName
+	previousMissTTL := tailnetMissTTL
+
+	forgetTailnetNames()
+
+	t.Cleanup(func() {
+		tailnetName = previous
+		tailnetMissTTL = previousMissTTL
+
+		forgetTailnetNames()
+	})
+
+	// Long enough that the second call inside the window is served from the
+	// cache, short enough that the test is not a sleep.
+	tailnetMissTTL = 20 * time.Millisecond
+
+	var (
+		lookups int
+		ready   bool
+	)
+
+	tailnetName = func(string) string {
+		lookups++
+
+		if !ready {
+			return ""
+		}
+
+		return "horatio.tail97712.ts.net"
+	}
+
+	address := []string{"100.74.235.31:7373"}
+
+	var missed []string
+
+	miss := func(host string) {
+		missed = append(missed, host)
+	}
+
+	// The resolver is not answering yet: the address is advertised as itself,
+	// which is the documented fallback, and the caller is told once.
+	if got := advertise(address, miss); !slices.Equal(got, address) {
+		t.Errorf("advertised %v before the resolver answered, want %v",
+			got, address)
+	}
+
+	if !slices.Equal(missed, []string{"100.74.235.31"}) {
+		t.Errorf("reported misses %v, want the address once", missed)
+	}
+
+	// Asking again inside the window costs no lookup and no second log line.
+	_ = advertise(address, miss)
+
+	if lookups != 1 {
+		t.Errorf("%d lookups inside the miss window, want 1", lookups)
+	}
+
+	if len(missed) != 1 {
+		t.Errorf("reported %d misses inside the window, want 1", len(missed))
+	}
+
+	// The resolver comes up, and the answer stops being the one from before.
+	ready = true
+
+	time.Sleep(2 * tailnetMissTTL)
+
+	want := []string{"horatio.tail97712.ts.net:7373", "100.74.235.31:7373"}
+	if got := advertise(address, miss); !slices.Equal(got, want) {
+		t.Errorf("advertised %v once the resolver answered, want %v", got, want)
+	}
+
+	// And the name that was found is kept, rather than looked up per question.
+	before := lookups
+
+	_ = advertise(address, miss)
+
+	if lookups != before {
+		t.Errorf("looked the name up again after finding it (%d then %d)",
+			before, lookups)
 	}
 }

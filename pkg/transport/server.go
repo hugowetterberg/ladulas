@@ -149,13 +149,10 @@ func (s *Server) Listen() error {
 	s.mu.Lock()
 	s.listeners = listeners
 	s.addresses = bound
-	// What to advertise is worked out from what was bound rather than from what
-	// was asked for, because a specification may name port 0 and a test does.
 	s.selection = &Selection{
-		Bind:      bound,
-		Advertise: advertise(bound),
-		Skipped:   selection.Skipped,
-		Tier:      selection.Tier,
+		Bind:    bound,
+		Skipped: selection.Skipped,
+		Tier:    selection.Tier,
 	}
 	s.mu.Unlock()
 
@@ -179,15 +176,23 @@ func (s *Server) Addresses() []string {
 // instance, and dialling it produced an identity mismatch naming the peer —
 // which is how a pruned interface list came to be a debugging session about the
 // crypto stack. See bugs/an-identity-mismatch-that-was-a-loopback-address.md.
+//
+// The name is looked up here rather than kept from the bind, and the lock is
+// dropped before the lookup because a resolver that is not answering must not
+// hold up everything else this server does. Binding is the one moment when a
+// resolver is least likely to be ready — it happens seconds after the daemon
+// starts, which on a machine where NetworkManager and tailscaled are still
+// arguing about the tailnet link is exactly when MagicDNS is not there — and an
+// answer taken then used to be the answer for as long as the channel stayed up.
 func (s *Server) Advertised() []string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	bound := append([]string(nil), s.addresses...)
+	s.mu.Unlock()
 
-	if s.selection == nil {
-		return append([]string(nil), s.addresses...)
-	}
-
-	return append([]string(nil), s.selection.Advertise...)
+	return advertise(bound, func(host string) {
+		s.log.Debug("no tailnet node name for a bound address",
+			"address", host)
+	})
 }
 
 // Selection reports what the last bind decided and what it decided against, for

@@ -114,15 +114,16 @@ type SkippedAddress struct {
 
 // Selection is what a listen specification resolved to.
 //
-// Bind and Advertise are two lists and not one, which they were until 2026-08-21.
-// What a peer should dial is not always what was bound: a tailnet address has a
-// name, and the name is what a person recognises (§7), while loopback is bound
-// on a machine that has nothing else and is a lie told to anybody off it.
+// What to advertise is not here and is not the same list, which it was until
+// 2026-08-21: what a peer should dial is not always what was bound, since a
+// tailnet address has a name and the name is what a person recognises (§7),
+// while loopback is bound on a machine that has nothing else and is a lie told
+// to anybody off it. It is Server.Advertised, and it is worked out when somebody
+// asks rather than here, because it needs a resolver and this does not — see
+// cachedTailnetName for what that cost when the two were computed together.
 type Selection struct {
 	// Bind is what to open sockets on, best first.
 	Bind []string
-	// Advertise is what to tell a peer to dial, best first.
-	Advertise []string
 	// Skipped is what the automatic policy did not bind, and why.
 	Skipped []SkippedAddress
 	// Tier says which kind of address was chosen.
@@ -234,7 +235,6 @@ func Select(spec string, allowPublic bool) (*Selection, error) {
 	}
 
 	selection.Bind = dedupe(selection.Bind)
-	selection.Advertise = advertise(selection.Bind)
 
 	return selection, nil
 }

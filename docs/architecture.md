@@ -839,6 +839,31 @@ And loopback is advertised only by an instance that has nothing else, since
 telling a peer on another machine to dial `127.0.0.1` is telling it to dial
 itself.
 
+**The name is looked up when somebody asks, not when the channel binds.**
+That is a correction rather than a refinement: it was resolved once, inside
+the bind, and whatever the resolver said in that instant was what every
+later reader got. Binding is the worst moment to ask. It happens seconds
+after the daemon starts, which on a machine where NetworkManager and
+tailscaled are still arguing over the tailnet link is exactly when MagicDNS
+is not there — and the failure is silent by design, because the address is
+the documented fallback. So an instance would come up advertising the
+number, keep advertising it for as long as the channel stayed up, and a
+pairing made in that window would write the number into the peer's trust
+record for good, since nothing refreshes one. A convenience that degrades
+under a transient fault is fine; one whose transient fault is written down
+permanently is not.
+
+Asking at the point of use makes it self-healing, and a small cache in
+front of the resolver is what makes that affordable — five minutes for a
+name that resolved, thirty seconds for one that did not, because a name is
+stable and a failure is a question worth re-asking soon. Only the pairing
+paths and `ladulas listen` ask; `ladulas status` and the window's poll
+report what was **bound**, so nothing on a four-second timer touches a
+resolver. A lookup that finds nothing logs once at `debug` rather than once
+per question — the original bug went unnoticed because nothing said
+anything at all, and a feature that degrades in silence is one discovered
+by comparing two screens.
+
 Which it did, and the consequences were not confined to a wasted
 connection. **An address that answers with our own identity is not an
 impostor**: the dialler compares the pin it met against its own before it

@@ -5,6 +5,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,10 +15,82 @@ import (
 // always the fallback.
 const tailnetLookupTimeout = 2 * time.Second
 
+// tailnetNameTTL and tailnetMissTTL are how long an answer is reused. They are
+// variables so that a test can shorten them rather than sleep through them.
+//
+// They differ because the two answers are different kinds of fact. A name that
+// resolved is stable — a node keeps it across reboots and across the address
+// changing, which is the whole reason it goes in front of the address. A lookup
+// that failed is a question worth asking again soon, because the commonest
+// reason for one is a resolver that was not ready yet, and that is a state which
+// ends by itself.
+var (
+	tailnetNameTTL = 5 * time.Minute
+	tailnetMissTTL = 30 * time.Second
+)
+
 // tailnetName is the lookup, as a package variable so that a test can answer it
 // without a resolver. Nothing else replaces it: the daemon wants the real name
 // of the real node it is running on.
 var tailnetName = lookupTailnetName
+
+type tailnetNameEntry struct {
+	name    string
+	expires time.Time
+}
+
+var (
+	tailnetNameMu    sync.Mutex
+	tailnetNameCache = map[string]tailnetNameEntry{}
+)
+
+// cachedTailnetName is the lookup with a short memory in front of it, and it
+// reports whether it did the work or reused an answer.
+//
+// The memory is what makes the lookup affordable where it is now made. It used
+// to run once, when the channel bound, and whatever it answered in that instant
+// was what every later reader got — so a resolver that was a moment from being
+// ready cost the node name until something rebound, and a pairing made in that
+// window wrote the number into the peer's trust record for good, since nothing
+// refreshes one (§8). Asking when somebody asks is the repair; the cache is what
+// keeps that from being a resolver round trip per question.
+//
+// The "did the work" half is for the caller's log: a lookup that finds nothing
+// is worth a line the first time and worth silence for the answers after it.
+func cachedTailnetName(host string) (string, bool) {
+	tailnetNameMu.Lock()
+	entry, ok := tailnetNameCache[host]
+	tailnetNameMu.Unlock()
+
+	if ok && time.Now().Before(entry.expires) {
+		return entry.name, false
+	}
+
+	name := tailnetName(host)
+
+	ttl := tailnetNameTTL
+	if name == "" {
+		ttl = tailnetMissTTL
+	}
+
+	tailnetNameMu.Lock()
+	tailnetNameCache[host] = tailnetNameEntry{
+		name:    name,
+		expires: time.Now().Add(ttl),
+	}
+	tailnetNameMu.Unlock()
+
+	return name, true
+}
+
+// forgetTailnetNames empties the cache. It is for tests, which replace
+// tailnetName and would otherwise be answered by the previous one.
+func forgetTailnetNames() {
+	tailnetNameMu.Lock()
+	defer tailnetNameMu.Unlock()
+
+	clear(tailnetNameCache)
+}
 
 // advertise turns the addresses that were bound into the addresses to tell a
 // peer to dial.
@@ -34,7 +107,10 @@ var tailnetName = lookupTailnetName
 // that a tailnet name is corroborating and never authoritative — what the
 // channel authenticates is the identity key at the other end, so an address
 // list that has been lied to costs a failed connection and never a wrong peer.
-func advertise(bind []string) []string {
+//
+// miss is called with the address whose name was looked up and not found, once
+// per lookup rather than once per question. It may be nil.
+func advertise(bind []string, miss func(host string)) []string {
 	if len(bind) == 0 {
 		return nil
 	}
@@ -53,8 +129,16 @@ func advertise(bind []string) []string {
 			continue
 		}
 
-		name := tailnetName(host)
-		if name == "" || slices.Contains(names, name) {
+		name, looked := cachedTailnetName(host)
+		if name == "" {
+			if looked && miss != nil {
+				miss(host)
+			}
+
+			continue
+		}
+
+		if slices.Contains(names, name) {
 			continue
 		}
 
