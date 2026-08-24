@@ -2430,10 +2430,10 @@ type PairRequest struct {
 	// Proof that the caller is looking at the pairing code this instance is
 	// displaying, bound to the two identity keys of this very channel:
 	//
-	//	HMAC-SHA256(secret,
-	//	  "ladulas-pairing-v1" || 0x00 ||
-	//	  uint32be(len(listener key)) || <listener identity key, SSH wire> ||
-	//	  uint32be(len(dialler key))  || <dialler identity key, SSH wire>)
+	//   HMAC-SHA256(secret,
+	//     "ladulas-pairing-v1" || 0x00 ||
+	//     uint32be(len(listener key)) || <listener identity key, SSH wire> ||
+	//     uint32be(len(dialler key))  || <dialler identity key, SSH wire>)
 	//
 	// The lengths are there so that the two keys cannot be slid past each other
 	// to produce the same input from a different pair.
