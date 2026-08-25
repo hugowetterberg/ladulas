@@ -114,10 +114,39 @@ func (o Options) withDefaults() Options {
 func Run(ctx context.Context, args []string, opts Options) int {
 	opts = opts.withDefaults()
 
-	operation, ok := operationOf(args)
-	if !ok || operation != "sign" {
-		// find-principals, verify, check-novalidate, key generation, everything
-		// else: not ours. git calls the same program for verification when
+	operation, carriesOperation := operationOf(args)
+
+	if !carriesOperation {
+		// Every command line git builds for gpg.ssh.program names an operation
+		// with -Y, so one without it was typed by a person, and there is
+		// nothing worth handing over: ssh-keygen with no operation flag
+		// *generates a key*. `ladulas-sign -h` opened a prompt to write a new
+		// private key rather than saying what the program was, and `-help`,
+		// which is -h -e -l -p, opened one to change the passphrase on an
+		// existing one (decision AI, §5).
+		if isHelpRequest(args) {
+			Usage(opts.Stderr)
+
+			return 0
+		}
+
+		// No arguments at all is somebody typing the binary's name to see what
+		// it is, and there is nothing to name back at them.
+		if len(args) > 0 {
+			fmt.Fprintf(opts.Stderr,
+				"ladulas-sign: %s is not a command line git builds, and is not"+
+					" passed on to ssh-keygen — run ssh-keygen itself for that.\n\n",
+				strings.Join(args, " "))
+		}
+
+		Usage(opts.Stderr)
+
+		return 1
+	}
+
+	if operation != "sign" {
+		// find-principals, verify, check-novalidate, everything else git asks
+		// for: not ours. git calls the same program for verification when
 		// gpg.ssh.program is set, so this path is exercised on every
 		// `git log --show-signature`.
 		return handOver(args, opts, "")
@@ -452,8 +481,11 @@ git's signing program rather than run by hand:
     git config --global user.signingkey "key::$(ladulas keys public work)"
     git config --global commit.gpgsign true
 
-Anything that is not a signing request is passed to ssh-keygen unchanged,
-which is what makes git log --show-signature keep working.
+The other command lines git builds — -Y find-principals and -Y verify — are
+passed to ssh-keygen unchanged, which is what keeps git log --show-signature
+working. A command line with no -Y is not one of git's and is not passed on:
+ssh-keygen with no operation flag generates a key, and this program will not
+open that prompt on your behalf. Run ssh-keygen itself for that.
 
 Environment:
     LADULAS_SOCK             the instance socket to sign through

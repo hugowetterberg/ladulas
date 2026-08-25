@@ -145,3 +145,35 @@ func TestParseDefaultsToStandardInput(t *testing.T) {
 		t.Errorf("files are %v, want standard input", inv.files)
 	}
 }
+
+// A command line with no -Y in it is not one git built (decision AI). The
+// second result is what says so, and a trailing -Y with nothing after it is
+// still git's shape — malformed, and ssh-keygen's to complain about.
+func TestOperationOfSeparatesGitsCommandLinesFromTypedOnes(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		args   []string
+		want   string
+		gitish bool
+	}{
+		"sign":         {[]string{"-Y", "sign", "-n", "git"}, "sign", true},
+		"attached":     {[]string{"-Ysign"}, "sign", true},
+		"verify":       {[]string{"-Y", "verify"}, "verify", true},
+		"dangling -Y":  {[]string{"-n", "git", "-Y"}, "", true},
+		"help":         {[]string{"-h"}, "", false},
+		"generation":   {[]string{"-t", "ed25519", "-f", "/k"}, "", false},
+		"nothing":      {nil, "", false},
+		"after a dash": {[]string{"--", "-Y", "sign"}, "", false},
+	} {
+		operation, gitish := operationOf(tc.args)
+
+		if gitish != tc.gitish {
+			t.Errorf("%s: carries an operation = %v, want %v", name, gitish, tc.gitish)
+		}
+
+		if operation != tc.want {
+			t.Errorf("%s: operation %q, want %q", name, operation, tc.want)
+		}
+	}
+}

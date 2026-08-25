@@ -468,3 +468,65 @@ func newSigner(t *testing.T) ssh.Signer {
 
 	return signer
 }
+
+// A command line nobody built gets the usage, not ssh-keygen (decision AI).
+//
+// `ladulas-sign -h` used to be handed over, and ssh-keygen with no operation
+// flag generates a key — so probing the program to see what it was opened a
+// prompt to write a new private key into ~/.ssh. `-help` is worse: getopt reads
+// it as -h -e -l -p, which is the prompt to change the passphrase on an
+// existing one.
+func TestATypedCommandLineIsNotHandedToSshKeygen(t *testing.T) {
+	dir := t.TempDir()
+
+	for name, args := range map[string][]string{
+		"help flag":     {"-h"},
+		"long help":     {"--help"},
+		"help verb":     {"help"},
+		"getopt help":   {"-help"},
+		"verbose alone": {"-v"},
+		"nothing":       {},
+	} {
+		result := runSign(t, dir, nil, func(string) []string {
+			return args
+		})
+
+		if result.handedTo != nil {
+			t.Errorf("%s: handed to ssh-keygen: %v", name, result.handedTo)
+		}
+
+		if !strings.Contains(result.stderr, "gpg.ssh.program") {
+			t.Errorf("%s: printed no usage:\n%s", name, result.stderr)
+		}
+	}
+}
+
+// An explicit help request is answered rather than refused; anything else with
+// no -Y in it is a mistake and says so.
+func TestHelpSucceedsAndAMistakeDoesNot(t *testing.T) {
+	dir := t.TempDir()
+
+	help := runSign(t, dir, nil, func(string) []string {
+		return []string{"-h"}
+	})
+
+	if help.status != 0 {
+		t.Errorf("-h exited %d:\n%s", help.status, help.stderr)
+	}
+
+	if strings.Contains(help.stderr, "run ssh-keygen itself") {
+		t.Errorf("-h was told off for asking:\n%s", help.stderr)
+	}
+
+	mistake := runSign(t, dir, nil, func(string) []string {
+		return []string{"-t", "ed25519"}
+	})
+
+	if mistake.status == 0 {
+		t.Errorf("a key-generation command line succeeded:\n%s", mistake.stderr)
+	}
+
+	if !strings.Contains(mistake.stderr, "run ssh-keygen itself") {
+		t.Errorf("no account of why nothing happened:\n%s", mistake.stderr)
+	}
+}

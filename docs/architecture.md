@@ -381,6 +381,18 @@ or phone, same viewer (§12). Fallback remains stock
 `ssh-keygen -Y sign -U` against the agent socket on machines where only
 `SSH_AUTH_SOCK` is configured — same keys, poorer prompt.
 
+**Hand-over is for the command lines git builds, and only those**
+(decision AI). Every one of them names an operation with `-Y` — `sign` when
+git wants a signature, `find-principals` and `verify` when it is checking
+one — so anything reaching this program without a `-Y` was typed by a
+person, and passing it on is the wrong reflex: `ssh-keygen` with no
+operation flag *generates a key*. `ladulas-sign -h` therefore opened a
+prompt to write a new private key into `~/.ssh` instead of saying what the
+program was, and `-help`, which getopt reads as `-h -e -l -p`, opened one
+to change the passphrase on an existing key. A command line with no `-Y`
+now gets the usage: exit 0 when it is a help request, exit 1 and a sentence
+naming what was refused otherwise. Everything git constructs is untouched.
+
 Design detail: `ladulas-sign` submits the *raw payload* plus context; the
 signing instance recomputes the SSHSIG wrapper itself. The context is
 display metadata, and the approver's UI marks it as such — the payload is
@@ -3147,6 +3159,12 @@ Added 2026-08-21:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AH | Which addresses the peer channel binds, which it advertises, and who may change them | **one tier, chosen not swept; a name in front of a tailnet address; and a stored setting the control socket writes.** The automatic policy bound every private and tailnet address on the machine and loopback besides, and advertised the same list to every peer that paired. On a desktop with Docker and libvirt that is fourteen listeners, eleven of which nothing can reach, and fourteen addresses in every peer's trust record — of which the one that mattered was somewhere in the middle and the last one was the dialler's own loopback. It now takes the best tier present — tailnet, else other private, else loopback — after skipping interfaces that are up but not running (IFF_UP outlives a container runtime's bridge and IFF_RUNNING does not) and interfaces whose *name* belongs to a runtime or a hypervisor. The name test is a guess about a string and is admitted as one: `br-` with the hyphen is Docker's per-network bridge while a real `br0` is left alone, and every address passed over is reported with the rule that ate it, because a listener missing from where somebody expected it has to be a question with an answer. **Bind and advertise become two lists**, since what a socket was opened on is a fact about this machine and what a peer is told to dial is an instruction to another one: a tailnet address is advertised under its node name first, found by asking the resolver and confirming the answer forward, with the address behind it for a peer whose MagicDNS is off; and loopback is advertised only by an instance that has nothing else. Three related repairs on the dialling side, all from the same evening: an address answering with **our own** identity is an address on this machine and is skipped rather than reported as the peer being an impostor; the failure reported when every address fails is the most informative rather than the last, which was the worst by construction; and an identity mismatch prints a pin against a pin, having printed an SSH fingerprint against a pin, which reads as the two ends disagreeing about how to hash a key. Management is `ladulas listen`, keeping its setting in the store because the control socket is the whole management surface (decision K) and rebinding the channel on the spot, with the previous addresses restored if the new ones cannot be bound; `--peer-listen` still outranks it, deliberately, as the way back into a machine whose stored address no longer exists. Rejected: binding every tier and letting the dialler sort it out, which is what this replaced and what made a peer's stored list mostly unreachable; stripping loopback from the advertisement without the dialler's self check, which leaves every already-paired peer holding one; and reading the node name from tailscaled's LocalAPI, which is a dependency and a socket permission for a string the resolver already has. Qualifies decision H, whose "sensible default to decide" this is. Rationale in §8; the report is in `bugs/` |
+
+Added 2026-08-25:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AI | What `ladulas-sign` does with a command line git did not build | **answers it, rather than passing it to `ssh-keygen`.** Everything not a `-Y sign` request was handed over unchanged, which is the promise §5 makes and is right for the ones git makes — `-Y find-principals` and `-Y verify` on every `git log --show-signature`. It is wrong for the ones a person makes, because `ssh-keygen` with no operation flag does not print usage: it *generates a key*. So `ladulas-sign -h` opened a prompt to write a new private key into `~/.ssh`, and `-help`, which getopt reads as `-h -e -l -p`, opened one to change the passphrase on an existing key — a program whose whole purpose is that no key is used without somebody approving it, offering to write one because somebody asked it what it was. The discriminator is `-Y` itself: every invocation git makes of `gpg.ssh.program` names an operation, verified against git 2.55 by logging the argv of both signing arrangements, the key file and the `key::` literal, through sign, `--show-signature` and `%GK`. Without one, the usage is printed — exit 0 for a help request, exit 1 and a sentence naming what was refused for anything else. Rejected: enumerating `ssh-keygen`'s action-selecting flags and refusing only the key-generating shapes, which is a list to keep in step with another project's getopt and misclassifies every flag OpenSSH adds after this is written; and intercepting `-h` alone, which leaves `-help` and `-v` opening the same prompts. What is given up is using `ladulas-sign` as a general `ssh-keygen` stand-in, which it never was — it is a `gpg.ssh.program`, and the fallback is still every command line git builds. Rationale in §5; the report is in `bugs/` |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

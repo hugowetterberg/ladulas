@@ -11,10 +11,12 @@
 //	git config --global gpg.format ssh
 //	git config --global gpg.ssh.program ladulas-sign
 //
-// Everything that is not a signing request — git runs the same program for
-// -Y find-principals and -Y verify — is passed to the real ssh-keygen, and so
-// is a signing request for a key this instance does not hold. Nothing that
-// worked before this program was configured stops working because it was.
+// Everything else git runs the same program for — -Y find-principals and
+// -Y verify — is passed to the real ssh-keygen, and so is a signing request for
+// a key this instance does not hold. Nothing that worked before this program
+// was configured stops working because it was. A command line git did not
+// build is a different matter: it gets the usage rather than a hand-over,
+// because ssh-keygen with no operation flag generates a key (decision AI).
 package main
 
 import (
@@ -28,11 +30,6 @@ import (
 
 func main() {
 	args := os.Args[1:]
-
-	if len(args) == 0 {
-		signcli.Usage(os.Stderr)
-		os.Exit(1)
-	}
 
 	// git kills the signer when the user interrupts a commit; leaving the
 	// pending approval behind would strand a prompt on somebody's screen.

@@ -11,8 +11,9 @@
 //
 // and the signature is expected in <payload-file>.sig. git runs the same
 // program for verification, with -Y find-principals and -Y verify, reading the
-// payload from standard input — so anything that is not a signing request is
-// handed to the real ssh-keygen unchanged.
+// payload from standard input — so a command line git built that is not a
+// signing request is handed to the real ssh-keygen unchanged. One nobody built
+// is not: see Run, and decision AI.
 package signcli
 
 import (
@@ -59,6 +60,12 @@ var signFlagsBoolean = map[byte]bool{
 // operationOf finds the -Y value without parsing the rest, so that a
 // find-principals or verify command line can be passed on without this program
 // having to understand every flag those take.
+//
+// The second result says whether the command line carries a -Y at all, which is
+// what separates one git built from one somebody typed: every invocation git
+// makes of gpg.ssh.program names an operation. A trailing -Y with nothing after
+// it counts — it is a malformed command line rather than a hand-typed one, and
+// ssh-keygen gives a better account of it than we would.
 func operationOf(args []string) (string, bool) {
 	for i := range args {
 		arg := args[i]
@@ -79,10 +86,26 @@ func operationOf(args []string) (string, bool) {
 			return args[i+1], true
 		}
 
-		return "", false
+		return "", true
 	}
 
 	return "", false
+}
+
+// helpRequests are what somebody types to find out what a program is. None of
+// them is a flag of this program's — ssh-keygen owns the flag namespace — so
+// they are recognised only as the whole command line, and never as one argument
+// among others.
+var helpRequests = map[string]bool{
+	"-h":     true,
+	"-help":  true,
+	"--help": true,
+	"-?":     true,
+	"help":   true,
+}
+
+func isHelpRequest(args []string) bool {
+	return len(args) == 1 && helpRequests[args[0]]
 }
 
 // parseSign reads a `-Y sign` command line.
