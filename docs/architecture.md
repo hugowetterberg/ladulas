@@ -839,6 +839,21 @@ And loopback is advertised only by an instance that has nothing else, since
 telling a peer on another machine to dial `127.0.0.1` is telling it to dial
 itself.
 
+Which it did, and the consequences were not confined to a wasted
+connection. **An address that answers with our own identity is not an
+impostor**: the dialler compares the pin it met against its own before it
+compares it against the peer's, and an address that turns out to be this
+machine is skipped rather than reported. And when every address fails, the
+one reported is the **most informative** — a peer that answered as somebody
+else over a connection that was refused, and a refusal over a name that would
+not resolve — rather than the last one tried, which by construction is the
+one nobody expected to work. All three of those are one bug's three parts,
+written up in `bugs/an-identity-mismatch-that-was-a-loopback-address.md`: an
+unreachable peer reported "the peer is not the expected identity", naming
+fingerprints that did not match because one of them was ours, and the store
+that was actually sealed went unmentioned. Do not report a peer's identity as
+wrong on evidence gathered from a socket on this machine.
+
 **The name is looked up when somebody asks, not when the channel binds.**
 That is a correction rather than a refinement: it was resolved once, inside
 the bind, and whatever the resolver said in that instant was what every
@@ -864,20 +879,31 @@ per question — the original bug went unnoticed because nothing said
 anything at all, and a feature that degrades in silence is one discovered
 by comparing two screens.
 
-Which it did, and the consequences were not confined to a wasted
-connection. **An address that answers with our own identity is not an
-impostor**: the dialler compares the pin it met against its own before it
-compares it against the peer's, and an address that turns out to be this
-machine is skipped rather than reported. And when every address fails, the
-one reported is the **most informative** — a peer that answered as somebody
-else over a connection that was refused, and a refusal over a name that would
-not resolve — rather than the last one tried, which by construction is the
-one nobody expected to work. All three of those are one bug's three parts,
-written up in `bugs/an-identity-mismatch-that-was-a-loopback-address.md`: an
-unreachable peer reported "the peer is not the expected identity", naming
-fingerprints that did not match because one of them was ours, and the store
-that was actually sealed went unmentioned. Do not report a peer's identity as
-wrong on evidence gathered from a socket on this machine.
+**A link is not up until the peer has said something.** The presence stream
+is what tells this instance whether there is anybody to ask before it has
+anything to ask, and it used to be treated as established the moment the
+client returned it. It is not: connect hands back a stream as soon as the
+request has been queued and keeps the transport error for the first
+`Receive`, which its own comment on `CallServerStream` says outright. So a
+laptop asleep with its lid shut was logged as "linked to a peer" every
+twenty seconds, marked online, and sent the grant activity that a link
+coming up hands over — and, worse, the loop over the peer's addresses never
+advanced past its first entry, because the address that could not be reached
+never reported that it could not be reached. The first heartbeat is free
+evidence and costs nothing to wait for: `Watch`'s handler sends one before
+it waits on its ticker, so a stream that yields nothing is a peer that is
+not there.
+
+**Failing over is rationed rather than free.** Once the loop works, a peer
+that is merely asleep charges a dial timeout for every address in its trust
+record — and a record written before decision AH holds every address the
+peer could see, including its container runtime's, fourteen of them on an
+ordinary desktop. So the address that last worked is tried alone for three
+consecutive failures before the rest of the record gets a turn. A peer
+coming back on the address it left on never reaches the sweep; one that has
+genuinely moved is found inside the minute the backoff ceiling promises.
+The call paths do not ration it — a signature somebody is waiting for tries
+everything it has, because it is not on a timer and there is no next round.
 
 The protocol (sketch — to be specified precisely in a follow-up):
 

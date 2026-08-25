@@ -34,6 +34,7 @@ type link struct {
 	mu         sync.Mutex
 	record     *storepb.TrustRecord
 	preferred  string
+	misses     int
 	online     bool
 	lastErr    string
 	lastSeen   time.Time
@@ -132,6 +133,7 @@ func (l *link) succeeded(address string) {
 	first := !l.online
 
 	l.preferred = address
+	l.misses = 0
 	l.online = true
 	l.lastErr = ""
 	l.lastSeen = time.Now()
@@ -155,6 +157,7 @@ func (l *link) failed(err error) {
 
 	l.online = false
 	l.offered = nil
+	l.misses++
 
 	if err != nil {
 		l.lastErr = err.Error()
@@ -335,9 +338,41 @@ func jitter(d time.Duration) time.Duration {
 	return d/2 + time.Duration(rand.Int64N(int64(d)))
 }
 
+// presenceMisses is how many consecutive failures the address that last worked
+// is given before the presence loop starts trying the rest of the record.
+//
+// It is a compromise between two costs that pull opposite ways. Trying every
+// address every time is what a record written before decision AH makes
+// expensive: fourteen of them, most on interfaces that belong to a container
+// runtime on the *other* machine, each worth a dial timeout to a peer that is
+// simply asleep. Trying only the preferred one for ever is no failover at all,
+// which is what this code had. Three failures is long enough that a peer coming
+// back on the address it left on never reaches the sweep, and short enough that
+// one that has genuinely moved is found inside the minute the backoff ceiling
+// promises.
+const presenceMisses = 3
+
+// presenceOrder is the addresses to try this time round.
+//
+// It is not link.addresses, which the call paths use and which always offers
+// the whole record: a signature somebody is waiting for should try everything
+// it has, while presence runs on a timer and can afford to be patient.
+func (l *link) presenceOrder() []string {
+	l.mu.Lock()
+	preferred := l.preferred
+	misses := l.misses
+	l.mu.Unlock()
+
+	if preferred != "" && misses < presenceMisses {
+		return []string{preferred}
+	}
+
+	return l.addresses()
+}
+
 // presence opens a presence stream and reads it until it breaks.
 func (l *link) presence(ctx context.Context) error {
-	addresses := l.addresses()
+	addresses := l.presenceOrder()
 	if len(addresses) == 0 {
 		return errors.New("the peer has no address to dial")
 	}
@@ -345,12 +380,35 @@ func (l *link) presence(ctx context.Context) error {
 	var lastErr error
 
 	for _, address := range addresses {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		client := ladulasv1connect.NewPresenceServiceClient(
 			l.client.HTTP(), l.client.URL(address))
 
 		stream, err := client.Watch(ctx, connect.NewRequest(&ladulasv1.WatchRequest{}))
 		if err != nil {
 			lastErr = err
+
+			continue
+		}
+
+		// Nothing may be claimed until a beat has arrived. connect hands the
+		// stream back as soon as the request is queued and deliberately keeps
+		// the transport error for the first Receive — its own comment on
+		// CallServerStream says so — so a nil error here means the request was
+		// written, and nothing more. Treating it as a connection is what had a
+		// laptop asleep with its lid shut logged as "linked to a peer" every
+		// twenty seconds, marked online, and sent grant activity; and it is why
+		// this loop never advanced past its first address, since the address
+		// that could not be reached never reported that it could not be reached.
+		//
+		// The first beat is free evidence: Watch's handler sends one before it
+		// waits on its ticker, so a stream that yields nothing is a peer that
+		// is not there.
+		if !stream.Receive() {
+			lastErr = noHeartbeat(stream)
 
 			continue
 		}
@@ -382,6 +440,29 @@ func (l *link) presence(ctx context.Context) error {
 	}
 
 	return lastErr
+}
+
+// noHeartbeat is why a presence stream produced no first beat, and it closes the
+// stream on the way past so that trying the next address does not leak this one.
+//
+// A stream that ends without an error and without a beat is a peer that
+// authenticated and then said nothing, which no build of this does; it gets a
+// sentence of its own rather than a nil error that would read as success.
+func noHeartbeat(
+	stream *connect.ServerStreamForClient[ladulasv1.PresenceEvent],
+) error {
+	err := stream.Err()
+	closeErr := stream.Close()
+
+	switch {
+	case err != nil:
+		return err
+	case closeErr != nil:
+		return closeErr
+	default:
+		return errors.New(
+			"the peer ended the presence stream without a heartbeat")
+	}
 }
 
 // approvalClient builds an approval client for an address.
