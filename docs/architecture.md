@@ -1133,12 +1133,21 @@ worded as the promise they would make:
 
 * **Session** — "this kitty window", "emacs". The scope decision U
   describes.
-* **Machine** — "anywhere on guppy". The same scope with the session taken
-  out of it, which is exactly what `covers()` has always read as "any
+* **Machine** — "any session on guppy". The same scope with the session
+  taken out of it, which is exactly what `covers()` has always read as "any
   session on that machine". Widening a promise therefore reuses the
   meaning grants had before decision U rather than adding a second one: a
   delegate running older code applies one correctly without being told
   anything new, and nothing on the wire changed.
+
+  **It was worded "anywhere on guppy" and that is not to be reinstated.**
+  The word named the one part of the scope that widening does *not* touch:
+  the key, the kind, the repository, the destination host and the user name
+  all stay pinned, and only the session is dropped. On a git signing prompt
+  that reads as a promise about the machine when it is a promise about one
+  working directory — a wider promise than the one being made, offered in
+  words that describe a wider one still. What actually widens is who may
+  spend it, so that is what the button says.
 
 Then a length, on a clock, bounded by the longest length the policy
 offers (`grant_ttl_options`, default 8 hours). The four fixed lengths are
@@ -2297,6 +2306,30 @@ as to a phone screen that flashes past. The window is still what the request
 is answered in and closing it is still a refusal — and what is waiting is
 also listed on Home, which is where a popup that was closed by accident, or
 never seen, is answered from.
+
+**The answer is pinned, and the change is folded.** Both halves of that are
+the same complaint decision O made about the phone — a card whose buttons a
+thumb reaches by scrolling — arriving on the desktop, where the card is
+exactly as long as the commit it is showing. The approve, the deny and the
+reach buttons sit in a footer stuck to the bottom of whatever is scrolling
+the card, so answering never requires reading to the end first; sticky
+rather than fixed, because `prompt.js` is drawn in two different scrolling
+things and the footer belongs to the card in both. And every file in a diff
+is collapsed, without exception. A file under forty lines used to open
+itself on the reasoning that folding a three-line change helps nobody, and
+the cost of that was a card whose length depended on the shape of the
+change: a commit touching a dozen small files unrolled into a page nobody
+asked for, and the list of *what was touched* — which is what an approver
+reads first — stopped fitting on a screen. **Neither is a statement about
+what an approver may see.** The whole diff is one click per file away and
+the fetch for a truncated one is unchanged (§5); what moved is only which
+of the two a card shows before being asked.
+
+The trust note a timed promise carries (decision X) stays in the body
+rather than riding along in the footer. It is prose to be read before
+making a promise, not a control, and a footer that grows a paragraph is a
+footer that eats the card it is pinned to — it is still the last thing
+above the choices, which is the order that decision asked for.
 
 **One window means one of it, and one application.** Two things had to be
 said for that to hold, and both were bugs first. A window may not be asked

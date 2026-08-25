@@ -613,7 +613,7 @@ func TestEngineGrantCanBeWidenedToTheMachine(t *testing.T) {
 	// The record says who it was made to, and "emacs" is not who that was.
 	description := first.GetGrant().GetDescription()
 
-	if !strings.Contains(description, "anywhere on") {
+	if !strings.Contains(description, "any session on") {
 		t.Errorf("grant description %q", description)
 	}
 

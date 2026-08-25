@@ -89,6 +89,13 @@ async function renderPromptPane() {
 
   show(prompt.card);
 
+  // The popup is the card and nothing else, and the card now ends in a footer
+  // pinned to the bottom of the page. The page's own bottom padding would leave
+  // that footer floating above a strip of background with the card's rounded
+  // edge behind it, so here the card runs to the window's bottom and the footer
+  // sits on its edge. Only this pane: everywhere else the padding is right.
+  root.className = "prompt";
+
   // Escape denies. Closing the window without answering denies too, on the host
   // side: a request that goes unanswered is never an approval.
   document.addEventListener("keydown", (event) => {
@@ -97,9 +104,10 @@ async function renderPromptPane() {
     }
   });
 
-  // Focus without scrolling: the buttons are below a diff, and a window that opens
-  // showing them rather than the commit is a window that gets clicked without
-  // being read.
+  // Focus without scrolling. The footer is pinned, so there is nothing to scroll
+  // to in order to reach it — and a window that opened part-way down the commit
+  // because something in it took focus is a window whose first screen was never
+  // read.
   prompt.approve.focus({ preventScroll: true });
 }
 

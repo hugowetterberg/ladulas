@@ -147,6 +147,11 @@ main {
 
 main.loading, .empty { color: var(--text-faint); }
 
+/* The prompt popup: the card reaches the bottom of the window, because the
+   answer is pinned there and a gap under it would be the page showing through
+   below a footer that is meant to be the card's own edge. */
+main.prompt { padding-bottom: 0; }
+
 h1 { font-size: 17px; margin: 0 0 2px; font-weight: 600; }
 
 h2 {
@@ -380,6 +385,33 @@ details.file[open] > summary::before { content: "▾"; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
 
+/* The answer stays at the bottom of the card's scroll container.
+
+   It used to be the last thing in the card, which on a git prompt put it under
+   the diff: answering a commit of any size meant scrolling past the whole
+   change to reach the buttons, and a Deny that has to be hunted for is the one
+   control a prompt cannot afford to hide. Sticky rather than fixed, because the
+   card is drawn in two different scrolling things — the popup, where the page
+   scrolls, and the shell's pane, which scrolls inside a window — and a fixed
+   footer would belong to neither of them. The negative margins are the card's
+   own padding, so the footer reaches the card's edges and the content passes
+   under it rather than beside it. */
+
+.answer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 22px -13px -12px;
+  padding: 11px 13px calc(11px + env(safe-area-inset-bottom));
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 -10px 18px -14px var(--shadow-strong);
+}
+
+.answer .actions { margin-top: 0; }
+.answer .grant-offer .actions { margin-top: 9px; }
+
 button {
   font: inherit;
   padding: 8px 14px;
@@ -408,7 +440,19 @@ button.deny {
 }
 
 button.deny:hover:not(:disabled) { background: var(--deny-hover); }
-button.grant { font-size: 13px; }
+/* A reach button is a clock and a name. It was the ⏲ character at the label's
+   own 13px, which is a few pixels of ink and unreadable as a clock; it is the
+   shell's stroked icon now, sized by its box rather than by a font that decides
+   for itself how much of the em to draw in. */
+
+button.grant {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+button.grant .icon { width: 17px; height: 17px; }
 
 /* The timed promise: which one, and then how long (decision V). The chosen
    reach stays pressed while the clock is being set, because the length being

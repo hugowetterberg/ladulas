@@ -374,7 +374,7 @@ func TestADelegationCarriesTheReachItWasGiven(t *testing.T) {
 		t.Errorf("the handed-over promise kept a session: %+v", d.GetScope())
 	}
 
-	if !strings.Contains(d.GetDescription(), "anywhere on guppy") {
+	if !strings.Contains(d.GetDescription(), "any session on guppy") {
 		t.Errorf("the delegation describes itself as %q", d.GetDescription())
 	}
 }

@@ -2429,7 +2429,7 @@ type Grant struct {
 	// Human readable rendering of the scope, as shown when the grant was made.
 	Description string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
 	// Who the promise was made to, in the words the button offered it in: "this
-	// kitty window", "anywhere on guppy" (decisions U and V).
+	// kitty window", "any session on guppy" (decisions U and V).
 	//
 	// It is kept beside the rendered sentence rather than only inside it because
 	// extending a promise has to re-render that sentence — a row reading "for 1

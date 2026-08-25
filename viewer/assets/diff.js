@@ -67,16 +67,18 @@ function filesChanged(diff) {
   return count === 1 ? "1 file changed" : count + " files changed";
 }
 
-// renderFile is a collapsed file by default: the diffstat is what an approver
-// reads first, and the hunks are the drill-down §5 asks for. A small change
-// opens itself, because collapsing a three-line commit helps nobody.
+// renderFile is a collapsed file, always: the diffstat is what an approver reads
+// first, and the hunks are the drill-down §5 asks for.
+//
+// A file under forty lines used to open itself, on the reasoning that
+// collapsing a three-line change helps nobody. What it actually did was make
+// the length of the card depend on the shape of the change, so a commit
+// touching a dozen small files unrolled into a page nobody asked for and the
+// list of what was touched — the thing that is read first — stopped fitting on
+// screen. A card of a predictable size, with every file one click from its
+// hunks, beats saving that click on the commits that happen to be short.
 function renderFile(file) {
   const node = el("details", "file");
-  const lines = countLines(file);
-
-  if (lines > 0 && lines <= 40) {
-    node.open = true;
-  }
 
   const head = el("summary");
 
@@ -186,14 +188,4 @@ export function attachDiffFetch(node, request, diff) {
   node.append(button);
 
   return node;
-}
-
-function countLines(file) {
-  let total = 0;
-
-  for (const hunk of file.hunks || []) {
-    total += (hunk.lines || []).length;
-  }
-
-  return total;
 }

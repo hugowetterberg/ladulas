@@ -93,10 +93,19 @@ func GrantMachine(req *ladulasv1.ApprovalRequest) string {
 
 // GrantPromise is who a timed approval of this reach is promised to, in the
 // words the button offered it in and the words the log keeps afterwards: "this
-// kitty window", or "anywhere on guppy" (decisions U and V).
+// kitty window", or "any session on guppy" (decisions U and V).
+//
+// The wider reach used to read "anywhere on guppy", and that was the wrong
+// sentence for what widening does. A machine-wide promise is the request's scope
+// with the session taken out of it and nothing else: the key, the kind, the
+// repository, the destination host and the user name all stay pinned. So a
+// commit promise still covers only the one working directory it was made in,
+// and "anywhere" named the part of the scope that does not move — which on a
+// git signing prompt is the part an approver most wants to be sure of. What
+// actually widens is which session may spend it, and that is what it says now.
 func GrantPromise(req *ladulasv1.ApprovalRequest, reach GrantReach) string {
 	if reach == GrantReachMachine {
-		return "anywhere on " + GrantMachine(req)
+		return "any session on " + GrantMachine(req)
 	}
 
 	return GrantSubject(req)

@@ -10,6 +10,7 @@
 import { el, append, facts } from "./dom.js";
 import { bridge } from "./bridge.js";
 import { renderCard } from "./cards.js";
+import { icon } from "./ui.js";
 
 // renderPrompt draws the card and the answer. `done` is called with the decision
 // once the instance has taken it, which is where a host decides what a window
@@ -46,11 +47,32 @@ export function renderPrompt(request, done) {
   buttons.push(approve, deny);
   actions.append(approve, deny);
 
-  card.append(actions);
+  // The answer sits in a footer that stays at the bottom of whatever is
+  // scrolling the card, because a card is as long as the diff in it and the
+  // buttons used to be underneath that: on any commit worth reading, answering
+  // meant scrolling past the whole change first, and the one thing a prompt
+  // must never be is hard to say no to. Sticky rather than fixed, so it belongs
+  // to the card wherever the card is drawn — the popup, where the page scrolls,
+  // and the shell's pane, where the pane does (decision AA).
+  const footer = el("div", "answer");
+
+  footer.append(actions);
 
   if (request.grant) {
-    card.append(grantOffer(request.grant, answer, buttons));
+    const offer = grantOffer(request.grant, answer, buttons);
+
+    // The trust note stays in the body rather than riding along in the footer.
+    // It is prose to be read before making a promise (decision X), not a
+    // control, and a footer that grows a paragraph is a footer that eats the
+    // card it is pinned to. It is still the last thing above the choices.
+    if (offer.trust) {
+      card.append(offer.trust);
+    }
+
+    footer.append(offer.controls);
   }
+
+  card.append(footer);
 
   return { card, approve, deny, answer };
 }
@@ -63,6 +85,10 @@ export function renderPrompt(request, done) {
 // somebody had written down. Here the reach is a choice — the session the request
 // came from, or the machine it came from — and the length is a clock bounded by
 // what the instance will promise.
+//
+// It returns the two halves apart, because they are drawn in different places:
+// the controls go in the pinned footer with the other buttons, and the trust
+// note stays in the body above it.
 function grantOffer(offer, answer, buttons) {
   const root = el("div", "grant-offer");
   const choices = el("div", "actions");
@@ -97,15 +123,29 @@ function grantOffer(offer, answer, buttons) {
 
   confirm.onclick = () => answer("approve", chosen(), scope);
 
+  // The wider reach is worded as the session being dropped, not as a place being
+  // opened up. It said "anywhere on guppy", and that was read as a promise about
+  // the machine — where the scope keeps the repository, the destination host and
+  // the user name it was made under, and only stops asking which window the
+  // request came from. "Anywhere" named the one part of the scope that does not
+  // widen, which on a commit is the part that matters most.
   for (const choice of [
     offer.session ? { scope: "session", label: offer.session } : null,
-    { scope: "machine", label: "anywhere on " + offer.machine },
+    { scope: "machine", label: "any session on " + offer.machine },
   ]) {
     if (!choice) {
       continue;
     }
 
-    const button = el("button", "grant", "⏲ " + choice.label);
+    // The clock is the shell's drawn one rather than the ⏲ character it used to
+    // be. A glyph is whatever font the system substitutes for it, and the one
+    // this box picks draws a shape a few pixels across inside its em box — so
+    // raising the font size raised the space around it and not the clock. A
+    // stroked icon is sized by its box, takes the button's colour, and is the
+    // same clock the sidebar and the activity list already use.
+    const button = el("button", "grant");
+
+    append(button, icon("clock"), el("span", "grant-label", choice.label));
 
     button.onclick = () => {
       scope = choice.scope;
@@ -128,15 +168,13 @@ function grantOffer(offer, answer, buttons) {
   picker.append(promise, clock, confirm);
   picker.hidden = true;
 
-  // The trust note comes before the choices: what a timed promise leans on is
-  // worth reading before deciding to make one, not after (decision X).
-  if (offer.trust) {
-    root.append(grantTrust(offer.trust));
-  }
-
   root.append(choices, picker);
 
-  return root;
+  // The trust note comes before the choices: what a timed promise leans on is
+  // worth reading before deciding to make one, not after (decision X). It is
+  // returned rather than nested so that the caller can leave it in the scrolling
+  // body while the choices go in the footer, which keeps that order on screen.
+  return { trust: offer.trust ? grantTrust(offer.trust) : null, controls: root };
 }
 
 // grantTrust is the note a timed promise carries when its scope would pin
