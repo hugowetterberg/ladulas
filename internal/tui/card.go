@@ -19,41 +19,34 @@ import (
 // requests is a second chance to disagree about what a commit says, and the
 // only way not to take it is to have nothing here that could decide differently.
 //
-// What this surface does that the window does not is fit in a terminal, so the
-// long things are cut to the width and the diff opens a file at a time.
+// Where it parts from the window is the diff. The window draws every file as a
+// disclosure the reader opens in place; here the card lists the files and
+// nothing else, and one file's hunks are a screen of their own (decision AN).
+// Two things follow and both are the reason. The card is the same length
+// whatever the change is, so the facts a decision rests on cannot be pushed off
+// the screen by a commit that touched thirty files. And reading a file is
+// somewhere you go, which is what lets `enter` mean "approve" on the card
+// without meaning it while somebody is scrolling through the change.
 
-// row is one drawn line, and what it belongs to.
-//
-// The file index is how the focus ring works: `n` and `p` walk the headers and
-// enter opens one, which needs to know which lines came from which file after
-// the styling has been baked in. Anything that is not part of the diff carries
-// -1 and is skipped.
-type row struct {
-	text string
-	file int
-	head bool
-}
-
-// builder collects rows at a width.
+// builder collects lines at a width.
 type builder struct {
-	rows  []row
+	lines []string
 	width int
 	st    *styles
-	file  int
 }
 
 func (b *builder) push(text string) {
-	b.rows = append(b.rows, row{text: text, file: b.file})
+	b.lines = append(b.lines, text)
 }
 
 func (b *builder) blank() {
-	if len(b.rows) == 0 {
+	if len(b.lines) == 0 {
 		return
 	}
 
 	// One blank line between blocks and never two, so that a card with several
 	// empty sections does not open with a screen of nothing.
-	if strings.TrimSpace(b.rows[len(b.rows)-1].text) == "" {
+	if strings.TrimSpace(b.lines[len(b.lines)-1]) == "" {
 		return
 	}
 
@@ -113,12 +106,10 @@ func (b *builder) heading(text string) {
 	b.push(b.st.heading.Render(text))
 }
 
-// renderCard draws the whole card. `expanded` says which of the diff's files
-// have their hunks showing.
-func renderCard(
-	st *styles, view bridge.RequestView, width int, expanded map[int]bool,
-) []row {
-	b := &builder{width: width, st: st, file: -1}
+// renderCard draws the whole card: what is being asked, on what, by whom, with
+// which key, and which files the change touches.
+func renderCard(st *styles, view bridge.RequestView, width int) []string {
+	b := &builder{width: width, st: st}
 
 	b.wrap(st.title, view.Title)
 	b.wrap(st.subject, view.Subject)
@@ -136,7 +127,7 @@ func renderCard(
 
 	switch view.Kind {
 	case "git-sign":
-		renderGit(b, view, expanded)
+		renderGit(b, view)
 	case "ssh-auth":
 		renderSSHAuth(b, view)
 	case "sshsig":
@@ -152,11 +143,11 @@ func renderCard(
 	renderCommon(b, view)
 	renderTrust(b, view)
 
-	if view.Kind == "git-sign" && view.Git != nil && view.Git.Diff != nil {
-		renderDiff(b, view.Git.Diff, expanded)
+	if diff := diffOf(view); diff != nil {
+		renderChanges(b, diff)
 	}
 
-	return b.rows
+	return b.lines
 }
 
 // renderCommon is the key and who is asking, which every card carries and which
@@ -223,7 +214,7 @@ func renderTrust(b *builder, view bridge.RequestView) {
 	b.wrap(b.st.note, trust.Detail)
 }
 
-func renderGit(b *builder, view bridge.RequestView, _ map[int]bool) {
+func renderGit(b *builder, view bridge.RequestView) {
 	git := view.Git
 	if git == nil {
 		// The plain agent socket only ever saw a digest, which is the whole
@@ -381,15 +372,13 @@ func renderGeneric(b *builder, view bridge.RequestView) {
 	}
 }
 
-// renderDiff draws the change: the summary, then a line per file, then the
-// hunks of the files that have been opened.
+// renderChanges is the diffstat and the list of files, which is what an
+// approver reads first and often all they read.
 //
-// Every file starts closed, which is what the window does and for the reason
-// written down there: a card whose length depends on the shape of the change
-// pushes the list of what was touched — the thing that is read first — off the
-// screen. Here it also keeps the scroll position meaningful, since opening a
-// file is the one thing that moves the lines under the cursor.
-func renderDiff(b *builder, diff *bridge.DiffView, expanded map[int]bool) {
+// The hunks are not here. They are a screen of their own, reached from the file
+// list (decision AN), which is what keeps the length of this card independent
+// of the size of the change.
+func renderChanges(b *builder, diff *bridge.DiffView) {
 	b.heading("Changes")
 
 	if diff.Error != "" {
@@ -414,13 +403,11 @@ func renderDiff(b *builder, diff *bridge.DiffView, expanded map[int]bool) {
 	}
 
 	// The window puts a button here, and this is the same offer: the cap is
-	// about what travels with a request somebody is waiting on, and was never
-	// a statement about what an approver may see (§5). Said in the card rather
-	// than left to the key list, because somebody who has just read "cut
-	// short" is the person who wants to know there is a way to see the rest.
+	// about what travels with a request somebody is waiting on, and was never a
+	// statement about what an approver may see (§5).
 	if diff.Truncated {
 		b.wrap(b.st.note,
-			"The diff was cut short. Press f to ask the requesting machine "+
+			"The diff was cut short. Press r to ask the requesting machine "+
 				"for the whole of it.")
 	}
 
@@ -430,60 +417,73 @@ func renderDiff(b *builder, diff *bridge.DiffView, expanded map[int]bool) {
 		return
 	}
 
-	for index, file := range diff.Files {
-		renderFile(b, index, file, expanded[index])
+	b.blank()
+
+	for _, file := range diff.Files {
+		b.cut(b.st.value, fileRow(b.st, file))
 	}
+
+	b.blank()
+	b.wrap(b.st.note, "Press f to read one of them.")
 }
 
-func renderFile(b *builder, index int, file bridge.DiffFileView, open bool) {
-	b.file = index
-	defer func() { b.file = -1 }()
-
-	marker := "▸"
-	if open {
-		marker = "▾"
-	}
-
-	head := fmt.Sprintf("%s %s  %s %s",
-		marker,
-		b.st.file.Render(pathOf(file)),
-		b.st.plus.Render(fmt.Sprintf("+%d", file.Insertions)),
-		b.st.minus.Render(fmt.Sprintf("-%d", file.Deletions)))
+// fileRow is one file as a line: what it is called, what it did, and how much
+// of it changed. It is the same row the file list draws, so that picking a file
+// and reading the card are looking at one description of it.
+func fileRow(st *styles, file bridge.DiffFileView) string {
+	row := fmt.Sprintf("%s  %s %s",
+		pathOf(file),
+		st.plus.Render(fmt.Sprintf("+%d", file.Insertions)),
+		st.minus.Render(fmt.Sprintf("-%d", file.Deletions)))
 
 	if file.Status != "" {
-		head += "  " + b.st.dim.Render(file.Status)
+		row += "  " + st.dim.Render(file.Status)
 	}
 
 	if file.ModeChange != "" {
-		head += "  " + b.st.asserted.Render(file.ModeChange)
-	}
-
-	b.rows = append(b.rows, row{text: head, file: index, head: true})
-
-	if !open {
-		return
+		row += "  " + st.asserted.Render(file.ModeChange)
 	}
 
 	if file.Binary {
-		b.wrap(b.st.note, "  Binary file; no diff to show.")
+		row += "  " + st.dim.Render("binary")
+	}
+
+	return row
+}
+
+// renderFileDiff is one file's change, which is the screen the file list opens.
+func renderFileDiff(st *styles, file bridge.DiffFileView, width int) []string {
+	b := &builder{width: width, st: st}
+
+	b.cut(st.title, pathOf(file))
+	b.push(fileRow(st, file))
+	b.blank()
+
+	if file.Binary {
+		b.wrap(st.note, "Binary file; no diff to show.")
 	}
 
 	for _, hunk := range file.Hunks {
-		b.cut(b.st.hunk, "  "+hunk.Header)
+		b.cut(st.hunk, hunk.Header)
 
 		for _, line := range hunk.Lines {
-			b.cut(lineStyle(b.st, line.Kind), "  "+gutter(line.Kind)+line.Text)
+			b.cut(lineStyle(st, line.Kind), gutter(line.Kind)+line.Text)
 		}
+
+		b.blank()
 	}
 
 	if file.Truncated {
-		b.wrap(b.st.note,
-			"  This file's diff was cut short to keep the request a readable size.")
+		b.wrap(st.note,
+			"This file's diff was cut short to keep the request a readable "+
+				"size. Press r to ask for the whole of it.")
 	}
 
 	if !file.Binary && len(file.Hunks) == 0 && !file.Truncated {
-		b.wrap(b.st.note, "  No textual change.")
+		b.wrap(st.note, "No textual change.")
 	}
+
+	return b.lines
 }
 
 func gutter(kind string) string {

@@ -323,32 +323,264 @@ func TestTheAnswerKeysAreAlwaysOnScreen(t *testing.T) {
 	}
 }
 
-// TestTheDiffOpensAFileAtATime: the diffstat is what an approver reads first
-// and the hunks are the drill-down, so every file starts closed and enter opens
-// the one under the cursor.
-func TestTheDiffOpensAFileAtATime(t *testing.T) {
-	m, _ := fixture(t)
+// twoFileView is a change touching two files, which is what a file list is for
+// and what one file cannot test.
+func twoFileView() bridge.RequestView {
+	view := gitView()
+
+	view.Git.Diff.FilesChanged = 2
+	view.Git.Diff.Files = append(view.Git.Diff.Files, bridge.DiffFileView{
+		OldPath:    "pkg/peer/collect.go",
+		NewPath:    "pkg/peer/collect.go",
+		Status:     "modified",
+		Insertions: 1,
+		Hunks: []bridge.DiffHunkView{{
+			Header: "@@ -491,3 +491,4 @@ func collectedTimeout() {",
+			Lines: []bridge.DiffLineView{
+				{Kind: "added", Text: "\tconst maxCollectedTimeout = time.Hour"},
+			},
+		}},
+	})
+
+	return view
+}
+
+// twoFiles is a model with that change on screen.
+func twoFiles(t *testing.T) (*model, *stub) {
+	t.Helper()
+
+	host := &stub{view: twoFileView()}
+	m := newModel(&api{handler: host.handler()}, "sock")
+
+	m.width = 110
+	m.height = 40
+	m.attached = true
+
+	m.present(presentMsg{id: "req-1", since: time.Now(), view: twoFileView()})
+
+	return m, host
+}
+
+// TestTheCardListsTheFilesAndNotTheHunks: the diffstat and what was touched are
+// what an approver reads first, and folding thirty files' worth of hunks into
+// the card is what pushes the facts a decision rests on off the screen
+// (decision AN).
+func TestTheCardListsTheFilesAndNotTheHunks(t *testing.T) {
+	m, _ := twoFiles(t)
 
 	press(t, m, "G")
 
-	if strings.Contains(m.View(), "os.Chmod(path, 0o600)") {
-		t.Error("the diff was open before anybody opened it")
+	screen := m.View()
+
+	for _, want := range []string{
+		"2 files changed",
+		"agent/server.go",
+		"pkg/peer/collect.go",
+		"Press f to read one of them",
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the card does not say %q:\n%s", want, screen)
+		}
 	}
 
-	if !strings.Contains(m.View(), "agent/server.go") {
-		t.Error("the file the change touches is not listed")
+	if strings.Contains(screen, "os.Chmod(path, 0o600)") {
+		t.Error("the card carries the hunks, which is what makes it unbounded")
+	}
+}
+
+// TestTheFileListOpensOneFilesChange: `f`, choose, read. It replaced a cursor
+// living in the card that could only be moved with keys nobody found — the
+// arrows scrolled and `n` was in the help table and nowhere else, so the second
+// file of a change could not be reached at all.
+func TestTheFileListOpensOneFilesChange(t *testing.T) {
+	m, _ := twoFiles(t)
+
+	press(t, m, "f")
+
+	if m.mode != modeFiles {
+		t.Fatal("f did not open the file list")
 	}
 
-	press(t, m, "n", "enter")
+	press(t, m, "down", "enter")
 
-	if !strings.Contains(m.View(), "os.Chmod(path, 0o600)") {
-		t.Error("opening the file did not show its lines")
+	if m.mode != modeDiff {
+		t.Fatal("choosing a file did not open its change")
+	}
+
+	if !strings.Contains(m.View(), "maxCollectedTimeout") {
+		t.Errorf("the second file's change is not on screen:\n%s", m.View())
+	}
+
+	if !strings.Contains(m.View(), "file 2 of 2") {
+		t.Errorf("the screen does not say which file this is:\n%s", m.View())
+	}
+}
+
+// TestTypingNarrowsTheFileList: the change this is for is a commit touching
+// thirty files, and the answer to "where is the one I care about" should be
+// typing part of its name.
+func TestTypingNarrowsTheFileList(t *testing.T) {
+	m, _ := twoFiles(t)
+
+	press(t, m, "f", "c", "o", "l", "l")
+
+	screen := m.View()
+
+	if strings.Contains(screen, "agent/server.go") {
+		t.Errorf("the filter did not narrow the list:\n%s", screen)
+	}
+
+	if !strings.Contains(screen, "pkg/peer/collect.go") {
+		t.Errorf("the filter hid the file it matches:\n%s", screen)
+	}
+
+	// And enter opens the file the filter left, not the one at that place in
+	// the whole list.
+	press(t, m, "enter")
+
+	if !strings.Contains(m.View(), "maxCollectedTimeout") {
+		t.Errorf("enter opened the wrong file:\n%s", m.View())
+	}
+}
+
+// TestEscapeLeavesTheFileListAlone: every printable key narrows the list, so
+// `esc` is the only way out — and it changes nothing.
+func TestEscapeLeavesTheFileListAlone(t *testing.T) {
+	m, _ := twoFiles(t)
+
+	press(t, m, "f", "down", "esc")
+
+	if m.mode != modeCard {
+		t.Fatal("esc did not close the file list")
+	}
+
+	if m.current().reading != -1 {
+		t.Error("esc opened a file anyway")
+	}
+}
+
+// TestNStepsStraightToTheNextFile: reading a commit file by file is a motion
+// rather than a choice, so it does not go through the list. And it wraps.
+func TestNStepsStraightToTheNextFile(t *testing.T) {
+	m, _ := twoFiles(t)
+
+	press(t, m, "n")
+
+	if m.mode != modeDiff || m.current().reading != 0 {
+		t.Fatalf("n opened %d in mode %v", m.current().reading, m.mode)
+	}
+
+	press(t, m, "n")
+
+	if m.current().reading != 1 {
+		t.Errorf("a second n went to %d", m.current().reading)
+	}
+
+	press(t, m, "n")
+
+	if m.current().reading != 0 {
+		t.Errorf("n from the last file went to %d rather than wrapping",
+			m.current().reading)
+	}
+
+	press(t, m, "p")
+
+	if m.current().reading != 1 {
+		t.Errorf("p from the first file went to %d", m.current().reading)
+	}
+}
+
+// TestEnterApprovesOnTheCardAndClosesTheChange: the one that has to be right.
+// Enter is the answer somebody gives most often and belongs under their hand —
+// on the screen whose whole content is the facts a decision rests on. While
+// somebody is scrolling through the change it closes the change, because a
+// signature is not a thing to approve by reflex (decision AN).
+func TestEnterApprovesOnTheCardAndClosesTheChange(t *testing.T) {
+	m, host := twoFiles(t)
+
+	press(t, m, "n")
+
+	if m.mode != modeDiff {
+		t.Fatal("n did not open a change to read")
 	}
 
 	press(t, m, "enter")
 
-	if strings.Contains(m.View(), "os.Chmod(path, 0o600)") {
-		t.Error("closing the file did not hide its lines")
+	if sent := host.sent(); len(sent) != 0 {
+		t.Fatalf("enter in the change answered the request: %+v", sent)
+	}
+
+	if m.mode != modeCard {
+		t.Error("enter in the change did not close it")
+	}
+
+	// Back on the card, it is the answer.
+	press(t, m, "enter")
+
+	sent := host.sent()
+	if len(sent) != 1 || sent[0].Decision != "approve" {
+		t.Fatalf("enter on the card sent %+v", sent)
+	}
+}
+
+// TestTheChangeCanStillBeAnsweredByLetter: having to come back to the card to
+// say no to something you have just read would be its own small insult. The
+// letters are deliberate; enter is not.
+func TestTheChangeCanStillBeAnsweredByLetter(t *testing.T) {
+	m, host := twoFiles(t)
+
+	press(t, m, "n", "d")
+
+	sent := host.sent()
+	if len(sent) != 1 || sent[0].Decision != "deny" {
+		t.Fatalf("d in the change sent %+v", sent)
+	}
+}
+
+// TestChoosingBetweenWaitingRequests: it moved off tab and the arrows, so the
+// keys it moved to have to work — and a digit has to pick one straight off the
+// strip.
+func TestChoosingBetweenWaitingRequests(t *testing.T) {
+	host := &stub{view: gitView()}
+	m := newModel(&api{handler: host.handler()}, "sock")
+
+	m.width = 100
+	m.height = 40
+	m.attached = true
+
+	first := gitView()
+	first.Subject = "the first request"
+
+	second := gitView()
+	second.Subject = "the second request"
+
+	m.present(presentMsg{id: "req-1", since: time.Now(), view: first})
+	m.present(presentMsg{id: "req-2", since: time.Now(), view: second})
+
+	press(t, m, "]")
+
+	if got := m.current().id; got != "req-2" {
+		t.Errorf("] selected %s", got)
+	}
+
+	press(t, m, "[")
+
+	if got := m.current().id; got != "req-1" {
+		t.Errorf("[ selected %s", got)
+	}
+
+	press(t, m, "2")
+
+	if got := m.current().id; got != "req-2" {
+		t.Errorf("2 selected %s", got)
+	}
+
+	// And an arrow key stays with the diff rather than changing the subject
+	// under somebody who was reading it.
+	press(t, m, "right")
+
+	if got := m.current().id; got != "req-2" {
+		t.Errorf("an arrow key changed the request to %s", got)
 	}
 }
 
@@ -564,7 +796,7 @@ func TestTheRestOfADiffCanBeFetched(t *testing.T) {
 		}},
 	}
 
-	press(t, m, "f", "n", "enter")
+	press(t, m, "r", "n")
 
 	if !strings.Contains(m.View(), "the rest of it") {
 		t.Errorf("the fetched diff is not on screen:\n%s", m.View())

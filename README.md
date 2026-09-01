@@ -183,10 +183,18 @@ the diff a file at a time — with the same answers under it, including
 only this approver away: anything still waiting goes on waiting for the
 window, the phone or whoever else can answer.
 
-`a` approves once, `w` opens the promise, `d` denies, `enter` opens the file
-under the cursor, `f` asks for the rest of a diff that was cut short, and `?`
-lists the rest. It needs a terminal to draw on and says so if it is given a
-pipe.
+`enter` and `a` approve once, `w` opens the promise, `d` denies, and `?` lists
+the rest. It needs a terminal to draw on and says so if it is given a pipe.
+
+**The change is three screens.** The card is the facts and the list of files;
+`f` opens that list, where typing narrows it to the file you are looking for;
+and `enter` there reads one file's change on a screen of its own. `n` and `p`
+step straight from one file to the next without the list, and `r` asks the
+requesting machine for the rest of a diff that was cut short.
+
+`enter` is the answer **only on the card** — in a change it closes the change,
+because a signature is not something to approve by reflex while scrolling
+through code. The letters still answer from anywhere, being deliberate.
 
 With nothing waiting it says how long the next request will wait for an
 answer, and — on a sealed or locked store — that nothing is going to be asked

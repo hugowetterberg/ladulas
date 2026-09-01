@@ -53,6 +53,8 @@ const (
 	modeGrant
 	modeHelp
 	modeUnlock
+	modeFiles
+	modeDiff
 )
 
 // card is one request in front of somebody, and how far they have read.
@@ -66,20 +68,41 @@ type card struct {
 	since time.Time
 	view  bridge.RequestView
 
-	expanded map[int]bool
-	scroll   int
-	// focus is the diff file the file keys act on, or -1 before anything has
-	// been focused.
-	focus int
+	scroll int
+	// reading is the file whose diff is on screen, or -1 when the card is. It
+	// is what makes `enter` safe to use for approving: the key means approve on
+	// the card and "close this" while somebody is reading a change, and the two
+	// are different screens rather than two meanings of one.
+	reading int
+	// diffScroll is how far into that file somebody has read, kept per card so
+	// that leaving a file and coming back does not start again.
+	diffScroll int
 
-	rows  []row
+	lines []string
 	width int
 
 	answering bool
 	note      string
 	noteErr   bool
 
-	grant grantForm
+	grant  grantForm
+	picker filePicker
+}
+
+// filePicker is the list of files, open over the card.
+//
+// It is a dialog rather than a cursor living in the card, and that is the whole
+// design: the card is a thing you scroll, and one set of keys that sometimes
+// scrolls and sometimes moves between files is two programs sharing a keyboard.
+// It shipped as the cursor, briefly, and the cursor could only be moved with
+// keys nobody found.
+type filePicker struct {
+	at     int
+	scroll int
+	// filter narrows the list by substring, because the change this is for is a
+	// commit touching thirty files and the answer to "where is the one I care
+	// about" should be typing part of its name.
+	filter []rune
 }
 
 // grantForm is "approve for a while" as two questions (decision V): who the
@@ -273,12 +296,11 @@ func (m *model) present(msg presentMsg) {
 	}
 
 	m.queue = append(m.queue, &card{
-		id:       msg.id,
-		since:    waitingSince(msg),
-		view:     msg.view,
-		expanded: map[int]bool{},
-		focus:    -1,
-		grant:    grantForm{seconds: 3600},
+		id:      msg.id,
+		since:   waitingSince(msg),
+		view:    msg.view,
+		reading: -1,
+		grant:   grantForm{seconds: 3600},
 	})
 
 	// A new card does not steal the screen from one somebody is reading. It
@@ -332,7 +354,7 @@ func (m *model) dismiss(id string) {
 			m.sel = max(0, len(m.queue)-1)
 		}
 
-		if m.mode == modeGrant {
+		if m.mode != modeCard && m.mode != modeHelp {
 			m.mode = modeCard
 		}
 
@@ -390,6 +412,13 @@ func (m *model) replaceDiff(msg diffMsg) {
 	item.view.Git.Diff = &diff
 	item.width = 0
 	item.note = ""
+
+	// The file being read may not be the same file, or may not exist, in a diff
+	// that arrived whole.
+	if item.reading >= len(diff.Files) {
+		item.reading = -1
+		m.mode = modeCard
+	}
 
 	if diff.Truncated {
 		item.note = "Even the whole diff was too large to send in one piece."
@@ -486,6 +515,14 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.mode == modeUnlock {
 		return m.unlockKey(msg, key)
+	}
+
+	if m.mode == modeFiles {
+		return m.filesKey(msg, key)
+	}
+
+	if m.mode == modeDiff {
+		return m.diffKey(key)
 	}
 
 	if m.mode == modeGrant {
@@ -650,17 +687,30 @@ func (m *model) cardKey(key string) (tea.Model, tea.Cmd) {
 
 		return m, nil
 
-	case "tab", "right":
+	// Moving between waiting requests is `[` and `]`, and a number picks one
+	// straight off the strip. It had the arrow keys and tab, which are the keys
+	// somebody reaches for to move around the diff in front of them — so on
+	// the ordinary card, with one request waiting, every arrow key appeared to
+	// do nothing at all. Choosing between requests is the rarer need and gets
+	// the rarer keys.
+	case "]":
 		if len(m.queue) > 1 {
 			m.sel = (m.sel + 1) % len(m.queue)
 		}
 
 		return m, nil
 
-	case "shift+tab", "left":
+	case "[":
 		if len(m.queue) > 1 {
 			m.sel = (m.sel - 1 + len(m.queue)) % len(m.queue)
 		}
+
+		return m, nil
+	}
+
+	if index := strings.IndexByte("123456789", key[0]); len(key) == 1 &&
+		index >= 0 && index < len(m.queue) {
+		m.sel = index
 
 		return m, nil
 	}
@@ -672,8 +722,20 @@ func (m *model) cardKey(key string) (tea.Model, tea.Cmd) {
 	return m.itemKey(item, key)
 }
 
-//nolint:cyclop // as above: this is the table for a card.
+// itemKey is the card: the facts, and the answers.
+//
+// Nothing here moves a cursor. Every key either scrolls the card, opens
+// something, or answers — which is what makes `enter` usable for the answer
+// somebody gives most often. Reading a file is a screen of its own, and `enter`
+// there closes it (decision AN).
+//
+//nolint:cyclop // a key table is a list of cases; splitting it hides the table.
 func (m *model) itemKey(item *card, key string) (tea.Model, tea.Cmd) {
+	// Drawn before it is moved, because `G` means "the end" and the end is not
+	// known until the card has been laid out at this width. Pressed before the
+	// first paint it used to scroll to line zero of nothing.
+	m.rebuild(item)
+
 	switch key {
 	case "up", "k":
 		item.scroll--
@@ -686,20 +748,20 @@ func (m *model) itemKey(item *card, key string) (tea.Model, tea.Cmd) {
 	case "home", "g":
 		item.scroll = 0
 	case "end", "G":
-		item.scroll = len(item.rows)
-	case "n":
-		m.focusFile(item, 1)
-	case "p":
-		m.focusFile(item, -1)
-	case "enter":
-		m.toggleFile(item)
-	case "e":
-		m.setAllFiles(item, true)
-	case "c":
-		m.setAllFiles(item, false)
+		item.scroll = len(item.lines)
 	case "f":
+		m.openFiles(item)
+	case "n":
+		m.stepFile(item, 1)
+	case "p":
+		m.stepFile(item, -1)
+	case "r":
 		return m, m.fetchDiff(item)
-	case "a":
+	// Enter is approve, the way it is the default action in a dialog: the
+	// answer given most often should be the key under the reader's hand. It
+	// means this only here — on the screen whose whole content is the four facts
+	// a decision rests on. In the change itself it closes the change.
+	case "enter", "a":
 		return m, m.answer(item, answerBody{Decision: "approve"})
 	case "d":
 		return m, m.answer(item, answerBody{Decision: "deny"})
@@ -708,6 +770,231 @@ func (m *model) itemKey(item *card, key string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// diffKey is one file's change on screen: somewhere to read, and one key to
+// leave by.
+//
+// The answering letters still work, because they are deliberate and having to
+// come back to say no to something you have just read would be its own small
+// insult. `enter` does not: it is the key a reader presses without deciding to,
+// and a signature is not something to approve by reflex.
+func (m *model) diffKey(key string) (tea.Model, tea.Cmd) {
+	item := m.current()
+	if item == nil {
+		m.mode = modeCard
+
+		return m, nil
+	}
+
+	switch key {
+	case "enter", "esc", "q":
+		item.reading = -1
+		m.mode = modeCard
+
+		return m, nil
+
+	case "up", "k":
+		item.diffScroll--
+	case "down", "j":
+		item.diffScroll++
+	case "pgup", "b":
+		item.diffScroll -= m.bodyHeight()
+	case "pgdown", " ":
+		item.diffScroll += m.bodyHeight()
+	case "home", "g":
+		item.diffScroll = 0
+	case "end", "G":
+		item.diffScroll = len(m.diffLines(item))
+	case "f":
+		m.openFiles(item)
+	case "n":
+		m.stepFile(item, 1)
+	case "p":
+		m.stepFile(item, -1)
+	case "r":
+		return m, m.fetchDiff(item)
+	case "a":
+		return m, m.answer(item, answerBody{Decision: "approve"})
+	case "d":
+		return m, m.answer(item, answerBody{Decision: "deny"})
+	case "w":
+		m.openGrant(item)
+	case "?":
+		m.mode = modeHelp
+		m.helpScroll = 0
+	}
+
+	return m, nil
+}
+
+// openFiles puts the file list up, starting on the file somebody was last
+// taken to.
+func (m *model) openFiles(item *card) {
+	if m.files(item) == 0 {
+		item.note = "This request carries no diff to pick a file from."
+		item.noteErr = false
+
+		return
+	}
+
+	item.picker = filePicker{at: max(item.reading, 0)}
+	m.mode = modeFiles
+}
+
+// filesKey drives the file list: a cursor, a filter, and one way in and out.
+//
+// Typing narrows rather than jumping to a letter, because the change this is for
+// is a commit touching thirty files. That makes every printable key a filter
+// key, which is why `esc` is the only way out: a `q` would otherwise be
+// ambiguous between quitting and looking for `queue.go`.
+func (m *model) filesKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	item := m.current()
+	if item == nil {
+		m.mode = modeCard
+
+		return m, nil
+	}
+
+	shown := m.shownFiles(item)
+	picker := &item.picker
+
+	switch key {
+	case "esc":
+		m.mode = modeCard
+
+		return m, nil
+
+	case "enter":
+		m.mode = modeCard
+
+		if picker.at < len(shown) {
+			m.showFile(item, shown[picker.at].index)
+		}
+
+		return m, nil
+
+	case "up", "k":
+		picker.at--
+	case "down", "j":
+		picker.at++
+	case "pgup":
+		picker.at -= m.bodyHeight()
+	case "pgdown":
+		picker.at += m.bodyHeight()
+	case "home":
+		picker.at = 0
+	case "end":
+		picker.at = len(shown) - 1
+
+	case "backspace":
+		if len(picker.filter) > 0 {
+			picker.filter = picker.filter[:len(picker.filter)-1]
+			picker.at = 0
+		}
+	case "ctrl+u":
+		picker.filter = picker.filter[:0]
+		picker.at = 0
+
+	default:
+		if msg.Type == tea.KeyRunes {
+			picker.filter = append(picker.filter, msg.Runes...)
+			picker.at = 0
+		}
+
+		if msg.Type == tea.KeySpace {
+			picker.filter = append(picker.filter, ' ')
+			picker.at = 0
+		}
+	}
+
+	picker.at = min(max(picker.at, 0), max(len(m.shownFiles(item))-1, 0))
+
+	return m, nil
+}
+
+// pickedFile is one row of the list: the file, and where it is in the diff so
+// that choosing it can open the right one however the list was narrowed.
+type pickedFile struct {
+	index int
+	file  bridge.DiffFileView
+}
+
+// shownFiles is the list as the filter leaves it. A filter matching nothing
+// shows nothing, which is the honest answer and says itself.
+func (m *model) shownFiles(item *card) []pickedFile {
+	diff := diffOf(item.view)
+	if diff == nil {
+		return nil
+	}
+
+	needle := strings.ToLower(string(item.picker.filter))
+
+	out := make([]pickedFile, 0, len(diff.Files))
+
+	for index, file := range diff.Files {
+		if needle != "" &&
+			!strings.Contains(strings.ToLower(pathOf(file)), needle) {
+			continue
+		}
+
+		out = append(out, pickedFile{index: index, file: file})
+	}
+
+	return out
+}
+
+// showFile puts one file's change on screen.
+func (m *model) showFile(item *card, index int) {
+	if index < 0 || index >= m.files(item) {
+		return
+	}
+
+	if item.reading != index {
+		item.diffScroll = 0
+	}
+
+	item.reading = index
+	m.mode = modeDiff
+}
+
+// stepFile is the quick way through a change: the next file, straight to its
+// diff, without the list in between. Reading a commit file by file is a motion
+// rather than a choice, and it wraps, so `n` from the last file is the first.
+func (m *model) stepFile(item *card, by int) {
+	count := m.files(item)
+	if count == 0 {
+		item.note = "This request carries no diff to read."
+		item.noteErr = false
+
+		return
+	}
+
+	next := item.reading + by
+
+	switch {
+	case item.reading < 0 && by > 0:
+		next = 0
+	case item.reading < 0:
+		next = count - 1
+	case next < 0:
+		next = count - 1
+	case next >= count:
+		next = 0
+	}
+
+	m.showFile(item, next)
+}
+
+// diffLines is the file being read, drawn. Like the card it is cached against
+// the width it was drawn at, since that is the only thing that changes it.
+func (m *model) diffLines(item *card) []string {
+	diff := diffOf(item.view)
+	if diff == nil || item.reading < 0 || item.reading >= len(diff.Files) {
+		return nil
+	}
+
+	return renderFileDiff(m.st, diff.Files[item.reading], m.cardWidth())
 }
 
 // openGrant starts the "approve for a while" form, unless this request may not
@@ -878,88 +1165,27 @@ func (m *model) fetchDiff(item *card) tea.Cmd {
 	}
 }
 
-// The diff's focus ring. `n` and `p` walk the file headers and enter opens the
-// one under the cursor, which is how a diff is read on a screen with no pointer
-// on it.
-func (m *model) focusFile(item *card, by int) {
-	m.rebuild(item)
-
-	heads := fileHeads(item.rows)
-	if len(heads) == 0 {
-		return
+// files is how many files the change touches, for the footer that offers to
+// list them. Zero when there is no diff, which is when there is nothing to
+// pick from.
+func (m *model) files(item *card) int {
+	if diff := diffOf(item.view); diff != nil {
+		return len(diff.Files)
 	}
 
-	next := item.focus + by
-
-	switch {
-	case item.focus < 0 && by > 0:
-		next = 0
-	case item.focus < 0:
-		next = len(heads) - 1
-	case next < 0:
-		next = len(heads) - 1
-	case next >= len(heads):
-		next = 0
-	}
-
-	item.focus = next
-	item.scroll = max(0, heads[next]-2)
+	return 0
 }
 
-func (m *model) toggleFile(item *card) {
-	if item.focus < 0 {
-		m.focusFile(item, 1)
-
-		return
-	}
-
-	item.expanded[item.focus] = !item.expanded[item.focus]
-	item.width = 0
-
-	m.rebuild(item)
-
-	if heads := fileHeads(item.rows); item.focus < len(heads) {
-		item.scroll = max(0, heads[item.focus]-2)
-	}
-}
-
-func (m *model) setAllFiles(item *card, open bool) {
-	diff := diffOf(item.view)
-	if diff == nil {
-		return
-	}
-
-	for index := range diff.Files {
-		item.expanded[index] = open
-	}
-
-	item.width = 0
-	m.rebuild(item)
-}
-
-// fileHeads is the row index of each file's summary line, which is what the
-// focus ring walks.
-func fileHeads(rows []row) []int {
-	var heads []int
-
-	for index, line := range rows {
-		if line.head {
-			heads = append(heads, index)
-		}
-	}
-
-	return heads
-}
-
-// rebuild redraws the card when the width or the open files have changed.
+// rebuild redraws the card when the width has changed, which is the only thing
+// that changes it now that the diff is not folded into it.
 func (m *model) rebuild(item *card) {
 	width := m.cardWidth()
 
-	if item.width == width && item.rows != nil {
+	if item.width == width && item.lines != nil {
 		return
 	}
 
-	item.rows = renderCard(m.st, item.view, width, item.expanded)
+	item.lines = renderCard(m.st, item.view, width)
 	item.width = width
 }
 

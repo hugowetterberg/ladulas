@@ -63,7 +63,7 @@ func (m *model) footerHeight() int {
 		return 1
 	case modeUnlock:
 		return 3
-	case modeCard:
+	case modeFiles, modeDiff, modeCard:
 		return 2
 	}
 
@@ -112,11 +112,11 @@ func (m *model) strip() string {
 	var b strings.Builder
 
 	for i, item := range m.queue {
-		marker := "  "
+		marker := m.st.dim.Render(fmt.Sprintf("%d ", i+1))
 		style := m.st.dim
 
 		if i == m.sel {
-			marker = m.st.key.Render("▸ ")
+			marker = m.st.key.Render(fmt.Sprintf("%d▸", i+1))
 			style = m.st.selected
 		}
 
@@ -147,39 +147,97 @@ func (m *model) body() string {
 		return pad(m.idle(), height)
 	}
 
-	m.rebuild(item)
-
-	item.scroll = clamp(item.scroll, len(item.rows), height)
-
-	var b strings.Builder
-
-	heads := fileHeads(item.rows)
-	focused := -1
-
-	if item.focus >= 0 && item.focus < len(heads) {
-		focused = heads[item.focus]
+	if m.mode == modeFiles {
+		return m.fileList(height)
 	}
 
-	for i := item.scroll; i < item.scroll+height; i++ {
-		if i >= len(item.rows) {
-			b.WriteString("\n")
+	if m.mode == modeDiff {
+		lines := m.diffLines(item)
+		item.diffScroll = clamp(item.diffScroll, len(lines), height)
+
+		return window(margin(lines), item.diffScroll, height)
+	}
+
+	m.rebuild(item)
+
+	item.scroll = clamp(item.scroll, len(item.lines), height)
+
+	return window(margin(item.lines), item.scroll, height)
+}
+
+// margin is the one column of space every drawn line gets, so that nothing
+// starts hard against the edge of the terminal.
+func margin(lines []string) []string {
+	out := make([]string, len(lines))
+
+	for i, line := range lines {
+		out[i] = " " + line
+	}
+
+	return out
+}
+
+// fileList is the picker: the files this change touches, narrowed by whatever
+// has been typed, over the card rather than in it.
+func (m *model) fileList(height int) string {
+	item := m.current()
+	if item == nil {
+		return pad("", height)
+	}
+
+	shown := m.shownFiles(item)
+
+	lines := []string{"", " " + m.st.heading.Render("Files in this change"), ""}
+
+	if len(shown) == 0 {
+		lines = append(lines, " "+m.st.note.Render(
+			"Nothing matches what you have typed."))
+
+		return window(lines, 0, height)
+	}
+
+	for i, entry := range shown {
+		row := fmt.Sprintf("%s  %s %s",
+			pathOf(entry.file),
+			m.st.plus.Render(fmt.Sprintf("+%d", entry.file.Insertions)),
+			m.st.minus.Render(fmt.Sprintf("-%d", entry.file.Deletions)))
+
+		// The file behind this list, so that opening it again to change files
+		// says which one you came from. It is a nicety rather than a fact a
+		// decision rests on, which is why it is allowed to be only a weight.
+		if entry.index == item.reading {
+			row = m.st.selected.Render(row)
+		}
+
+		if i == item.picker.at {
+			lines = append(lines, m.st.focused.Render("› ")+row)
 
 			continue
 		}
 
-		line := item.rows[i].text
-
-		if i == focused {
-			line = m.st.focused.Render("▶") + line
-		} else {
-			line = " " + line
-		}
-
-		b.WriteString(line)
-		b.WriteString("\n")
+		lines = append(lines, "  "+row)
 	}
 
-	return b.String()
+	// The cursor is kept on screen by scrolling the list under it, which is the
+	// one thing a list has to do that the card does not.
+	item.picker.scroll = keepInView(
+		item.picker.scroll, item.picker.at+3, len(lines), height)
+
+	return window(lines, item.picker.scroll, height)
+}
+
+// keepInView moves a scroll offset the least it can to bring a row inside the
+// window.
+func keepInView(scroll, at, rows, height int) int {
+	if at < scroll {
+		scroll = at
+	}
+
+	if at >= scroll+height {
+		scroll = at - height + 1
+	}
+
+	return clamp(scroll, rows, height)
 }
 
 // idle is the screen with nothing on it, which is where this program spends
@@ -288,11 +346,72 @@ func (m *model) footer() string {
 		return m.grant()
 	case modeUnlock:
 		return m.passphrase()
+	case modeFiles:
+		return m.fileKeys()
+	case modeDiff:
+		return m.diffKeys()
 	case modeCard:
 		return m.keys()
 	}
 
 	return m.keys()
+}
+
+// fileKeys is the file list's own line. `esc` is the only way out because every
+// printable key narrows the list.
+func (m *model) fileKeys() string {
+	line := " " + strings.Join([]string{
+		m.st.key.Render("enter") + " read it",
+		m.st.key.Render("↑ ↓") + " choose",
+		m.st.key.Render("esc") + " back",
+	}, m.st.dim.Render(" · "))
+
+	item := m.current()
+	if item == nil {
+		return m.status0(line)
+	}
+
+	shown := len(m.shownFiles(item))
+
+	typed := m.st.dim.Render("type to narrow the list")
+	if len(item.picker.filter) > 0 {
+		typed = m.st.dim.Render("matching ") +
+			m.st.fieldOn.Render(string(item.picker.filter)) +
+			m.st.dim.Render(fmt.Sprintf(" — %s",
+				plural(int32(shown), "file", "files")))
+	}
+
+	return m.spread(line, typed+" ") + "\n" + " " + m.st.dim.Render("")
+}
+
+// diffKeys is one file's change: the way back, the way on, and the answers.
+//
+// `enter` is the way back and not an answer, which is the whole of why reading a
+// change is a screen of its own (decision AN). The letters still answer,
+// because they are deliberate.
+func (m *model) diffKeys() string {
+	item := m.current()
+	if item == nil {
+		return m.keys()
+	}
+
+	parts := []string{
+		m.st.key.Render("enter") + " close",
+		m.st.key.Render("n p") + " next file",
+		m.st.key.Render("f") + " the list",
+		m.st.key.Render("a") + " approve",
+		m.st.key.Render("d") + " deny",
+	}
+
+	position := ""
+
+	if count := m.files(item); count > 0 && item.reading >= 0 {
+		position = m.st.dim.Render(
+			fmt.Sprintf("file %d of %d", item.reading+1, count))
+	}
+
+	return m.spread(" "+strings.Join(parts, m.st.dim.Render(" · ")),
+		position+" ") + "\n" + " " + m.st.dim.Render("")
 }
 
 // passphrase is the unlock field: one thing to type, and two ways out of it.
@@ -355,10 +474,21 @@ func (m *model) keys() string {
 		parts = append(parts, m.st.key.Render("w")+" approve for a while")
 	}
 
-	parts = append(parts,
-		m.st.key.Render("d")+" deny",
-		m.st.key.Render("enter")+" open a file",
-		m.st.key.Render("?")+" keys")
+	parts = append(parts, m.st.key.Render("d")+" deny")
+
+	// The way into the change, with how much of one there is: "enter open a
+	// file" was the whole of what this used to say, which left the reader to
+	// work out which file and how to choose another.
+	if count := m.files(item); count > 0 {
+		parts = append(parts, m.st.key.Render("f")+
+			fmt.Sprintf(" read %s", plural(int32(count), "file", "files")))
+	}
+
+	if len(m.queue) > 1 {
+		parts = append(parts, m.st.key.Render("[ ]")+" next request")
+	}
+
+	parts = append(parts, m.st.key.Render("?")+" keys")
 
 	line := " " + strings.Join(parts, m.st.dim.Render(" · "))
 
@@ -375,9 +505,8 @@ func (m *model) keys() string {
 func (m *model) status0(keys string) string {
 	right := ""
 
-	if item := m.current(); item != nil && len(item.rows) > m.bodyHeight() {
-		right = m.st.dim.Render(fmt.Sprintf("%d/%d",
-			min(item.scroll+m.bodyHeight(), len(item.rows)), len(item.rows)))
+	if at, of := m.position(); of > m.bodyHeight() {
+		right = m.st.dim.Render(fmt.Sprintf("%d/%d", at, of))
 	}
 
 	note := m.status
@@ -397,6 +526,22 @@ func (m *model) status0(keys string) string {
 	}
 
 	return m.spread(keys, right) + "\n" + " " + style.Render(truncate(note, max(m.width-2, 10)))
+}
+
+// position is how far down whichever screen is scrolling somebody has read.
+func (m *model) position() (int, int) {
+	item := m.current()
+	if item == nil {
+		return 0, 0
+	}
+
+	if m.mode == modeDiff {
+		lines := m.diffLines(item)
+
+		return min(item.diffScroll+m.bodyHeight(), len(lines)), len(lines)
+	}
+
+	return min(item.scroll+m.bodyHeight(), len(item.lines)), len(item.lines)
 }
 
 // grant is the promise being made, as the two questions decision V asks: who it
@@ -491,7 +636,8 @@ func (m *model) help() string {
 // helpRows is the table itself, drawn in the body while the help is up.
 func (m *model) helpRows() []string {
 	rows := [][2]string{
-		{"a", "approve this request, once"},
+		{"enter, a", "approve this request, once — on the card, not while"},
+		{"", "reading a change, where enter closes the change"},
 		{"w", "approve for a while: a promise with a reach and a length"},
 		{"d", "deny it"},
 		{"", ""},
@@ -499,14 +645,14 @@ func (m *model) helpRows() []string {
 		{"space / b", "a page at a time"},
 		{"g / G", "the top and the bottom"},
 		{"", ""},
-		{"n / p", "the next and previous file in the diff"},
-		{"enter", "open or close the file under the cursor"},
-		{"e / c", "open or close every file"},
-		{"f", "ask the requesting machine for the rest of a truncated diff"},
+		{"f", "the list of files this change touches"},
+		{"n / p", "straight to the next or previous file's change"},
+		{"r", "ask the requesting machine for the rest of a truncated diff"},
 		{"", ""},
 		{"u", "unlock the store, when it is sealed or locked"},
 		{"", ""},
-		{"tab", "the next waiting request, when more than one is"},
+		{"[ / ]", "the previous and next waiting request"},
+		{"1 - 9", "the request at that place in the list above"},
 		{"q", "leave; anything waiting is left to the other approvers"},
 		{"ctrl+c", "the same, without the confirmation"},
 	}
