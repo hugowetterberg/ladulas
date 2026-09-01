@@ -85,6 +85,7 @@ internal/         the desktop's and the daemon's own halves, which no phone
   observe/        metrics and pprof: the only package that links Prometheus
   signcli/        the ssh-keygen -Y CLI contract ladulas-sign implements
   testutil/       instances a test can start
+  tui/            the terminal shell: the same front end, drawn with keys
 proto/            the schema those are generated from
 viewer/           the shared HTML/JS bundle: cards, diff, markdown, and the
                   desktop shell (sidebar and screens; decision AA)
@@ -167,6 +168,37 @@ approves at the terminal. With a piece missing: no `ladulas-sign` and git
 still signs through the agent with a poorer prompt; no logind and the
 automatic locks are off and say so; no peer paired and everything still
 works locally, which is the single-machine 1Password replacement.
+
+### Answering in a terminal
+
+```
+ladulas tui
+```
+
+`ladulas tui` attaches to the running daemon as an approver and draws the
+card the desktop window draws — the commit, who is asking, which key, and
+the diff a file at a time — with the same answers under it, including
+"approve for a while". It is a client of the daemon like `ladulas gui`
+(decision AK), so it opens no store and holds no key, and quitting takes
+only this approver away: anything still waiting goes on waiting for the
+window, the phone or whoever else can answer.
+
+`a` approves once, `w` opens the promise, `d` denies, `enter` opens the file
+under the cursor, `f` asks for the rest of a diff that was cut short, and `?`
+lists the rest. It needs a terminal to draw on and says so if it is given a
+pipe.
+
+It is not the same thing as `ladulasd run`'s terminal prompt: that one is
+inside the daemon, on the daemon's own stdin, and offers a yes, a no and four
+fixed lengths. Both may be attached at once, and the log tells them apart as
+`console` and `terminal`.
+
+**One thing it does not do yet**: a request raised *before* it started is one
+it never sees, because the engine fixes the set of approvers when it fans a
+request out. Leave it running rather than starting it when something is
+already stuck —
+[ops.md](docs/ops.md#ladulas-tui-shows-nothing-while-a-request-is-plainly-waiting)
+has the way to tell that apart from a terminal that is not attached.
 
 ### Running the tree on a box that has the package installed
 

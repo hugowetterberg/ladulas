@@ -2513,6 +2513,62 @@ business quitting when its last window closes, because the tray is the
 application. Quitting is what the Quit item is for. ops.md has both as a
 failure mode with the way to recognise them.
 
+### The terminal is a third shell — **decision AK**
+
+`ladulas tui` is the desktop window's job done in a terminal: it attaches to
+a running daemon as an approver, draws the card the window draws, and
+answers over the same socket. It is a client and nothing more, exactly as
+`ladulas gui` is (decision Z) — no store, no agent socket, no key.
+
+**It is the seam decision Z left, used.** `internal/frontend` has said since
+that decision that its host "supplies a `bridge.Presenter` and nothing else",
+and that a different toolkit or a terminal could be written against it. The
+terminal supplies one. Everything that decides anything is on the far side:
+the watching and the answering are the front end's, the card is the
+`RequestView` the bridge renders, the diff was parsed in Go, and the answer
+goes through `POST /api/v1/requests/{id}/answer` like the webview's — which
+is what keeps the bound on a promise, the audit entry naming what was on
+screen, and the refusal of a request that has since been settled in one place
+instead of two. Nothing in `internal/tui` parses a commit or knows what a
+scope is. A second surface answering signing requests is a second chance to
+disagree about what a commit says, and the only way not to take it is to
+have nothing there that could disagree.
+
+**It is not the console approver, and the distinction is the one pkg/approval
+already wrote down.** `ConsoleHandler` lives inside the daemon, prompts on the
+daemon's own stdin, and is what `ladulasd run` gives a box started
+interactively; it offers a yes, a no and the four fixed lengths, because "a
+console that grew a syntax for both would be asking somebody to spell out, in
+the dark, the thing the wording is there to make plain". That sentence is
+about a line-oriented prompt, and it still stands. This is a screen with a
+picker on it, so it offers what the window offers: the reach and the length
+of decision V, the trust note of decision X, and the diff a file at a time.
+Both can be attached at once; they are two approvers with two names in the
+log, `console` and `terminal`.
+
+**What is in a terminal that is not in the window.** The answer keys are
+drawn at the bottom whatever is scrolled where, which is the same rule the
+window's pinned footer follows and for the same reason: on any commit worth
+reading, an answer underneath the diff means scrolling past the whole change
+before you can refuse it. The diff opens a file at a time on `enter` with a
+focus ring the arrow keys walk, because there is no pointer to click a
+disclosure with. The colours are the sixteen ANSI ones, so red and green are
+whatever the terminal's owner has decided those are, and every coloured line
+says in words what the colour says. And the log goes to stderr only when
+stderr is not the screen: one INFO line about attaching is enough to put a
+timestamp through the middle of a card.
+
+**The gap it has, which the hour made worth naming.** The engine fixes the
+set of approvers when it fans a request out (§9), so a request already
+waiting when `ladulas tui` starts is one it never sees — the same rule that
+makes restarting the desktop application not re-raise a card. That was a
+five-minute window and is now an hour-long one, and "walk to another machine,
+`ssh` in, answer what is blocking my terminal" is exactly the workflow the
+longer budget exists for. Offering the waiting requests to an approver that
+registers late means the engine tracking prompts in flight and joining a new
+handler to one, including its share of decision AC's "every approver has gone"
+accounting. Worth doing, not done, and open.
+
 ### Decision B — mobile (**resolved: B1**)
 
 **B1 — gomobile bind + native shells (recommended).** Go core compiled to
@@ -2714,6 +2770,12 @@ The surface (existing pieces from M2/M3 plus planned):
   can say whether the answer was right. Refusing keeps nothing, so there is
   no list of keys this instance turned down;
 * grants — list, revoke; policy — show, path;
+* tui — attach as an approver and answer requests in this terminal
+  (decision AK, §12). It is a client of a running daemon rather than a
+  command that does something and exits, and it is on this surface rather
+  than in the desktop binary alone: a headless box reached over SSH is
+  precisely where a terminal that can read a diff and make a promise is
+  worth having, and it needs no GUI toolchain to build;
 * projects — publish, list, unpublish, auto. `unpublish` works in both
   directions: on one of this instance's own publications it withdraws the
   offer, and on one it has been reading it forgets the pages it kept. There
@@ -3220,6 +3282,7 @@ Added 2026-09-01:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AJ | How long a signing request waits, and who may change it | **an hour, and one field on the control socket.** It was five minutes, and five minutes is the length that fails whenever the phone is in a pocket: long enough to walk to the kitchen, not long enough to be in a meeting or in another room. The two costs are not symmetric — a budget that is too long costs a terminal somebody has walked away from, and one that is too short costs the commit, because git aborts and the work is repeated and the person answering is punished for having been elsewhere. Nothing counts at the requester's end (`ssh-keygen` and git block happily), so the only clock is this one. SSH authentication keeps its ~90 s and must: sshd is counting, and a budget past `LoginGraceTime` is a login that fails after the person answered it. **Two numbers elsewhere are the same number** and moved with it — a request collected out of an inbox by a phone was capped at fifteen minutes, which never bit against five and would have been the shorter of the two against an hour, taking the prompt off the phone while the requester still waited; and the approval-wait histogram's last bucket was 300 s, so every request that ran the clock out would have piled into `+Inf` together. **The budget is also the one setting a surface may change**, through `Settings` and `SetSignTimeout` on the control socket: the desktop's Settings screen draws it from the instance view with the bounds the instance will accept (at least 30 s, at most a day, refused rather than trimmed), the daemon re-reads the document before writing so a hand edit waiting for a reload is adopted rather than reverted, and requests already waiting keep the budget they started under, because a clock that jumps under somebody reading a diff is not a clock. Rejected: a policy editor on the socket, which is what "let the screen change the policy" would grow into — the document decides what is approved *without asking*, so a screen that could write rules is an auto-approve rule one mis-click from every process running as this user, where a number deciding how long somebody has to answer cannot approve anything by itself. Also rejected: bounding the document. A hand-edited `policy.json` stays unbounded, because somebody editing the file has said what they mean. Rationale in §9 |
+| AK | Whether a terminal can be a front end | **it is the third shell on the seam decision Z left.** `ladulas tui` attaches to a running daemon as an approver, draws the same `RequestView` the window draws, and answers through the same `POST /api/v1/requests/{id}/answer` — so the bound on a promise, the audit entry naming what was on screen, and the refusal of a request settled elsewhere all stay in one place. Nothing in `internal/tui` parses a commit or knows what a scope is; a second surface answering signing requests is a second chance to disagree about what a commit says, and having nothing there that could disagree is the only way not to take it. **It is not the console approver**, and the distinction is the one `pkg/approval` already wrote down: `ConsoleHandler` is inside the daemon on the daemon's stdin and offers a yes, a no and four fixed lengths, because a line-oriented prompt asked to express a reach and a clock is asking somebody to spell out in the dark the thing the wording exists to make plain. This is a screen with a picker on it, so it offers the whole of decision V, decision X's trust note, and the diff a file at a time. Both may be attached at once, as `console` and `terminal`. Three things a terminal decides for itself: the answer keys are drawn at the bottom whatever is scrolled where (the window's pinned-footer rule, for its reason — an answer underneath the diff means scrolling past the whole change before you can refuse it); the diff opens on `enter` with a focus ring the arrow keys walk, there being no pointer; and the palette is the sixteen ANSI colours, so red and green are whatever the terminal's owner decided, with every coloured line saying in words what the colour says. The log goes to stderr only when stderr is not the screen. The verb is `tui` rather than `approve` because answering is the first thing it does rather than the only thing it will do — the window it is modelled on grew a status pane, a key list and an activity log around this same seam. **What it does not do, and this is open:** the engine fixes the approver set when it fans a request out (§9), so a request already waiting when it starts is one it never sees. That was a five-minute window before decision AJ and is an hour-long one now, and "walk to another machine, `ssh` in, answer what is blocking my terminal" is exactly what the longer budget is for. Rejected for now rather than on the merits: offering a waiting request to a late-registering approver means the engine tracking prompts in flight and joining a handler to one, including its share of decision AC's accounting for when every approver has gone. Rationale in §12 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

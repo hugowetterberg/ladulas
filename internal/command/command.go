@@ -243,6 +243,7 @@ func Commands() []*cli.Command {
 		endorsementsCommand(),
 		auditCommand(),
 		agentCommand(),
+		tuiCommand(),
 		lockCommand(),
 		unlockCommand(),
 		waitCommand(),
