@@ -38,27 +38,39 @@ type Lock interface {
 // never been created.
 const StateNotRunning = "not running"
 
+// The words themselves, so that a surface deciding what to draw for a state
+// matches on a constant rather than on a string it typed out again. They are
+// load-bearing — "sealed" and "locked" are the whole of what §10 is about — and
+// a surface that wrote "sealed" itself would be a surface that keeps working
+// when this vocabulary changes and draws the wrong thing.
+const (
+	StateSealed   = "sealed"
+	StateUnlocked = "unlocked"
+	StateLocked   = "locked"
+	StateNoStore  = "not created yet"
+	StateUnknown  = "unknown"
+)
+
 // StateWord names a lock state in the words every surface uses for it: the
 // status pane, the unlock panel and the terminal.
 //
 // One function because they are one vocabulary. A viewer that said "closed"
 // where `ladulas status` said "sealed" would be two programs describing one
-// machine, and the words are load-bearing — "sealed" and "locked" are the whole
-// of what §10 is about.
+// machine.
 func StateWord(state ladulasv1.LockState) string {
 	switch state {
 	case ladulasv1.LockState_LOCK_STATE_SEALED:
-		return "sealed"
+		return StateSealed
 	case ladulasv1.LockState_LOCK_STATE_UNLOCKED:
-		return "unlocked"
+		return StateUnlocked
 	case ladulasv1.LockState_LOCK_STATE_LOCKED:
-		return "locked"
+		return StateLocked
 	case ladulasv1.LockState_LOCK_STATE_UNINITIALIZED:
-		return "not created yet"
+		return StateNoStore
 	case ladulasv1.LockState_LOCK_STATE_UNSPECIFIED:
-		return "unknown"
+		return StateUnknown
 	default:
-		return "unknown"
+		return StateUnknown
 	}
 }
 

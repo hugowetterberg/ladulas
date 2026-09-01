@@ -32,7 +32,10 @@ type (
 		diff bridge.DiffView
 		err  error
 	}
-	settingsMsg struct{ view bridge.SettingsView }
+	stateMsg struct {
+		settings *bridge.SettingsView
+		lock     *bridge.LockView
+	}
 	troubleMsg  struct{ text string }
 	announceMsg struct{ activity bridge.ActivityView }
 	tickMsg     time.Time
@@ -96,6 +99,7 @@ type model struct {
 	sel      int
 
 	settings *bridge.SettingsView
+	lock     *bridge.LockView
 
 	mode        mode
 	helpScroll  int
@@ -107,7 +111,8 @@ type model struct {
 	// dismissal that follows is not reported as somebody else having answered.
 	answered map[string]bool
 
-	now time.Time
+	now   time.Time
+	ticks int
 }
 
 func newModel(api *api, socket string) *model {
@@ -123,7 +128,7 @@ func newModel(api *api, socket string) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), m.settingsCmd())
+	return tea.Batch(tickCmd(), m.stateCmd())
 }
 
 func tickCmd() tea.Cmd {
@@ -132,18 +137,34 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func (m *model) settingsCmd() tea.Cmd {
+// stateCmd asks the daemon the two things this screen says about it when there
+// is nothing on it: how long a request will wait, and whether one could be
+// answered at all.
+//
+// Both are allowed to fail without a word. A daemon that is not up yet has
+// neither to give, which is an ordinary state here — the header already says
+// "not attached" — and a line about it would be a line about something the
+// screen has said better.
+func (m *model) stateCmd() tea.Cmd {
 	return func() tea.Msg {
-		view, err := m.api.settings()
-		if err != nil {
-			// A daemon that is not up yet has no settings to give, which is an
-			// ordinary state on this screen and not worth a line about.
-			return nil
+		var msg stateMsg
+
+		if view, err := m.api.settings(); err == nil {
+			msg.settings = &view
 		}
 
-		return settingsMsg{view: view}
+		if view, err := m.api.lock(); err == nil {
+			msg.lock = &view
+		}
+
+		return msg
 	}
 }
+
+// statePoll is how many ticks apart the two are re-read. The lock state is the
+// one that changes under this screen — somebody unlocks the store in another
+// window — and four seconds is what the desktop's own pane settles for.
+const statePoll = 4
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -155,6 +176,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.now = time.Time(msg)
+		m.ticks++
+
+		if m.ticks%statePoll == 0 {
+			return m, tea.Batch(tickCmd(), m.stateCmd())
+		}
 
 		return m, tickCmd()
 
@@ -162,16 +188,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.attached = bool(msg)
 
 		if m.attached {
-			// The settings are the daemon's, so they are worth asking for
-			// again once there is a daemon to ask.
-			return m, m.settingsCmd()
+			// Both are the daemon's, so they are worth asking for again once
+			// there is a daemon to ask.
+			return m, m.stateCmd()
 		}
 
 		return m, nil
 
-	case settingsMsg:
-		view := msg.view
-		m.settings = &view
+	case stateMsg:
+		if msg.settings != nil {
+			m.settings = msg.settings
+		}
+
+		if msg.lock != nil {
+			m.lock = msg.lock
+		}
 
 		return m, nil
 
@@ -347,6 +378,26 @@ func (m *model) card(id string) *card {
 	}
 
 	return nil
+}
+
+// lockWord and lockReason are the store's state as this screen needs it: the
+// word every surface uses, or nothing at all when the daemon has not been
+// asked yet. Not-asked is not the same as "unknown" and must not draw as a
+// fault.
+func (m *model) lockWord() string {
+	if m.lock == nil {
+		return ""
+	}
+
+	return m.lock.State
+}
+
+func (m *model) lockReason() string {
+	if m.lock == nil {
+		return ""
+	}
+
+	return m.lock.Reason
 }
 
 func (m *model) current() *card {

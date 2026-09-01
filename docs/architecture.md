@@ -2546,6 +2546,17 @@ of decision V, the trust note of decision X, and the diff a file at a time.
 Both can be attached at once; they are two approvers with two names in the
 log, `console` and `terminal`.
 
+**And it says when nothing can arrive.** "Nothing is waiting" is not the
+whole truth on a sealed instance, where nothing *can* wait — the agent
+offers no keys, so a signature fails before it is a request — so a screen
+sitting empty and reassuring while every commit on the machine was refused
+would be wrong twice over. The lock state is on the idle screen in the
+words every other surface uses, with the way out of it, which is the same
+thing the window does by drawing the passphrase panel in place of its
+screens (§10). A soft lock says the keys are still here and paired
+approvers still answer; a state this build has no branch for says so rather
+than guessing.
+
 **What is in a terminal that is not in the window.** The answer keys are
 drawn at the bottom whatever is scrolled where, which is the same rule the
 window's pinned footer follows and for the same reason: on any commit worth

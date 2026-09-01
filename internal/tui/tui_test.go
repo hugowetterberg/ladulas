@@ -30,6 +30,7 @@ type stub struct {
 	answers []answerBody
 	refuse  string
 	full    bridge.DiffView
+	lock    string
 }
 
 func (s *stub) handler() http.Handler {
@@ -73,6 +74,20 @@ func (s *stub) handler() http.Handler {
 		defer s.mu.Unlock()
 
 		_ = json.NewEncoder(w).Encode(s.full)
+	})
+
+	mux.HandleFunc("GET /api/v1/lock", func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		s.mu.Lock()
+		state := s.lock
+		s.mu.Unlock()
+
+		if state == "" {
+			state = bridge.StateUnlocked
+		}
+
+		_ = json.NewEncoder(w).Encode(bridge.LockView{State: state})
 	})
 
 	mux.HandleFunc("GET /api/v1/settings", func(
@@ -470,7 +485,7 @@ func TestNothingWaitingSaysWhatWillHappen(t *testing.T) {
 	m.height = 40
 	m.attached = true
 
-	if cmd := m.settingsCmd(); cmd != nil {
+	if cmd := m.stateCmd(); cmd != nil {
 		m.Update(cmd())
 	}
 
@@ -515,5 +530,38 @@ func TestTheRestOfADiffCanBeFetched(t *testing.T) {
 
 	if !strings.Contains(m.View(), "the rest of it") {
 		t.Errorf("the fetched diff is not on screen:\n%s", m.View())
+	}
+}
+
+// TestASealedInstanceSaysSoRatherThanSayingNothingIsWaiting: on a sealed store
+// nothing *can* wait — the agent offers no keys, so a signature fails before it
+// is a request — and a screen sitting empty and reassuring while every commit
+// on the machine is refused is the wrong answer twice over (§10).
+func TestASealedInstanceSaysSoRatherThanSayingNothingIsWaiting(t *testing.T) {
+	host := &stub{view: gitView(), lock: bridge.StateSealed}
+	m := newModel(&api{handler: host.handler()}, "/run/user/1000/ladulas/control.sock")
+
+	m.width = 100
+	m.height = 40
+	m.attached = true
+
+	if cmd := m.stateCmd(); cmd != nil {
+		m.Update(cmd())
+	}
+
+	screen := m.View()
+
+	if strings.Contains(screen, "Nothing is waiting") {
+		t.Errorf("a sealed instance says nothing is waiting:\n%s", screen)
+	}
+
+	if !strings.Contains(screen, "sealed") {
+		t.Errorf("the screen does not say the store is sealed:\n%s", screen)
+	}
+
+	// And it says the one thing that gets out of it, which a paired approver
+	// cannot: the key is what is missing, not the answer.
+	if !strings.Contains(screen, "ladulas unlock") {
+		t.Errorf("the screen does not say how to open it:\n%s", screen)
 	}
 }

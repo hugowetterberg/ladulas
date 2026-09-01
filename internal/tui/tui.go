@@ -205,6 +205,16 @@ func (a *api) diff(id string) (bridge.DiffView, error) {
 	return view, nil
 }
 
+func (a *api) lock() (bridge.LockView, error) {
+	var view bridge.LockView
+
+	if err := a.call(http.MethodGet, "/api/v1/lock", nil, &view); err != nil {
+		return bridge.LockView{}, err
+	}
+
+	return view, nil
+}
+
 func (a *api) settings() (bridge.SettingsView, error) {
 	var view bridge.SettingsView
 

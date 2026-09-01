@@ -188,6 +188,11 @@ under the cursor, `f` asks for the rest of a diff that was cut short, and `?`
 lists the rest. It needs a terminal to draw on and says so if it is given a
 pipe.
 
+With nothing waiting it says how long the next request will wait for an
+answer, and — on a sealed or locked store — that nothing is going to be asked
+of it at all, which is the state where an empty screen would otherwise be
+reassuring and wrong.
+
 It is not the same thing as `ladulasd run`'s terminal prompt: that one is
 inside the daemon, on the daemon's own stdin, and offers a yes, a no and four
 fixed lengths. Both may be attached at once, and the log tells them apart as

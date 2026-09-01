@@ -184,27 +184,71 @@ func (m *model) body() string {
 // almost all of its life. It says what it is attached to and what will happen
 // when something arrives, because a terminal that says nothing at all is
 // indistinguishable from one that has stopped working.
+//
+// "Nothing is waiting" is not the whole truth on a sealed instance, where
+// nothing *can* wait: the agent offers no keys, so a signature fails before it
+// is a request and this screen would sit empty and reassuring while every
+// commit on the machine was refused. So the lock state is on it, in the words
+// every other surface uses, with the way out of it — which is the same thing
+// the window does by drawing the passphrase panel in place of its screens
+// (§10).
 func (m *model) idle() string {
 	var lines []string
 
 	lines = append(lines, "")
 
-	if m.attached {
-		lines = append(lines, " "+m.st.value.Render(
-			"Nothing is waiting. Requests raised on this machine, and the ones "))
-		lines = append(lines, " "+m.st.value.Render(
-			"paired machines send here, come up on this screen."))
-	} else {
+	if !m.attached {
 		lines = append(lines, " "+m.st.warning.Render(
 			"Not attached to a daemon. This keeps trying."))
 		lines = append(lines, " "+m.st.dim.Render(" "+m.socket))
+
+		return strings.Join(lines, "\n") + "\n"
+	}
+
+	switch state := m.lockWord(); state {
+	case "", bridge.StateUnlocked:
+		lines = append(lines, " "+m.st.value.Render(
+			"Nothing is waiting. Requests raised on this machine, and the ones"))
+		lines = append(lines, " "+m.st.value.Render(
+			"paired machines send here, come up on this screen."))
+	case bridge.StateSealed, bridge.StateNoStore:
+		lines = append(lines, " "+m.st.warning.Render(
+			"The store is "+state+", so nothing here can sign and nothing"))
+		lines = append(lines, " "+m.st.warning.Render(
+			"will be asked of this terminal."))
+		lines = append(lines, "")
+		lines = append(lines, " "+m.st.dim.Render(
+			"`ladulas unlock` opens it. A paired approver cannot help with"))
+		lines = append(lines, " "+m.st.dim.Render(
+			"this one: the key is what is missing, not the answer."))
+	case bridge.StateLocked:
+		lines = append(lines, " "+m.st.warning.Render(
+			"Approving here is suspended: the store is locked."))
+		lines = append(lines, " "+m.st.dim.Render(
+			"Paired approvers still answer for this machine, and the keys are"))
+		lines = append(lines, " "+m.st.dim.Render(
+			"still here. `ladulas unlock` lifts it."))
+	default:
+		// A word this build has no branch for, and the state a front end
+		// reports when it could not ask. Neither is a state to describe
+		// confidently: saying nothing is waiting would be a claim about a
+		// daemon that has not answered.
+		lines = append(lines, " "+m.st.warning.Render(
+			"The daemon did not say what state its store is in — "+state+"."))
+		lines = append(lines, " "+m.st.dim.Render(
+			"`ladulas status` is the one that answers it."))
+	}
+
+	if reason := m.lockReason(); reason != "" {
+		lines = append(lines, " "+m.st.dim.Render(reason+"."))
 	}
 
 	if m.settings != nil {
 		lines = append(lines, "")
 		lines = append(lines, " "+m.st.dim.Render(
 			"A signing request waits up to "+
-				approval.HumanDuration(time.Duration(m.settings.SignTimeoutSeconds)*time.Second)+
+				approval.HumanDuration(
+					time.Duration(m.settings.SignTimeoutSeconds)*time.Second)+
 				" for an answer."))
 	}
 
