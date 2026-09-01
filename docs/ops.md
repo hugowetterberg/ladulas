@@ -428,6 +428,26 @@ attached, is the ordinary sealed store: nothing can sign, and the window shows
 the passphrase panel in place of its screens until it is unlocked — which it
 opens itself, once, the moment it attaches to a sealed instance.
 
+### A card stays on one screen after another screen answered it
+
+Fixed, and worth recognising because it is what somebody sees rather than
+what is wrong: the commit goes through, `ladulas audit` shows one decision,
+and a popup is still standing asking about a request that was settled
+minutes ago. Answering it a second time gets "this request is no longer
+waiting".
+
+The cause was that an answer named the request rather than the card, so
+every attached front end was handed the same answer and none of them was
+ever told to take its card down (decision AM). It needed two front ends
+attached to happen at all, which is why it survived until there was a
+terminal approver to attach alongside a window.
+
+**If it happens again:** `ladulas audit -n 5` first — one decision means
+this, several means something else. The daemon logs `a front end answered
+without saying which prompt, and it is not the only one attached` when it
+is handed an answer it cannot attribute, which is the same failure arriving
+through an older front end.
+
 ### A front end shows nothing while a request is plainly waiting
 
 This used to be the ordinary state and is now a fault. The engine settled the

@@ -252,6 +252,96 @@ func TestAFrontEndAnswersOverTheControlSocket(t *testing.T) {
 	}
 }
 
+// TestTheOtherScreensLoseTheCardWhenOneAnswers: two front ends attached are two
+// approvers and both are asked, so answering on one has to take the card off
+// the other (decision AM).
+//
+// It did not. An answer named the request, and a request names every card drawn
+// for it — so the answer was delivered to every prompt waiting on it, every
+// approver's Decide returned with it, and none of them ever reached the branch
+// that withdraws a card. The desktop's popup sat there, still asking, after the
+// terminal had answered and the commit had been signed. Both front ends here
+// call themselves `desktop`, which is the case an approver id cannot tell apart
+// and the reason the answer names a token instead.
+func TestTheOtherScreensLoseTheCardWhenOneAnswers(t *testing.T) {
+	box := startPeerInstance(t, "desktop")
+
+	// The one that answers, and the one that must be told to stop asking.
+	answering := newScreen(&approval.Answer{
+		Decision: ladulasv1.Decision_DECISION_APPROVE,
+		Reason:   "approved at the terminal",
+	})
+	watching := newScreen(nil)
+
+	attach(t, box.control, answering)
+	attach(t, box.control, watching)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := localapi.NewClient(box.control).SignPayload(ctx,
+		&ladulasv1.SignPayloadRequest{
+			PublicKey: box.app.Vault().KeyRefs()[0].GetPublicKey(),
+			Payload:   []byte(desktopCommit),
+			Namespace: "git",
+			Timeout:   durationpb.New(20 * time.Second),
+			GitContext: &ladulasv1.GitContext{
+				RepositoryPath: "/home/hugo/Projects/ladulas",
+				Branch:         "main",
+				Operation:      "commit",
+			},
+		})
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	if !resp.GetApproved() {
+		t.Fatalf("the request was not approved: %s", resp.GetReason())
+	}
+
+	// Both were asked: that is what two approvers means, and it is not the bug.
+	if cards := watching.cards(); len(cards) != 1 {
+		t.Fatalf("the second screen was shown %d cards", len(cards))
+	}
+
+	// The card comes off the screen that did not answer, which is the part that
+	// was broken. Given a moment: the withdrawal travels down a stream after
+	// the signature has already gone back to the requester.
+	deadline := time.Now().Add(10 * time.Second)
+	for len(watching.gone()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if gone := watching.gone(); len(gone) != 1 {
+		t.Fatalf("the card is still on the screen that did not answer: %v", gone)
+	}
+
+	// And it came off because somebody else answered, not because it timed out
+	// or because the requester went away — the wording is the whole of what the
+	// person who did not answer is told.
+	if gone := watching.gone(); gone[0] != watching.cards()[0].ID {
+		t.Errorf("a different card was taken away: %v", gone)
+	}
+
+	// The answer is credited to whoever gave it, and once.
+	entries, err := approval.ReadAuditLog(box.audit, 100)
+	if err != nil {
+		t.Fatalf("read the audit log: %v", err)
+	}
+
+	var decisions []string
+
+	for _, entry := range entries {
+		if entry.GetEvent() == ladulasv1.AuditEvent_AUDIT_EVENT_DECISION {
+			decisions = append(decisions, entry.GetResponse().GetReason())
+		}
+	}
+
+	if len(decisions) != 1 || decisions[0] != "approved at the terminal" {
+		t.Errorf("the log records %v", decisions)
+	}
+}
+
 // A front end that is not there is not a failure, and a front end that arrives
 // later is attached to the instance it finds — which is what makes a desktop
 // autostart and a user unit startable in either order.

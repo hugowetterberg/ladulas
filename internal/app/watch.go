@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/hugowetterberg/ladulas/pkg/approval"
+	"github.com/hugowetterberg/ladulas/pkg/identity"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 )
 
@@ -29,8 +30,13 @@ import (
 // simply one whose screen is in another process.
 
 // watchedRequest is one prompt out on a stream, waiting for somebody.
+//
+// The token is what an answer names. A request id names the question and every
+// card that was drawn for it; this names one of those cards, which is what an
+// answer actually is (decision AM).
 type watchedRequest struct {
 	req    *approval.Request
+	token  string
 	answer chan *approval.Answer
 }
 
@@ -85,6 +91,37 @@ func (w *watchedRequests) waiting(id string) []*watchedRequest {
 	defer w.mu.Unlock()
 
 	return append([]*watchedRequest(nil), w.byID[id]...)
+}
+
+// answered picks the prompt an answer belongs to.
+//
+// With a token it is exactly one card, and the answer settles that card: the
+// approver behind it returns, the engine takes the decision, and the prompts on
+// the other screens are cancelled and withdrawn by the path that has always
+// done that (decision AM).
+//
+// Without a token there is nothing to pick by, and the two cases differ. One
+// prompt out is unambiguous — it is the card that was drawn, and answering it is
+// what the caller meant. Several is a front end old enough not to send a token
+// while another is attached, and there is no right answer: it gets the old
+// behaviour, which is every prompt handed the same answer, and a line in the log
+// saying that is what happened.
+func (w *watchedRequests) answered(
+	id, token string,
+) (chosen []*watchedRequest, ambiguous bool) {
+	waiting := w.waiting(id)
+
+	if token == "" {
+		return waiting, len(waiting) > 1
+	}
+
+	for _, entry := range waiting {
+		if entry.token == token {
+			return []*watchedRequest{entry}, false
+		}
+	}
+
+	return nil, false
 }
 
 // socketApprover is one attached front end, as the engine sees it.
@@ -179,16 +216,21 @@ func (s *socketApprover) Decide(
 ) (*approval.Answer, error) {
 	id := req.Msg.GetRequestId()
 
-	entry := &watchedRequest{req: req, answer: make(chan *approval.Answer, 1)}
+	entry := &watchedRequest{
+		req:    req,
+		token:  identity.NewRequestID(),
+		answer: make(chan *approval.Answer, 1),
+	}
 
 	s.app.watched.add(id, entry)
 	defer s.app.watched.remove(id, entry)
 
 	if err := s.send(&ladulasv1.ApprovalPrompt{
-		Kind:      ladulasv1.ApprovalPromptKind_APPROVAL_PROMPT_KIND_PROMPT,
-		RequestId: id,
-		Request:   req.Body,
-		Grant:     grantOffer(req),
+		Kind:        ladulasv1.ApprovalPromptKind_APPROVAL_PROMPT_KIND_PROMPT,
+		RequestId:   id,
+		Request:     req.Body,
+		Grant:       grantOffer(req),
+		PromptToken: entry.token,
 	}); err != nil {
 		return nil, err
 	}
@@ -300,12 +342,20 @@ func (s *controlService) AnswerApproval(
 ) (*connect.Response[ladulasv1.AnswerApprovalResponse], error) {
 	id := req.Msg.GetRequestId()
 
-	waiting := s.app.watched.waiting(id)
+	waiting, ambiguous := s.app.watched.answered(id, req.Msg.GetPromptToken())
 	if len(waiting) == 0 {
 		// Not an error about the identifier: the ordinary way to get here is to
 		// answer a card that was settled while somebody was reading it.
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("request %s is not waiting for an answer", id))
+	}
+
+	if ambiguous {
+		s.app.log.Warn(
+			"a front end answered without saying which prompt, and it is not "+
+				"the only one attached: every screen showing this request is "+
+				"being given the same answer",
+			"request_id", id)
 	}
 
 	answer := &approval.Answer{

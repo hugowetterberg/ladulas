@@ -1317,6 +1317,18 @@ message ApprovalPrompt {
   ApprovalResponse response = 5;
   // Set on WITHDRAWN: "not answered in time", "answered on another device".
   string reason = 6;
+  // PromptToken names this card on this stream, and is echoed back in
+  // AnswerApproval so that an answer settles the prompt it was given for.
+  //
+  // The request id cannot do that job. Two front ends attached at once are two
+  // approvers and are both asked, so a request id names two cards on two
+  // screens — and an answer that arrived under it was delivered to both of
+  // them, which meant both approvers' Decide returned and neither was ever
+  // told to take its card down. The desktop's popup sat there after the
+  // terminal had answered (decision AM). Two front ends may also share an
+  // approver id — two terminals both call themselves `terminal` — so the id is
+  // no discriminator either.
+  string prompt_token = 7;
 }
 
 // GrantOffer is the "approve for a while" offer as the engine sized it for this
@@ -1358,6 +1370,14 @@ message AnswerApprovalRequest {
   // The documentation panel that was on screen when this was answered, kept as
   // it was shown rather than recomputed later (§6).
   PresentedProject presented = 6;
+  // The token from the ApprovalPrompt being answered. It is what makes this an
+  // answer to one card rather than to a request, so that the prompts on the
+  // other screens are withdrawn instead of being handed somebody else's answer
+  // (decision AM).
+  //
+  // A front end that sends none is answered as it always was, which works when
+  // it is the only one attached and cannot be got right when it is not.
+  string prompt_token = 7;
 }
 
 message AnswerApprovalResponse {}

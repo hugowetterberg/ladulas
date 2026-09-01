@@ -6243,7 +6243,19 @@ type ApprovalPrompt struct {
 	// Set on DECIDED: what was decided, and on whose authority.
 	Response *ApprovalResponse `protobuf:"bytes,5,opt,name=response,proto3" json:"response,omitempty"`
 	// Set on WITHDRAWN: "not answered in time", "answered on another device".
-	Reason        string `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason string `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	// PromptToken names this card on this stream, and is echoed back in
+	// AnswerApproval so that an answer settles the prompt it was given for.
+	//
+	// The request id cannot do that job. Two front ends attached at once are two
+	// approvers and are both asked, so a request id names two cards on two
+	// screens — and an answer that arrived under it was delivered to both of
+	// them, which meant both approvers' Decide returned and neither was ever
+	// told to take its card down. The desktop's popup sat there after the
+	// terminal had answered (decision AM). Two front ends may also share an
+	// approver id — two terminals both call themselves `terminal` — so the id is
+	// no discriminator either.
+	PromptToken   string `protobuf:"bytes,7,opt,name=prompt_token,json=promptToken,proto3" json:"prompt_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6316,6 +6328,13 @@ func (x *ApprovalPrompt) GetResponse() *ApprovalResponse {
 func (x *ApprovalPrompt) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *ApprovalPrompt) GetPromptToken() string {
+	if x != nil {
+		return x.PromptToken
 	}
 	return ""
 }
@@ -6411,7 +6430,15 @@ type AnswerApprovalRequest struct {
 	GrantReach GrantReach           `protobuf:"varint,5,opt,name=grant_reach,json=grantReach,proto3,enum=ladulas.v1.GrantReach" json:"grant_reach,omitempty"`
 	// The documentation panel that was on screen when this was answered, kept as
 	// it was shown rather than recomputed later (§6).
-	Presented     *PresentedProject `protobuf:"bytes,6,opt,name=presented,proto3" json:"presented,omitempty"`
+	Presented *PresentedProject `protobuf:"bytes,6,opt,name=presented,proto3" json:"presented,omitempty"`
+	// The token from the ApprovalPrompt being answered. It is what makes this an
+	// answer to one card rather than to a request, so that the prompts on the
+	// other screens are withdrawn instead of being handed somebody else's answer
+	// (decision AM).
+	//
+	// A front end that sends none is answered as it always was, which works when
+	// it is the only one attached and cannot be got right when it is not.
+	PromptToken   string `protobuf:"bytes,7,opt,name=prompt_token,json=promptToken,proto3" json:"prompt_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6486,6 +6513,13 @@ func (x *AnswerApprovalRequest) GetPresented() *PresentedProject {
 		return x.Presented
 	}
 	return nil
+}
+
+func (x *AnswerApprovalRequest) GetPromptToken() string {
+	if x != nil {
+		return x.PromptToken
+	}
+	return ""
 }
 
 type AnswerApprovalResponse struct {
@@ -7993,7 +8027,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\tforgotten\x18\x03 \x01(\x05R\tforgotten\"8\n" +
 	"\x15WatchApprovalsRequest\x12\x1f\n" +
 	"\vapprover_id\x18\x01 \x01(\tR\n" +
-	"approverId\"\xfd\x01\n" +
+	"approverId\"\xa0\x02\n" +
 	"\x0eApprovalPrompt\x122\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1e.ladulas.v1.ApprovalPromptKindR\x04kind\x12\x1d\n" +
 	"\n" +
@@ -8001,13 +8035,14 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\arequest\x18\x03 \x01(\fR\arequest\x12,\n" +
 	"\x05grant\x18\x04 \x01(\v2\x16.ladulas.v1.GrantOfferR\x05grant\x128\n" +
 	"\bresponse\x18\x05 \x01(\v2\x1c.ladulas.v1.ApprovalResponseR\bresponse\x12\x16\n" +
-	"\x06reason\x18\x06 \x01(\tR\x06reason\"\xb2\x01\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\x12!\n" +
+	"\fprompt_token\x18\a \x01(\tR\vpromptToken\"\xb2\x01\n" +
 	"\n" +
 	"GrantOffer\x12-\n" +
 	"\x04ttls\x18\x01 \x03(\v2\x19.google.protobuf.DurationR\x04ttls\x122\n" +
 	"\amax_ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x06maxTtl\x12'\n" +
 	"\x0fsession_subject\x18\x03 \x01(\tR\x0esessionSubject\x12\x18\n" +
-	"\amachine\x18\x04 \x01(\tR\amachine\"\xad\x02\n" +
+	"\amachine\x18\x04 \x01(\tR\amachine\"\xd0\x02\n" +
 	"\x15AnswerApprovalRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x120\n" +
@@ -8016,7 +8051,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\tgrant_ttl\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\bgrantTtl\x127\n" +
 	"\vgrant_reach\x18\x05 \x01(\x0e2\x16.ladulas.v1.GrantReachR\n" +
 	"grantReach\x12:\n" +
-	"\tpresented\x18\x06 \x01(\v2\x1c.ladulas.v1.PresentedProjectR\tpresented\"\x18\n" +
+	"\tpresented\x18\x06 \x01(\v2\x1c.ladulas.v1.PresentedProjectR\tpresented\x12!\n" +
+	"\fprompt_token\x18\a \x01(\tR\vpromptToken\"\x18\n" +
 	"\x16AnswerApprovalResponse\"L\n" +
 	"\x17FetchRequestDiffRequest\x12\x1d\n" +
 	"\n" +

@@ -96,6 +96,12 @@ type Frontend struct {
 	// somebody, so that a withdrawal from the daemon takes the card off the
 	// screen the same way another approver answering used to.
 	showing map[string]context.CancelFunc
+	// tokens names the card this front end was given for each request, which is
+	// what an answer has to carry: a request id names every card drawn for the
+	// question, and an answer under one was handed to every screen showing it
+	// — so the desktop's popup stayed up after the terminal had answered
+	// (decision AM).
+	tokens map[string]string
 }
 
 // New builds a front end. It makes no call: a desktop application starts
@@ -122,6 +128,7 @@ func New(opts Options) (*Frontend, error) {
 		log:     logger,
 		attach:  opts.Attached,
 		showing: map[string]context.CancelFunc{},
+		tokens:  map[string]string{},
 	}
 
 	front.session = bridge.NewSession(bridge.Options{
@@ -268,11 +275,13 @@ func (f *Frontend) prompt(ctx context.Context, event *ladulasv1.ApprovalPrompt) 
 
 	f.mu.Lock()
 	f.showing[id] = cancel
+	f.tokens[id] = event.GetPromptToken()
 	f.mu.Unlock()
 
 	defer func() {
 		f.mu.Lock()
 		delete(f.showing, id)
+		delete(f.tokens, id)
 		f.mu.Unlock()
 	}()
 
@@ -293,11 +302,16 @@ func (f *Frontend) answer(
 	ctx context.Context, id string,
 	req *approval.Request, answer *approval.Answer,
 ) error {
+	f.mu.Lock()
+	token := f.tokens[id]
+	f.mu.Unlock()
+
 	msg := &ladulasv1.AnswerApprovalRequest{
-		RequestId: id,
-		Decision:  answer.Decision,
-		Reason:    answer.Reason,
-		Presented: req.Shown(),
+		RequestId:   id,
+		Decision:    answer.Decision,
+		Reason:      answer.Reason,
+		Presented:   req.Shown(),
+		PromptToken: token,
 	}
 
 	if answer.GrantTTL > 0 {
