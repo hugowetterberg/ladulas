@@ -335,6 +335,13 @@ type Options struct {
 	// Lock is the store's lock state and the way to change it (§10). Optional:
 	// without one the viewer shows no unlock panel.
 	Lock Lock
+	// Settings is the part of the policy a surface may show, and SetSignTimeout
+	// is the one part it may change (§9). Both optional and offered together:
+	// without Settings the screen draws nothing, and without SetSignTimeout it
+	// draws the value and no way to change it, which is the honest thing for a
+	// host that can read the policy and not write it.
+	Settings       func() (SettingsView, error)
+	SetSignTimeout func(d time.Duration) error
 	// Presenter is the host. Without one the session answers nothing, which is
 	// the right behaviour for a host that has not started yet.
 	Presenter Presenter
@@ -836,6 +843,8 @@ func (s *Session) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/instance", s.handleInstance)
 	mux.HandleFunc("POST /api/v1/reload", s.handleReload)
+	mux.HandleFunc("GET /api/v1/settings", s.handleSettings)
+	mux.HandleFunc("POST /api/v1/settings/sign-timeout", s.handleSetSignTimeout)
 	mux.HandleFunc("GET /api/v1/lock", s.handleLockState)
 	mux.HandleFunc("POST /api/v1/lock/unlock", s.handleUnlock)
 	mux.HandleFunc("POST /api/v1/lock/lock", s.handleLock)
@@ -1058,6 +1067,15 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 		view.Lock = &state
 	}
 
+	if s.opts.Settings != nil {
+		settings, err := s.opts.Settings()
+		if err != nil {
+			view.Error = err.Error()
+		} else {
+			view.Settings = &settings
+		}
+	}
+
 	for _, location := range s.locationList() {
 		view.Locations = append(view.Locations, LocationView(location))
 	}
@@ -1138,6 +1156,70 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleSettings is the policy a surface may draw (§9).
+func (s *Session) handleSettings(w http.ResponseWriter, _ *http.Request) {
+	if s.opts.Settings == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host has no settings to show")
+
+		return
+	}
+
+	settings, err := s.opts.Settings()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, settings)
+}
+
+// handleSetSignTimeout writes the signing budget.
+//
+// The length arrives in seconds, like every other length the viewer sends, and
+// is bounded by the daemon rather than here: a surface draws the bound it was
+// given and the instance refuses anything past it, which is the same division
+// a promise is made under (decision V). What this does check is that a number
+// arrived at all, because a missing field and a deliberate zero read alike in
+// JSON and one of them would be a signing budget of nothing.
+func (s *Session) handleSetSignTimeout(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetSignTimeout == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change the signing budget")
+
+		return
+	}
+
+	var body struct {
+		Seconds *int64 `json:"seconds"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the setting could not be read")
+
+		return
+	}
+
+	if body.Seconds == nil {
+		writeError(w, http.StatusBadRequest, "no length was given")
+
+		return
+	}
+
+	if err := s.opts.SetSignTimeout(
+		time.Duration(*body.Seconds) * time.Second); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	// The answer is what a read would now say, so a screen redraws from the
+	// reply rather than polling to find out whether its own write took.
+	s.handleSettings(w, r)
 }
 
 // handleRevokePeer forgets a paired machine.

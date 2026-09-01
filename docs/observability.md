@@ -95,9 +95,14 @@ its author meant, a phone that nobody is picking up.
   policy are doing the work, and a p50 in tens of seconds means somebody is
   answering nearly every signature by hand, which is how approval fatigue
   starts ([architecture §16](architecture.md#16-security-considerations)).
-  The buckets run to 300s because that is roughly the signing timeout;
-  `ssh_auth` has about two minutes before sshd gives up on the login
-  regardless.
+  The buckets run to 3600s because that is the signing budget
+  ([architecture §9](architecture.md#9-approval-engine-and-policies),
+  decision AJ), so a request that ran the clock out lands in the top bucket
+  rather than past every bucket there is. They stopped at 300s while the
+  budget was five minutes, and had to move with it. `ssh_auth` has about two
+  minutes before sshd gives up on the login regardless, so its p99 living
+  anywhere near the top of this histogram is a different fault from a
+  signature's.
 * **`ladulas_signatures_total`** — signatures actually produced with a key
   held here. It trails approvals, and the gap is real rather than an error:
   a request can be approved and then never signed, which is what a

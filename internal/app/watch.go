@@ -377,6 +377,40 @@ func (s *controlService) FetchRequestDiff(
 	}), nil
 }
 
+// Settings reports the part of the policy a surface may show, and the bounds it
+// should draw (§9).
+func (s *controlService) Settings(
+	_ context.Context, _ *connect.Request[ladulasv1.SettingsRequest],
+) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	return connect.NewResponse(s.settings()), nil
+}
+
+// SetSignTimeout writes the signing budget and puts it into effect.
+func (s *controlService) SetSignTimeout(
+	_ context.Context, req *connect.Request[ladulasv1.SetSignTimeoutRequest],
+) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	timeout := req.Msg.GetSignTimeout().AsDuration()
+
+	if err := s.app.SetSignTimeout(timeout); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	return connect.NewResponse(s.settings()), nil
+}
+
+// settings is the same answer both calls give, so that a write is followed by
+// what a read would now say rather than by an empty response the caller has to
+// go and check.
+func (s *controlService) settings() *ladulasv1.SettingsResponse {
+	return &ladulasv1.SettingsResponse{
+		SignTimeout:        durationpb.New(s.app.SignTimeout()),
+		DefaultSignTimeout: durationpb.New(approval.DefaultSignTimeout),
+		MinSignTimeout:     durationpb.New(approval.MinSignTimeout),
+		MaxSignTimeout:     durationpb.New(approval.MaxSignTimeout),
+		PolicyPath:         s.app.Config.PolicyPath(),
+	}
+}
+
 // Reload re-reads the store and the policy, which is what SIGHUP does to the
 // daemon and what the front end's menu asks for.
 func (s *controlService) Reload(

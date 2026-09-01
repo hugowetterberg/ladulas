@@ -720,6 +720,129 @@ function newKeySheet(state) {
   label.input.focus();
 }
 
+// signTimeoutCard is how long somebody has to answer a signing request, and the
+// way to change it (§9).
+//
+// It is a fact with a button rather than a box on the screen, because the pane
+// is repainted every four seconds and a repaint empties a field somebody is
+// halfway through (decision AF). The form is in a sheet, where the poll cannot
+// reach it.
+function signTimeoutCard(state, settings) {
+  const change = el("button", null, "Change");
+
+  change.onclick = () => signTimeoutSheet(state, settings);
+
+  const card = ui.card(null,
+    el("div", "row-title",
+      "Signing requests wait up to " + ui.duration(settings.signTimeoutSeconds)),
+    ui.note("How long git and ssh-keygen block while somebody answers. It is "
+      + "meant to be long: a request that gives up costs the commit, and the "
+      + "person answering may be in another room. An SSH login keeps its own "
+      + "much shorter budget, because the server at the other end is counting "
+      + "too."),
+    append(el("div", "card-actions"), change));
+
+  if (settings.policyPath) {
+    card.append(ui.note("Kept in " + settings.policyPath + "."));
+  }
+
+  return card;
+}
+
+// signTimeoutSheet asks for the length on a clock, the way a promise is asked
+// for (decision V) — the two are the same question about the same kind of
+// thing, and a second idiom for it would be a second thing to learn.
+function signTimeoutSheet(state, settings) {
+  const clock = document.createElement("input");
+
+  clock.type = "time";
+  clock.step = 60;
+  clock.min = ui.clockValue(settings.minSignTimeoutSeconds);
+  clock.max = ui.clockValue(settings.maxSignTimeoutSeconds);
+  clock.value = ui.clockValue(settings.signTimeoutSeconds);
+
+  const save = el("button", "primary", "");
+  const said = ui.note("");
+  const quick = el("div", "card-actions");
+
+  said.hidden = true;
+
+  function chosen() {
+    return ui.clockSeconds(clock.value);
+  }
+
+  function refresh() {
+    const seconds = chosen();
+
+    save.textContent = "Wait up to " + ui.duration(seconds);
+    save.disabled =
+      seconds < settings.minSignTimeoutSeconds ||
+      seconds > settings.maxSignTimeoutSeconds;
+  }
+
+  clock.oninput = refresh;
+
+  // The lengths worth one tap, including the one it goes back to. A default
+  // offered as a number nobody has to know is the difference between putting a
+  // setting back and guessing at what it was.
+  const suggestions = [300, 900, 3600, 4 * 3600];
+
+  if (!suggestions.includes(settings.defaultSignTimeoutSeconds)) {
+    suggestions.push(settings.defaultSignTimeoutSeconds);
+  }
+
+  suggestions.sort((a, b) => a - b);
+
+  for (const seconds of suggestions) {
+    if (seconds < settings.minSignTimeoutSeconds ||
+        seconds > settings.maxSignTimeoutSeconds) {
+      continue;
+    }
+
+    const label = seconds === settings.defaultSignTimeoutSeconds
+      ? ui.duration(seconds) + " (the default)"
+      : ui.duration(seconds);
+
+    const button = el("button", null, label);
+
+    button.onclick = () => {
+      clock.value = ui.clockValue(seconds);
+      refresh();
+    };
+
+    quick.append(button);
+  }
+
+  const sheet = ui.sheet("How long a signing request waits",
+    append(el("label", "field"),
+      el("span", "field-label", "Hours and minutes"), clock),
+    quick,
+    ui.note("Requests already waiting keep the length they started with. "
+      + "This is for the next one."),
+    append(el("div", "card-actions"), save),
+    said);
+
+  save.onclick = () => {
+    save.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .setSignTimeout(chosen())
+      .then(() => {
+        sheet.close();
+        state.refresh();
+      })
+      .catch((error) => {
+        save.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  refresh();
+  clock.focus();
+}
+
 // field is a labelled input. The label is a real one rather than a placeholder:
 // a placeholder is gone the moment somebody types, which is the moment they
 // want to check what the box was for.
@@ -1070,6 +1193,11 @@ export function settings(state) {
   if (locations.length) {
     body.push(ui.heading("Where things are"));
     body.push(ui.card(null, facts(grouped(locations))));
+  }
+
+  if (instance.settings) {
+    body.push(ui.heading("Approvals"));
+    body.push(signTimeoutCard(state, instance.settings));
   }
 
   body.push(ui.heading("The daemon"));

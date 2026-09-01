@@ -73,7 +73,8 @@ message Defaults {
   Action fallback = 2;
   // How long to wait for an answer. SSH auth is bounded by the far server's
   // LoginGraceTime, typically 120s, so the default is 90s; git signing blocks
-  // happily and gets minutes (§9).
+  // happily and gets an hour, which is a budget for somebody who is not at the
+  // desk rather than one for somebody who is (§9).
   google.protobuf.Duration ssh_auth_timeout = 3;
   google.protobuf.Duration sign_timeout = 4;
   // TTL offered by the "approve for a while" buttons on the prompt.

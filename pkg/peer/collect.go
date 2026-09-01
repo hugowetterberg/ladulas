@@ -491,8 +491,13 @@ func collectedTimeout(item *ladulasv1.PendingApproval) time.Duration {
 	return remaining
 }
 
-// maxCollectedTimeout is the longest a collected request stays on screen.
-const maxCollectedTimeout = 15 * time.Minute
+// maxCollectedTimeout is the longest a collected request stays on screen. It
+// tracks the signing budget in §9: a cap below it takes the prompt off the
+// phone while the requester is still waiting, which is the case the budget
+// exists for — somebody away from the desk, answering on the phone they had
+// with them. It was fifteen minutes against a five-minute budget, so it never
+// bit; against an hour it would have been the shorter of the two.
+const maxCollectedTimeout = time.Hour
 
 // decideFor is the engine's peer path, with the requester's account of itself
 // replaced by what the channel proved — the same substitution RequestApproval

@@ -239,7 +239,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		TLSConfig: s.tlsConfig(),
 		// The handshake is the whole of the unauthenticated surface (§15), so
 		// it is the thing with a deadline on it. What happens afterwards is an
-		// approval, which is a human, and gets minutes.
+		// approval, which is a human, and gets §9's budget.
 		ReadHeaderTimeout: 15 * time.Second,
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
 			return withConn(ctx, conn)

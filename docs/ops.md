@@ -294,6 +294,18 @@ send it at all: nothing retries that into working, and on a machine whose
 only approver is a phone it means the phone has no route and is not
 polling.
 
+**A `timeout` now means an hour went by**, not five minutes
+([architecture §9](architecture.md#9-approval-engine-and-policies),
+decision AJ), so it says something rather different than it used to: not
+"somebody was slow" but "nobody answered all morning". `ladulas policy
+show` prints the budget in force and the desktop's Settings screen
+changes it. Two consequences worth having in mind before reading the
+graph. A hung `git commit` is now hung for an hour, so somebody reporting
+a stuck terminal is describing a request that is still waiting and can
+still be answered — from the desktop window, or from a paired phone. And the wait histogram's
+buckets go to 3600s to match, so a p99 read off an older dashboard is
+comparing against a scale that has changed.
+
 **Not to be confused with the denial that names a peer.** Until 2026-08-19
 a refusal reading `<peer>: no approver is available to answer` was a
 different failure wearing the same source: the peer had answered, instantly,
@@ -539,7 +551,9 @@ build reattaches to the new daemon perfectly happily.
 2. **`ladulas_approval_decisions_total{source="no_approver"}` and
    `{source="timeout"}`.** Requests that reached nobody. Nothing retries
    them, and on a headless box this is the failure that looks like a hung
-   terminal.
+   terminal. A `timeout` is an hour unanswered rather than five minutes
+   (decision AJ), which makes it a rarer and a more serious line than it
+   was.
 3. **`ladulas_audit_entries_total{event="key_transfer"}`.** Key material
    arrived or left. Rare, deliberate, and the thing to know about
    immediately if it was not you.

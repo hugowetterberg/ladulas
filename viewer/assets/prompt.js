@@ -10,7 +10,7 @@
 import { el, append, facts } from "./dom.js";
 import { bridge } from "./bridge.js";
 import { renderCard } from "./cards.js";
-import { icon } from "./ui.js";
+import { icon, clockValue, clockSeconds, duration } from "./ui.js";
 
 // renderPrompt draws the card and the answer. `done` is called with the decision
 // once the instance has taken it, which is where a host decides what a window
@@ -107,15 +107,13 @@ function grantOffer(offer, answer, buttons) {
   let scope = null;
 
   function chosen() {
-    const [hours, minutes] = clock.value.split(":").map(Number);
-
-    return (hours || 0) * 3600 + (minutes || 0) * 60;
+    return clockSeconds(clock.value);
   }
 
   function refresh() {
     const seconds = chosen();
 
-    confirm.textContent = "Approve for " + humanDuration(seconds);
+    confirm.textContent = "Approve for " + duration(seconds);
     confirm.disabled = seconds < 60 || seconds > offer.maxSeconds;
   }
 
@@ -200,33 +198,6 @@ function grantTrust(trust) {
   }
 
   return root;
-}
-
-// clockValue is a length of time as the input reads one: hours and minutes, and
-// never past the day it would wrap at.
-function clockValue(seconds) {
-  const bounded = Math.max(60, Math.min(seconds, 23 * 3600 + 59 * 60));
-  const pad = (n) => String(n).padStart(2, "0");
-
-  return pad(Math.floor(bounded / 3600)) + ":" + pad(Math.floor((bounded % 3600) / 60));
-}
-
-// humanDuration says a length the way the core says it, because the button and
-// the grant it creates should read alike.
-function humanDuration(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const count = (n, word) => n + " " + word + (n === 1 ? "" : "s");
-
-  if (!hours) {
-    return count(minutes, "minute");
-  }
-
-  if (!minutes) {
-    return count(hours, "hour");
-  }
-
-  return count(hours, "hour") + " " + count(minutes, "minute");
 }
 
 // renderDecision is a decision already made: the card that was answered, what

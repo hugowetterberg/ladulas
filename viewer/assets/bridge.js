@@ -113,6 +113,13 @@ export const bridge = {
     }),
   reload: () => call("POST", "/reload"),
 
+  // The part of the policy a screen may change (§9). The read rides along on
+  // the instance view, so this is the write and what it answers with, which is
+  // what a read would now say — a screen redraws from the reply rather than
+  // polling to find out whether its own write took.
+  setSignTimeout: (seconds) =>
+    call("POST", "/settings/sign-timeout", { seconds }),
+
   // The two things that can be done to a promise already made (decision P):
   // take it back, or give it longer. Revoking a delegated grant stops it when
   // its holder is next reached rather than at once, which is what the row that

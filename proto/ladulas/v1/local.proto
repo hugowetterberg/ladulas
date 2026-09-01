@@ -355,6 +355,55 @@ service ControlService {
   // SIGHUP does to the daemon. It is here because the front end offers it in a
   // menu and a menu item may not depend on being able to signal a process.
   rpc Reload(ReloadRequest) returns (ReloadResponse);
+
+  // Settings is the part of the policy a surface may show and change, which
+  // today is how long a signing request waits (§9).
+  //
+  // The policy document stays a hand-edited file and this is not a way to
+  // rewrite it: one field is readable and one field is writable, because a
+  // settings screen that could edit rules would be an auto-approve rule one
+  // mis-click away, and the control socket is reachable by everything running
+  // as this user (decision K). Adding a setting here is deliberate work, and
+  // that is the point.
+  //
+  // Answered whether or not the store is unlocked: the policy is a config file
+  // rather than store contents, and a person who cannot sign yet is exactly
+  // the person who wants to know how long the next request will wait.
+  rpc Settings(SettingsRequest) returns (SettingsResponse);
+
+  // SetSignTimeout writes the signing budget to the policy document and puts it
+  // into effect, without a reload and without a restart. Requests already
+  // waiting keep the budget they started under: a deadline is set when a
+  // request arrives, and moving it under somebody would make the clock on their
+  // screen a lie.
+  rpc SetSignTimeout(SetSignTimeoutRequest) returns (SettingsResponse);
+}
+
+message SettingsRequest {}
+
+// SettingsResponse is what a settings screen draws: the value in force, the
+// value it would go back to, and the range it may be moved within.
+//
+// The bounds are the instance's rather than the surface's for the reason the
+// grant offer's max_ttl is (decision V): a surface draws the bound, it does not
+// own it, and the daemon refuses anything past it whatever the surface drew.
+message SettingsResponse {
+  // How long a signing request waits for an answer.
+  google.protobuf.Duration sign_timeout = 1;
+  // What it is when the policy says nothing, for a surface offering to put it
+  // back.
+  google.protobuf.Duration default_sign_timeout = 2;
+  // The shortest and longest this may be set to from a surface. A hand-edited
+  // policy is not bounded by these — it is the escape hatch, and somebody
+  // editing the file by hand has said what they mean.
+  google.protobuf.Duration min_sign_timeout = 3;
+  google.protobuf.Duration max_sign_timeout = 4;
+  // Where the document being written lives, so a surface can say so.
+  string policy_path = 5;
+}
+
+message SetSignTimeoutRequest {
+  google.protobuf.Duration sign_timeout = 1;
 }
 
 message StatusRequest {}

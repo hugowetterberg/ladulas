@@ -361,7 +361,8 @@ type Defaults struct {
 	Fallback Action `protobuf:"varint,2,opt,name=fallback,proto3,enum=ladulas.v1.Action" json:"fallback,omitempty"`
 	// How long to wait for an answer. SSH auth is bounded by the far server's
 	// LoginGraceTime, typically 120s, so the default is 90s; git signing blocks
-	// happily and gets minutes (§9).
+	// happily and gets an hour, which is a budget for somebody who is not at the
+	// desk rather than one for somebody who is (§9).
 	SshAuthTimeout *durationpb.Duration `protobuf:"bytes,3,opt,name=ssh_auth_timeout,json=sshAuthTimeout,proto3" json:"ssh_auth_timeout,omitempty"`
 	SignTimeout    *durationpb.Duration `protobuf:"bytes,4,opt,name=sign_timeout,json=signTimeout,proto3" json:"sign_timeout,omitempty"`
 	// TTL offered by the "approve for a while" buttons on the prompt.

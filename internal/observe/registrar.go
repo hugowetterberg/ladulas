@@ -92,9 +92,12 @@ func (r *registrar) histogram(
 // waitBuckets span what a person takes to answer a prompt, not what a machine
 // takes to serve a request: the interesting end of an approval's latency is
 // somewhere between "a grant answered it instantly" and "it sat there until it
-// timed out".
+// timed out". The last of them is the signing budget (§9), so a request that
+// ran out the clock is a bucket and not an overflow: they stopped at 300s
+// while the budget was five minutes, and everything past it would have piled
+// into +Inf once the budget became an hour.
 var waitBuckets = []float64{
-	0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300,
+	0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600,
 }
 
 // callBuckets are ordinary network latencies, for a push to Apple or an RPC.

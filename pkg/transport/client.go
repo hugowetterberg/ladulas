@@ -100,7 +100,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 			ForceAttemptHTTP2: true,
 		},
 		// No client timeout. What is being waited for is a human deciding, and
-		// §9 gives that minutes; the context is what bounds a call.
+		// §9 gives that an hour; the context is what bounds a call.
 	}
 
 	return client, nil

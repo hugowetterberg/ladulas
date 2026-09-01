@@ -147,6 +147,8 @@ func New(opts Options) (*Frontend, error) {
 		History:            front.history,
 		Reload:             front.reload,
 		Lock:               &lockControl{front: front},
+		Settings:           front.settings,
+		SetSignTimeout:     front.setSignTimeout,
 		Locations:          nil,
 		Presenter:          opts.Presenter,
 		ID:                 id,

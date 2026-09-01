@@ -292,6 +292,100 @@ func TestPolicyTimeouts(t *testing.T) {
 	}
 }
 
+// TestTheSigningBudgetIsGenerous: a signing request is waited for by something
+// that blocks happily, and by somebody who may not be at the desk. The number
+// is asserted rather than left to the constant, because the whole point of it
+// is the length: it was five minutes, and five minutes is the length that
+// fails whenever the phone is in a pocket.
+func TestTheSigningBudgetIsGenerous(t *testing.T) {
+	if approval.DefaultSignTimeout != time.Hour {
+		t.Errorf("a signing request waits %s", approval.DefaultSignTimeout)
+	}
+
+	// SSH authentication does not get the same, and must not: sshd closes the
+	// connection after its own grace period, so a budget past that is a login
+	// that fails after the person answered it.
+	if approval.DefaultSSHAuthTimeout >= 2*time.Minute {
+		t.Errorf("ssh authentication waits %s, past a typical LoginGraceTime",
+			approval.DefaultSSHAuthTimeout)
+	}
+}
+
+// TestTheSigningBudgetIsBoundedWhenASurfaceSetsIt: what a settings screen may
+// write is bounded at both ends, and refused rather than trimmed — a value
+// quietly changed to something else is a setting somebody thinks they made.
+func TestTheSigningBudgetIsBoundedWhenASurfaceSetsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		set     time.Duration
+		refused bool
+	}{
+		{name: "the default", set: approval.DefaultSignTimeout},
+		{name: "the floor", set: approval.MinSignTimeout},
+		{name: "the ceiling", set: approval.MaxSignTimeout},
+		{name: "under the floor", set: time.Second, refused: true},
+		{name: "over the ceiling", set: 48 * time.Hour, refused: true},
+		{name: "nothing at all", set: 0, refused: true},
+		{name: "backwards", set: -time.Hour, refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := approval.DefaultPolicy()
+
+			err := policy.SetSignTimeout(tc.set)
+
+			if tc.refused {
+				if err == nil {
+					t.Fatalf("%s was accepted", tc.set)
+				}
+
+				if got := policy.Timeout(
+					ladulasv1.RequestKind_REQUEST_KIND_GIT_SIGN); got !=
+					approval.DefaultSignTimeout {
+					t.Errorf("a refused setting still changed it to %s", got)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("set %s: %v", tc.set, err)
+			}
+
+			if got := policy.Timeout(
+				ladulasv1.RequestKind_REQUEST_KIND_GIT_SIGN); got != tc.set {
+				t.Errorf("set %s, the policy says %s", tc.set, got)
+			}
+		})
+	}
+}
+
+// TestTheSigningBudgetSurvivesTheDocument: what a surface writes has to be
+// there after a save and a load, because the file is what the daemon reads on
+// its next start.
+func TestTheSigningBudgetSurvivesTheDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+
+	policy := approval.DefaultPolicy()
+
+	if err := policy.SetSignTimeout(90 * time.Minute); err != nil {
+		t.Fatalf("set the budget: %v", err)
+	}
+
+	if err := policy.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := approval.LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if got := loaded.Timeout(
+		ladulasv1.RequestKind_REQUEST_KIND_GIT_SIGN); got != 90*time.Minute {
+		t.Errorf("the saved budget came back as %s", got)
+	}
+}
+
 func TestPolicyRoundTripsThroughDisk(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.json")
 

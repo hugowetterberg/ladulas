@@ -100,6 +100,46 @@ export function action(iconName, label, onClick) {
   return button;
 }
 
+// clockValue is a length of time as a time input reads one: hours and minutes,
+// and never past the day it would wrap at.
+//
+// It is here rather than in the screen that first needed it because two screens
+// now ask for a length on a clock — how long a promise runs (decision V) and
+// how long a signing request waits (§9) — and a second copy of this is a second
+// place for the padding and the clamp to be got slightly differently.
+export function clockValue(seconds) {
+  const bounded = Math.max(60, Math.min(seconds, 23 * 3600 + 59 * 60));
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return pad(Math.floor(bounded / 3600)) + ":" + pad(Math.floor((bounded % 3600) / 60));
+}
+
+// clockSeconds is the other direction: what a time input holds, as a length.
+export function clockSeconds(value) {
+  const [hours, minutes] = String(value || "").split(":").map(Number);
+
+  return (hours || 0) * 3600 + (minutes || 0) * 60;
+}
+
+// duration says a length the way the core's HumanDuration does, because a
+// button, the promise it makes and the log line it ends up in should all read
+// alike.
+export function duration(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const count = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+  if (!hours) {
+    return count(minutes, "minute");
+  }
+
+  if (!minutes) {
+    return count(hours, "hour");
+  }
+
+  return count(hours, "hour") + " " + count(minutes, "minute");
+}
+
 // sheet is a modal over the pane: what an action in the title bar opens.
 //
 // It is a `dialog` rather than a pane of its own, and that is what buys the

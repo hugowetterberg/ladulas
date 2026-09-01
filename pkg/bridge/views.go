@@ -490,8 +490,31 @@ type InstanceView struct {
 	Endorsements []EndorsementSummaryView `json:"endorsements,omitempty"`
 	Retractions  []RetractionSummaryView  `json:"retractions,omitempty"`
 	// Lock is the store's state, when the host manages one (§10).
-	Lock  *LockView `json:"lock,omitempty"`
-	Error string    `json:"error,omitempty"`
+	Lock *LockView `json:"lock,omitempty"`
+	// Settings is the part of the policy a surface may show and change, when
+	// the host offers one (§9).
+	Settings *SettingsView `json:"settings,omitempty"`
+	Error    string        `json:"error,omitempty"`
+}
+
+// SettingsView is the policy a settings screen draws: the signing budget in
+// force, what it would go back to, and the range it may be moved within.
+//
+// It rides along on the instance view because a settings screen is drawn from
+// one call and a second one would be a second thing to be out of date. The
+// bounds come with it for the reason a grant offer carries its max_ttl
+// (decision V): the surface draws the bound, the daemon owns it, and a surface
+// that made its own up would offer something that is refused when it is used.
+type SettingsView struct {
+	SignTimeoutSeconds int64 `json:"signTimeoutSeconds"`
+	// DefaultSignTimeoutSeconds is what it is when the policy says nothing, so
+	// a screen can offer to put it back without knowing the number.
+	DefaultSignTimeoutSeconds int64 `json:"defaultSignTimeoutSeconds"`
+	MinSignTimeoutSeconds     int64 `json:"minSignTimeoutSeconds"`
+	MaxSignTimeoutSeconds     int64 `json:"maxSignTimeoutSeconds"`
+	// PolicyPath is the file being written, for a screen that says where the
+	// setting ends up. Empty on a host that has no file to name.
+	PolicyPath string `json:"policyPath,omitempty"`
 }
 
 // EndorsementSummaryView is one promise another holder of a key has made about

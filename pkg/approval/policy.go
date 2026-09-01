@@ -15,11 +15,44 @@ import (
 
 // Default timeouts (§9). SSH authentication is bounded by the far server's
 // LoginGraceTime, typically 120 seconds, so 90 leaves room to answer and still
-// complete the handshake. Signing blocks git and ssh-keygen happily, so it can
-// afford to wait for someone to pick up a phone.
+// complete the handshake.
+//
+// Signing is bounded by nothing: git and ssh-keygen block happily, and the two
+// costs are not symmetric. A request that waits too long costs a terminal
+// somebody has walked away from. A request that gives up too early costs the
+// commit: git aborts, whatever was in the middle of being done is started
+// again, and the person answering is punished for having been in another room.
+//
+// It was five minutes, which is long enough to walk to the kitchen and not
+// long enough to be in a meeting, so the failure it produced was the ordinary
+// one: the phone was in a pocket and the answer arrived to a request that had
+// already given up. An hour covers being away from the desk without being a
+// length anybody would plan around, and it leaves room to actually read the
+// diff on the prompt, which is what the rich prompt is for (§5).
 const (
 	DefaultSSHAuthTimeout = 90 * time.Second
-	DefaultSignTimeout    = 5 * time.Minute
+	DefaultSignTimeout    = time.Hour
+)
+
+// MinSignTimeout and MaxSignTimeout bound what a surface may set the signing
+// budget to.
+//
+// They are not a bound on the policy document. A hand-edited policy.json is the
+// escape hatch and stays unbounded, because somebody editing the file has said
+// what they mean; these are what a settings screen may offer and what the
+// control socket accepts from one, which is the same division the grant offer
+// draws between the lengths a prompt shows and the length the engine will
+// honour (decision V).
+//
+// The floor is not zero because zero already means something else — a kind with
+// no budget waits on its caller's context alone — and a budget of seconds fails
+// every request that needs a person. The ceiling is a day because a signing
+// request is something somebody is blocked on: past that it is not a budget,
+// it is a promise never to give up, and the terminal holding the commit would
+// hold it until the machine went down.
+const (
+	MinSignTimeout = 30 * time.Second
+	MaxSignTimeout = 24 * time.Hour
 )
 
 // DefaultGrantTTLs are the "approve for a while" options offered on a prompt.
@@ -97,6 +130,28 @@ func (p *Policy) Save(path string) error {
 	if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write policy: %w", err)
 	}
+
+	return nil
+}
+
+// SetSignTimeout changes the signing budget in the document, so that saving it
+// writes the new value and an engine given this policy applies it.
+//
+// A zero or negative length is refused rather than read as "no budget at all":
+// the kinds that wait forever do so because of what they are (§9), and a
+// signing request typed into a settings box is not one of them.
+func (p *Policy) SetSignTimeout(d time.Duration) error {
+	if d < MinSignTimeout || d > MaxSignTimeout {
+		return fmt.Errorf(
+			"a signing request waits for at least %s and at most %s",
+			HumanDuration(MinSignTimeout), HumanDuration(MaxSignTimeout))
+	}
+
+	if p.doc.GetDefaults() == nil {
+		p.doc.Defaults = &ladulasv1.Defaults{}
+	}
+
+	p.doc.Defaults.SignTimeout = durationpb.New(d)
 
 	return nil
 }

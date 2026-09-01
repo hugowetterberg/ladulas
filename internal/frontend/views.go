@@ -447,6 +447,55 @@ func (f *Frontend) history(limit int) ([]*ladulasv1.AuditEntry, error) {
 	return entries, nil
 }
 
+// settings is the policy a settings screen draws (§9). It is asked for on every
+// paint of the instance view, like everything else on it, and is cheap: the
+// daemon reads it out of the policy it already has loaded.
+func (f *Frontend) settings() (bridge.SettingsView, error) {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := f.client.Settings(ctx,
+		connect.NewRequest(&ladulasv1.SettingsRequest{}))
+	if err != nil {
+		return bridge.SettingsView{}, fmt.Errorf("ask for the settings: %w", err)
+	}
+
+	return settingsView(resp.Msg), nil
+}
+
+// setSignTimeout writes the signing budget through the daemon, which is the
+// only process that touches the policy document (decision L).
+func (f *Frontend) setSignTimeout(d time.Duration) error {
+	ctx, cancel := call()
+	defer cancel()
+
+	_, err := f.client.SetSignTimeout(ctx,
+		connect.NewRequest(&ladulasv1.SetSignTimeoutRequest{
+			SignTimeout: durationpb.New(d),
+		}))
+	if err != nil {
+		return fmt.Errorf("set how long a signing request waits: %w", err)
+	}
+
+	return nil
+}
+
+// settingsView is the one conversion, so that the screen and anything else
+// reading this are looking at the same seconds.
+func settingsView(msg *ladulasv1.SettingsResponse) bridge.SettingsView {
+	seconds := func(d *durationpb.Duration) int64 {
+		return int64(d.AsDuration() / time.Second)
+	}
+
+	return bridge.SettingsView{
+		SignTimeoutSeconds:        seconds(msg.GetSignTimeout()),
+		DefaultSignTimeoutSeconds: seconds(msg.GetDefaultSignTimeout()),
+		MinSignTimeoutSeconds:     seconds(msg.GetMinSignTimeout()),
+		MaxSignTimeoutSeconds:     seconds(msg.GetMaxSignTimeout()),
+		PolicyPath:                msg.GetPolicyPath(),
+	}
+}
+
 func (f *Frontend) reload() error {
 	ctx, cancel := call()
 	defer cancel()

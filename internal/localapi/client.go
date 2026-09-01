@@ -46,7 +46,7 @@ func NewClient(socketPath string) *Client {
 			},
 		},
 		// No client timeout: the wait here is a human deciding, which §9 gives
-		// minutes. The context is what bounds it.
+		// an hour. The context is what bounds it.
 	}
 
 	// The host in the URL is never resolved — the dialer ignores it — but

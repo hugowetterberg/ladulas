@@ -442,14 +442,23 @@ It is the phone's app in a window — a sidebar with Home, Keys, Activity and
 Documents, one entry per paired machine below them, and Settings at the bottom
 where the phone has "This phone". Home is what is waiting for an answer, the
 machines and the promises still running; Settings is this instance's own
-fingerprint, where its files are, and the lock, seal and reload verbs. A sealed
-store shows the passphrase panel in place of the screens, and the window opens
-itself once when it attaches to an instance that is sealed.
+fingerprint, where its files are, how long a signing request waits, and the
+lock, seal and reload verbs. A sealed store shows the passphrase panel in place
+of the screens, and the window opens itself once when it attaches to an
+instance that is sealed.
 
 **What a screen can do is an icon in its title bar** (decision AF), and a sheet
 opens behind it: **+** on Keys makes a key, and the **cog** on a paired machine
 holds the pairing's fingerprint, addresses and key access, and the button that
 ends it. What a screen *is* stays in the pane.
+
+**How long a signing request waits** is on Settings under Approvals, and
+`Change` opens a sheet with the length on a clock and the lengths worth one tap,
+the default among them (decision AJ). It is a sheet rather than a box on the
+screen for the reason every form here is one: the pane repaints every four
+seconds and a repaint empties a field somebody is halfway through. The number
+goes into `policy.json` and into effect at once, with no restart and no reload;
+requests already waiting keep the length they started with.
 
 **A key another machine handed this one** — `ladulas keys send` at that end
 (decision S) — waits on the Keys screen and is counted beside `Keys` in the
@@ -588,6 +597,26 @@ back) or `off`.
 | `--on-session-lock` | `LADULAS_ON_SESSION_LOCK` | `lock` | What happens when the session locks. `lock` rather than `seal` is deliberate: a desktop reached over SSH must keep signing while its screen is locked, which is the 1Password failure this project exists to fix |
 | `--idle-lock` | `LADULAS_IDLE_LOCK` | off | Lock after this long with nothing decided |
 | `--idle-lock-action` | `LADULAS_IDLE_LOCK_ACTION` | `lock` | What the idle timeout does |
+
+### `ladulas-sign`
+
+`ssh-keygen` owns the flag namespace, so everything git's signing program can
+be told is told through the environment.
+
+| Environment | Default | What it does |
+|---|---|---|
+| `LADULAS_SOCK` | `$XDG_RUNTIME_DIR/ladulas/control.sock` | The instance to sign through |
+| `LADULAS_SIGN_TIMEOUT` | the instance's own budget, an hour | How long to wait for an approval, as a Go duration: `30m`, `2h`. Set, it overrides the instance's for this signature only |
+| `LADULAS_SIGN_NO_DIFF` | off | Set to anything to skip collecting the diff, for a repository where `git diff` is too slow to want on every commit |
+| `LADULAS_SIGN_DIFF_BYTES` | — | Cap on the collected diff, in bytes |
+| `LADULAS_SSH_KEYGEN` | `ssh-keygen` on `$PATH` | The program the command lines this one does not answer are handed to |
+
+The hour is the instance's setting rather than this program's: `ladulas policy
+show` prints it, the desktop's Settings screen changes it, and it lands in
+`policy.json` as `signTimeout` (architecture §9, decision AJ). It is meant to
+be long — a request that gives up costs the commit, and the person answering
+may be in another room. SSH authentication keeps its own much shorter budget,
+because the server at the other end is counting too.
 
 ### `ladulas-relay`
 

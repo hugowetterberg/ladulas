@@ -969,10 +969,48 @@ approval is simply an approver that happens to share the process.
 policy evaluation → if a rule auto-approves (or auto-denies), done, logged
 → otherwise fan out to eligible approvers: local GUI if present (and the
 store not locked, §10), connected peers with approval rights, wake-ups for
-reachable-but-sleeping mobile approvers. First decision wins; everyone else gets a cancellation. Timeout
-default ~90 s for SSH auth (the far server's `LoginGraceTime` is typically
-120 s) and generous (minutes) for git signing, since `ssh-keygen`/git block
-happily.
+reachable-but-sleeping mobile approvers. First decision wins; everyone else gets a cancellation.
+
+**How long a request waits, and why the two kinds differ** (decision AJ).
+SSH authentication gets ~90 s, because it is not this instance's clock:
+the far server's `LoginGraceTime` is typically 120 s, so a budget past that
+is a login that fails after the person answered it. Signing gets **an
+hour**, because nothing is counting at the other end — `ssh-keygen` and git
+block happily — and the two costs are not symmetric. A request that waits
+too long costs a terminal somebody has walked away from. One that gives up
+too early costs the commit: git aborts, the work is repeated, and the
+person answering is punished for having been in another room. It was five
+minutes, which is long enough to walk to the kitchen and not long enough to
+be in a meeting.
+
+Two numbers elsewhere are the same number and move with it. A request
+collected out of an inbox by a phone (§8) is capped at what the budget is,
+having been capped at fifteen minutes against a five-minute budget where it
+never bit; a shorter cap takes the prompt off the phone while the requester
+is still waiting, which is the case the hour exists for. And the approval
+wait histogram's last bucket is the budget, so a request that ran the clock
+out is a bucket rather than an overflow ([observability.md](observability.md)).
+
+**The budget is the one thing a surface may change.** `Settings` and
+`SetSignTimeout` on the control socket read it and write it; the desktop
+window's Settings screen and any other host draw it from the instance view,
+with the bounds the instance will accept — at least 30 s, at most a day —
+the way a grant offer carries its `max_ttl` (decision V). Writing it goes
+through the daemon, which is the only process that touches the policy
+document (decision L), and it re-reads the file before writing so that a
+hand edit waiting for a reload is adopted rather than silently reverted.
+Requests already waiting keep the budget they started under: a deadline is
+set when a request arrives, and a clock that jumps under somebody reading a
+diff is a clock that cannot be trusted for the one thing it is for.
+
+**It is one field and not a policy editor, deliberately.** The policy
+decides what is approved without asking anybody, so a settings screen that
+could write rules would put an auto-approve rule one mis-click from every
+process running as this user. A number that decides how long somebody has
+to answer cannot approve anything by itself. Adding a second setting here
+is deliberate work, and that is the point. The bounds are on the surfaces
+rather than on the document: a hand-edited `policy.json` stays unbounded,
+because somebody editing the file has said what they mean.
 
 **A peer saying it has nobody to ask is not a decision** — decision AC. It
 is a report about the peer, and it goes where an approver that could not be
@@ -2723,7 +2761,18 @@ rather than from inside the daemon, so four things joined the surface:
   process, and `Status` grew the instance's file locations — a front end
   started from a menu was not started with the unit's environment, so
   where the store is is the daemon's answer to give rather than a path the
-  window guesses.
+  window guesses;
+* `Settings` and `SetSignTimeout` — how long a signing request waits, read
+  and written (§9, decision AJ). They are two calls rather than one policy
+  editor on purpose: the document decides what is approved without asking,
+  and a screen that could write rules would be an auto-approve rule one
+  mis-click from every process running as this user. The write is bounded
+  by the instance and answers with what a read would now say, so a screen
+  redraws from the reply rather than polling to find out whether its own
+  write took. Both are answered while the store is sealed, because the
+  policy is a config file rather than store contents — and somebody who
+  cannot sign yet is exactly the person asking how long the next request
+  will wait.
 
 The audit log stays a plain file read even from the front end, which is
 the same exception it has always been, made once for the same reason.
@@ -3166,6 +3215,12 @@ Added 2026-08-25:
 |---|----------|------------|
 | AI | What `ladulas-sign` does with a command line git did not build | **answers it, rather than passing it to `ssh-keygen`.** Everything not a `-Y sign` request was handed over unchanged, which is the promise §5 makes and is right for the ones git makes — `-Y find-principals` and `-Y verify` on every `git log --show-signature`. It is wrong for the ones a person makes, because `ssh-keygen` with no operation flag does not print usage: it *generates a key*. So `ladulas-sign -h` opened a prompt to write a new private key into `~/.ssh`, and `-help`, which getopt reads as `-h -e -l -p`, opened one to change the passphrase on an existing key — a program whose whole purpose is that no key is used without somebody approving it, offering to write one because somebody asked it what it was. The discriminator is `-Y` itself: every invocation git makes of `gpg.ssh.program` names an operation, verified against git 2.55 by logging the argv of both signing arrangements, the key file and the `key::` literal, through sign, `--show-signature` and `%GK`. Without one, the usage is printed — exit 0 for a help request, exit 1 and a sentence naming what was refused for anything else. Rejected: enumerating `ssh-keygen`'s action-selecting flags and refusing only the key-generating shapes, which is a list to keep in step with another project's getopt and misclassifies every flag OpenSSH adds after this is written; and intercepting `-h` alone, which leaves `-help` and `-v` opening the same prompts. What is given up is using `ladulas-sign` as a general `ssh-keygen` stand-in, which it never was — it is a `gpg.ssh.program`, and the fallback is still every command line git builds. Rationale in §5; the report is in `bugs/` |
 
+Added 2026-09-01:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AJ | How long a signing request waits, and who may change it | **an hour, and one field on the control socket.** It was five minutes, and five minutes is the length that fails whenever the phone is in a pocket: long enough to walk to the kitchen, not long enough to be in a meeting or in another room. The two costs are not symmetric — a budget that is too long costs a terminal somebody has walked away from, and one that is too short costs the commit, because git aborts and the work is repeated and the person answering is punished for having been elsewhere. Nothing counts at the requester's end (`ssh-keygen` and git block happily), so the only clock is this one. SSH authentication keeps its ~90 s and must: sshd is counting, and a budget past `LoginGraceTime` is a login that fails after the person answered it. **Two numbers elsewhere are the same number** and moved with it — a request collected out of an inbox by a phone was capped at fifteen minutes, which never bit against five and would have been the shorter of the two against an hour, taking the prompt off the phone while the requester still waited; and the approval-wait histogram's last bucket was 300 s, so every request that ran the clock out would have piled into `+Inf` together. **The budget is also the one setting a surface may change**, through `Settings` and `SetSignTimeout` on the control socket: the desktop's Settings screen draws it from the instance view with the bounds the instance will accept (at least 30 s, at most a day, refused rather than trimmed), the daemon re-reads the document before writing so a hand edit waiting for a reload is adopted rather than reverted, and requests already waiting keep the budget they started under, because a clock that jumps under somebody reading a diff is not a clock. Rejected: a policy editor on the socket, which is what "let the screen change the policy" would grow into — the document decides what is approved *without asking*, so a screen that could write rules is an auto-approve rule one mis-click from every process running as this user, where a number deciding how long somebody has to answer cannot approve anything by itself. Also rejected: bounding the document. A hand-edited `policy.json` stays unbounded, because somebody editing the file has said what they mean. Rationale in §9 |
+
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
 only one. §14 used to say "daemon first, store fallback":
@@ -3260,7 +3315,7 @@ where it can be served properly.
 does: it fails at once, naming the holder.** No new machinery was needed.
 The requester already knows the state of the link, so the failure is
 produced from what it knows rather than by dialling and waiting — measured
-in milliseconds, against a default signing budget of five minutes (§9).
+in milliseconds, against a default signing budget of an hour (§9).
 Nothing here retries: the link reconnects on the backoff it already has
 (§8), and the next attempt finds a holder that is there. Two things the
 error must not be, and is not: a denial — nobody was asked, nothing was

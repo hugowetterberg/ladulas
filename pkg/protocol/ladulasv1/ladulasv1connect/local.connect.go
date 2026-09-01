@@ -176,6 +176,11 @@ const (
 	ControlServiceReadPeerPageProcedure = "/ladulas.v1.ControlService/ReadPeerPage"
 	// ControlServiceReloadProcedure is the fully-qualified name of the ControlService's Reload RPC.
 	ControlServiceReloadProcedure = "/ladulas.v1.ControlService/Reload"
+	// ControlServiceSettingsProcedure is the fully-qualified name of the ControlService's Settings RPC.
+	ControlServiceSettingsProcedure = "/ladulas.v1.ControlService/Settings"
+	// ControlServiceSetSignTimeoutProcedure is the fully-qualified name of the ControlService's
+	// SetSignTimeout RPC.
+	ControlServiceSetSignTimeoutProcedure = "/ladulas.v1.ControlService/SetSignTimeout"
 )
 
 // SigningServiceClient is a client for the ladulas.v1.SigningService service.
@@ -490,6 +495,26 @@ type ControlServiceClient interface {
 	// SIGHUP does to the daemon. It is here because the front end offers it in a
 	// menu and a menu item may not depend on being able to signal a process.
 	Reload(context.Context, *connect.Request[ladulasv1.ReloadRequest]) (*connect.Response[ladulasv1.ReloadResponse], error)
+	// Settings is the part of the policy a surface may show and change, which
+	// today is how long a signing request waits (§9).
+	//
+	// The policy document stays a hand-edited file and this is not a way to
+	// rewrite it: one field is readable and one field is writable, because a
+	// settings screen that could edit rules would be an auto-approve rule one
+	// mis-click away, and the control socket is reachable by everything running
+	// as this user (decision K). Adding a setting here is deliberate work, and
+	// that is the point.
+	//
+	// Answered whether or not the store is unlocked: the policy is a config file
+	// rather than store contents, and a person who cannot sign yet is exactly
+	// the person who wants to know how long the next request will wait.
+	Settings(context.Context, *connect.Request[ladulasv1.SettingsRequest]) (*connect.Response[ladulasv1.SettingsResponse], error)
+	// SetSignTimeout writes the signing budget to the policy document and puts it
+	// into effect, without a reload and without a restart. Requests already
+	// waiting keep the budget they started under: a deadline is set when a
+	// request arrives, and moving it under somebody would make the clock on their
+	// screen a lie.
+	SetSignTimeout(context.Context, *connect.Request[ladulasv1.SetSignTimeoutRequest]) (*connect.Response[ladulasv1.SettingsResponse], error)
 }
 
 // NewControlServiceClient constructs a client for the ladulas.v1.ControlService service. By
@@ -779,6 +804,18 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("Reload")),
 			connect.WithClientOptions(opts...),
 		),
+		settings: connect.NewClient[ladulasv1.SettingsRequest, ladulasv1.SettingsResponse](
+			httpClient,
+			baseURL+ControlServiceSettingsProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("Settings")),
+			connect.WithClientOptions(opts...),
+		),
+		setSignTimeout: connect.NewClient[ladulasv1.SetSignTimeoutRequest, ladulasv1.SettingsResponse](
+			httpClient,
+			baseURL+ControlServiceSetSignTimeoutProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("SetSignTimeout")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -830,6 +867,8 @@ type controlServiceClient struct {
 	searchPeerProject    *connect.Client[ladulasv1.SearchPeerProjectRequest, ladulasv1.SearchPeerProjectResponse]
 	readPeerPage         *connect.Client[ladulasv1.ReadPeerPageRequest, ladulasv1.ReadPeerPageResponse]
 	reload               *connect.Client[ladulasv1.ReloadRequest, ladulasv1.ReloadResponse]
+	settings             *connect.Client[ladulasv1.SettingsRequest, ladulasv1.SettingsResponse]
+	setSignTimeout       *connect.Client[ladulasv1.SetSignTimeoutRequest, ladulasv1.SettingsResponse]
 }
 
 // Status calls ladulas.v1.ControlService.Status.
@@ -1062,6 +1101,16 @@ func (c *controlServiceClient) Reload(ctx context.Context, req *connect.Request[
 	return c.reload.CallUnary(ctx, req)
 }
 
+// Settings calls ladulas.v1.ControlService.Settings.
+func (c *controlServiceClient) Settings(ctx context.Context, req *connect.Request[ladulasv1.SettingsRequest]) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	return c.settings.CallUnary(ctx, req)
+}
+
+// SetSignTimeout calls ladulas.v1.ControlService.SetSignTimeout.
+func (c *controlServiceClient) SetSignTimeout(ctx context.Context, req *connect.Request[ladulasv1.SetSignTimeoutRequest]) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	return c.setSignTimeout.CallUnary(ctx, req)
+}
+
 // ControlServiceHandler is an implementation of the ladulas.v1.ControlService service.
 type ControlServiceHandler interface {
 	// Status reports what the instance is doing, including which peers are
@@ -1288,6 +1337,26 @@ type ControlServiceHandler interface {
 	// SIGHUP does to the daemon. It is here because the front end offers it in a
 	// menu and a menu item may not depend on being able to signal a process.
 	Reload(context.Context, *connect.Request[ladulasv1.ReloadRequest]) (*connect.Response[ladulasv1.ReloadResponse], error)
+	// Settings is the part of the policy a surface may show and change, which
+	// today is how long a signing request waits (§9).
+	//
+	// The policy document stays a hand-edited file and this is not a way to
+	// rewrite it: one field is readable and one field is writable, because a
+	// settings screen that could edit rules would be an auto-approve rule one
+	// mis-click away, and the control socket is reachable by everything running
+	// as this user (decision K). Adding a setting here is deliberate work, and
+	// that is the point.
+	//
+	// Answered whether or not the store is unlocked: the policy is a config file
+	// rather than store contents, and a person who cannot sign yet is exactly
+	// the person who wants to know how long the next request will wait.
+	Settings(context.Context, *connect.Request[ladulasv1.SettingsRequest]) (*connect.Response[ladulasv1.SettingsResponse], error)
+	// SetSignTimeout writes the signing budget to the policy document and puts it
+	// into effect, without a reload and without a restart. Requests already
+	// waiting keep the budget they started under: a deadline is set when a
+	// request arrives, and moving it under somebody would make the clock on their
+	// screen a lie.
+	SetSignTimeout(context.Context, *connect.Request[ladulasv1.SetSignTimeoutRequest]) (*connect.Response[ladulasv1.SettingsResponse], error)
 }
 
 // NewControlServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -1573,6 +1642,18 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("Reload")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceSettingsHandler := connect.NewUnaryHandler(
+		ControlServiceSettingsProcedure,
+		svc.Settings,
+		connect.WithSchema(controlServiceMethods.ByName("Settings")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServiceSetSignTimeoutHandler := connect.NewUnaryHandler(
+		ControlServiceSetSignTimeoutProcedure,
+		svc.SetSignTimeout,
+		connect.WithSchema(controlServiceMethods.ByName("SetSignTimeout")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ladulas.v1.ControlService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ControlServiceStatusProcedure:
@@ -1667,6 +1748,10 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceReadPeerPageHandler.ServeHTTP(w, r)
 		case ControlServiceReloadProcedure:
 			controlServiceReloadHandler.ServeHTTP(w, r)
+		case ControlServiceSettingsProcedure:
+			controlServiceSettingsHandler.ServeHTTP(w, r)
+		case ControlServiceSetSignTimeoutProcedure:
+			controlServiceSetSignTimeoutHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1858,4 +1943,12 @@ func (UnimplementedControlServiceHandler) ReadPeerPage(context.Context, *connect
 
 func (UnimplementedControlServiceHandler) Reload(context.Context, *connect.Request[ladulasv1.ReloadRequest]) (*connect.Response[ladulasv1.ReloadResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.Reload is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) Settings(context.Context, *connect.Request[ladulasv1.SettingsRequest]) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.Settings is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) SetSignTimeout(context.Context, *connect.Request[ladulasv1.SetSignTimeoutRequest]) (*connect.Response[ladulasv1.SettingsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.SetSignTimeout is not implemented"))
 }
