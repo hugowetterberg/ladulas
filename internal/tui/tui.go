@@ -205,6 +205,43 @@ func (a *api) diff(id string) (bridge.DiffView, error) {
 	return view, nil
 }
 
+// unlock hands the passphrase to the daemon, which is the only process that
+// can do anything with it.
+//
+// The bytes are the caller's to wipe and the encoded body is wiped here: this
+// is a screen somebody types a passphrase into, and the difference between a
+// buffer that is cleared and one that is merely dropped is the difference
+// between a core file that is embarrassing and one that is a key.
+func (a *api) unlock(passphrase []byte) (bridge.LockView, error) {
+	encoded, err := json.Marshal(struct {
+		Passphrase []byte `json:"passphrase"`
+	}{Passphrase: passphrase})
+	if err != nil {
+		return bridge.LockView{}, fmt.Errorf("encode the passphrase: %w", err)
+	}
+
+	defer wipe(encoded)
+
+	var view bridge.LockView
+
+	if err := a.callRaw(
+		http.MethodPost, "/api/v1/lock/unlock", encoded, &view); err != nil {
+		return bridge.LockView{}, err
+	}
+
+	return view, nil
+}
+
+// wipe clears a buffer that held key material. It is not a guarantee — Go moves
+// memory and the daemon has its own copy — but it takes the obvious copy out of
+// this process's heap, which is the same thing keystore.Wipe does on the other
+// side of the socket.
+func wipe(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 func (a *api) lock() (bridge.LockView, error) {
 	var view bridge.LockView
 
@@ -228,15 +265,27 @@ func (a *api) settings() (bridge.SettingsView, error) {
 // call runs one request through the handler and reads the answer, turning the
 // bridge's `{"error": …}` into an ordinary Go error.
 func (a *api) call(method, path string, body, into any) error {
-	req := &bridge.CallRequest{Method: method, Path: path}
+	var encoded []byte
 
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		marshalled, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode the request: %w", err)
 		}
 
-		req.Body = encoded
+		encoded = marshalled
+	}
+
+	return a.callRaw(method, path, encoded, into)
+}
+
+// callRaw is the same with the body already encoded, for the one caller that
+// has to be able to clear the buffer afterwards.
+func (a *api) callRaw(method, path string, body []byte, into any) error {
+	req := &bridge.CallRequest{Method: method, Path: path}
+
+	if body != nil {
+		req.Body = body
 		req.ContentType = "application/json"
 	}
 

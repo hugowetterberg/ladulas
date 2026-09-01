@@ -198,12 +198,17 @@ inside the daemon, on the daemon's own stdin, and offers a yes, a no and four
 fixed lengths. Both may be attached at once, and the log tells them apart as
 `console` and `terminal`.
 
-**One thing it does not do yet**: a request raised *before* it started is one
-it never sees, because the engine fixes the set of approvers when it fans a
-request out. Leave it running rather than starting it when something is
-already stuck —
-[ops.md](docs/ops.md#ladulas-tui-shows-nothing-while-a-request-is-plainly-waiting)
-has the way to tell that apart from a terminal that is not attached.
+**It picks up what is already waiting**, so starting it because something is
+stuck is the point rather than too late (decision AL): a `git commit` that has
+been hanging for twenty minutes comes up on the first screen, with its own
+clock rather than one that starts when you look at it.
+
+**And it can open the store.** `u` on a sealed or locked instance gives a
+passphrase field, which matters because a terminal is often the only surface in
+front of you: an `ssh` session on a box whose window you cannot see. On an
+instance that enrolled "unlock at login", `enter` with nothing typed uses the
+keychain. `q` does not quit while the field is up — a passphrase may contain a
+q — so `esc` first.
 
 ### Running the tree on a box that has the package installed
 

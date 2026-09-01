@@ -36,6 +36,10 @@ type (
 		settings *bridge.SettingsView
 		lock     *bridge.LockView
 	}
+	unlockedMsg struct {
+		lock bridge.LockView
+		err  error
+	}
 	troubleMsg  struct{ text string }
 	announceMsg struct{ activity bridge.ActivityView }
 	tickMsg     time.Time
@@ -48,6 +52,7 @@ const (
 	modeCard mode = iota
 	modeGrant
 	modeHelp
+	modeUnlock
 )
 
 // card is one request in front of somebody, and how far they have read.
@@ -101,8 +106,13 @@ type model struct {
 	settings *bridge.SettingsView
 	lock     *bridge.LockView
 
-	mode        mode
-	helpScroll  int
+	mode       mode
+	helpScroll int
+	// typed is the passphrase being entered, held as runes so that a backspace
+	// takes off a character rather than a byte. It is cleared the moment it has
+	// been sent, and never goes near the log.
+	typed       []rune
+	unlocking   bool
 	status      string
 	statusErr   bool
 	quitConfirm bool
@@ -235,6 +245,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, nil
 
+	case unlockedMsg:
+		m.unlocked(msg)
+
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -259,7 +274,7 @@ func (m *model) present(msg presentMsg) {
 
 	m.queue = append(m.queue, &card{
 		id:       msg.id,
-		since:    msg.since,
+		since:    waitingSince(msg),
 		view:     msg.view,
 		expanded: map[int]bool{},
 		focus:    -1,
@@ -272,6 +287,28 @@ func (m *model) present(msg presentMsg) {
 	if len(m.queue) == 1 {
 		m.sel = 0
 	}
+}
+
+// waitingSince is when the request started waiting, and not when this screen
+// first saw it.
+//
+// The two used to be the same thing and are not since a terminal can join a
+// request that was raised before it started (decision AL): a card that had been
+// on somebody's desktop for forty minutes would say "waiting 0s" here, which is
+// the one number on the header that somebody uses to decide whether to hurry.
+// The request's own timestamp is what the daemon put on it; the fall-back is
+// when it reached this screen, for a host that sent none.
+func waitingSince(msg presentMsg) time.Time {
+	if msg.view.CreatedAt == "" {
+		return msg.since
+	}
+
+	created, err := time.Parse(time.RFC3339, msg.view.CreatedAt)
+	if err != nil {
+		return msg.since
+	}
+
+	return created
 }
 
 // dismiss takes a card away because the daemon said so, whatever the reason:
@@ -447,11 +484,125 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.mode == modeUnlock {
+		return m.unlockKey(msg, key)
+	}
+
 	if m.mode == modeGrant {
 		return m.grantKey(key)
 	}
 
 	return m.cardKey(key)
+}
+
+// canUnlock reports whether there is a store here to open. "Not created yet" is
+// not one of them: there is nothing to unlock, and `ladulas init` is the answer
+// rather than a passphrase field (§14).
+func (m *model) canUnlock() bool {
+	switch m.lockWord() {
+	case bridge.StateSealed, bridge.StateLocked:
+		return m.attached
+	default:
+		return false
+	}
+}
+
+// unlockKey is the passphrase field. It is a field and not a form: there is one
+// thing to type and two ways out of it.
+func (m *model) unlockKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	if m.unlocking {
+		// The daemon is checking it. Ignoring keys here is deliberate: the one
+		// worth catching is a second enter, which would send the passphrase
+		// twice and spend two of whatever attempts the store allows.
+		return m, nil
+	}
+
+	switch key {
+	case "esc":
+		m.clearTyped()
+		m.mode = modeCard
+
+		return m, nil
+
+	case "enter":
+		return m, m.submitPassphrase()
+
+	case "backspace":
+		if len(m.typed) > 0 {
+			m.typed[len(m.typed)-1] = 0
+			m.typed = m.typed[:len(m.typed)-1]
+		}
+
+		return m, nil
+
+	case "ctrl+u":
+		m.clearTyped()
+
+		return m, nil
+	}
+
+	// Everything else that is a character somebody typed. A key with a name —
+	// "up", "f2" — is not one, and typing one into a passphrase would put its
+	// name in the passphrase.
+	if msg.Type == tea.KeyRunes {
+		m.typed = append(m.typed, msg.Runes...)
+	}
+
+	if msg.Type == tea.KeySpace {
+		m.typed = append(m.typed, ' ')
+	}
+
+	return m, nil
+}
+
+// clearTyped zeroes what was typed rather than dropping the slice, so the
+// characters do not sit in a heap this process may still dump (§16).
+func (m *model) clearTyped() {
+	for i := range m.typed {
+		m.typed[i] = 0
+	}
+
+	m.typed = m.typed[:0]
+}
+
+// submitPassphrase sends what was typed and clears it here.
+//
+// An empty passphrase is not refused: on an instance that enrolled "unlock at
+// login" it is the whole of the answer, and the daemon is the one that knows
+// whether it is (decision I).
+func (m *model) submitPassphrase() tea.Cmd {
+	passphrase := []byte(string(m.typed))
+
+	m.clearTyped()
+	m.unlocking = true
+	m.status = ""
+
+	return func() tea.Msg {
+		view, err := m.api.unlock(passphrase)
+
+		wipe(passphrase)
+
+		return unlockedMsg{lock: view, err: err}
+	}
+}
+
+// unlocked is what the daemon said about the passphrase.
+func (m *model) unlocked(msg unlockedMsg) {
+	m.unlocking = false
+
+	if msg.err != nil {
+		// The daemon's own sentence, which distinguishes a wrong passphrase
+		// from a store that could not be opened at all.
+		m.complain(msg.err.Error())
+
+		return
+	}
+
+	view := msg.lock
+	m.lock = &view
+	m.mode = modeCard
+
+	m.say("The store is open. Requests raised here come to this terminal.")
 }
 
 //nolint:cyclop // a key table is a list of cases; splitting it hides the table.
@@ -484,6 +635,18 @@ func (m *model) cardKey(key string) (tea.Model, tea.Cmd) {
 	case "?":
 		m.mode = modeHelp
 		m.helpScroll = 0
+
+		return m, nil
+
+	case "u":
+		// Unlocking is only offered where there is something to unlock, and
+		// only from the empty screen: a sealed store raises no cards, so there
+		// is never one under this.
+		if m.canUnlock() && item == nil {
+			m.mode = modeUnlock
+			m.clearTyped()
+			m.status = ""
+		}
 
 		return m, nil
 

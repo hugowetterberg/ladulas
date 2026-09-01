@@ -31,6 +31,16 @@ type stub struct {
 	refuse  string
 	full    bridge.DiffView
 	lock    string
+	// wrong is the daemon's refusal, when the passphrase is not the one.
+	wrong       string
+	passphrases []string
+}
+
+func (s *stub) typed() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]string(nil), s.passphrases...)
 }
 
 func (s *stub) handler() http.Handler {
@@ -74,6 +84,34 @@ func (s *stub) handler() http.Handler {
 		defer s.mu.Unlock()
 
 		_ = json.NewEncoder(w).Encode(s.full)
+	})
+
+	mux.HandleFunc("POST /api/v1/lock/unlock", func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		var body struct {
+			Passphrase []byte `json:"passphrase"`
+		}
+
+		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		s.mu.Lock()
+		s.passphrases = append(s.passphrases, string(body.Passphrase))
+		wrong := s.wrong
+		s.mu.Unlock()
+
+		if wrong != "" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": wrong})
+
+			return
+		}
+
+		s.mu.Lock()
+		s.lock = bridge.StateUnlocked
+		s.mu.Unlock()
+
+		_ = json.NewEncoder(w).Encode(bridge.LockView{State: bridge.StateUnlocked})
 	})
 
 	mux.HandleFunc("GET /api/v1/lock", func(
@@ -563,5 +601,125 @@ func TestASealedInstanceSaysSoRatherThanSayingNothingIsWaiting(t *testing.T) {
 	// cannot: the key is what is missing, not the answer.
 	if !strings.Contains(screen, "ladulas unlock") {
 		t.Errorf("the screen does not say how to open it:\n%s", screen)
+	}
+}
+
+// TestTheStoreCanBeUnlockedFromHere: a terminal is often the only thing in
+// front of somebody — an SSH session on a box whose window they cannot see — so
+// the screen that says the store is sealed has to be the screen that opens it.
+func TestTheStoreCanBeUnlockedFromHere(t *testing.T) {
+	host := &stub{view: gitView(), lock: bridge.StateSealed}
+	m := newModel(&api{handler: host.handler()}, "/run/user/1000/ladulas/control.sock")
+
+	m.width = 100
+	m.height = 40
+	m.attached = true
+
+	if cmd := m.stateCmd(); cmd != nil {
+		m.Update(cmd())
+	}
+
+	if !strings.Contains(m.View(), "unlock the store") {
+		t.Fatalf("a sealed store offers no way in:\n%s", m.View())
+	}
+
+	press(t, m, "u")
+
+	if m.mode != modeUnlock {
+		t.Fatal("u did not open the passphrase field")
+	}
+
+	press(t, m, "h", "u", "n", "t", "e", "r")
+
+	// What was typed is drawn as dots and nowhere in the clear.
+	screen := m.View()
+
+	if strings.Contains(screen, "hunter") {
+		t.Error("the passphrase is on screen in the clear")
+	}
+
+	if !strings.Contains(screen, "••••••") {
+		t.Errorf("the field does not show what was typed:\n%s", screen)
+	}
+
+	press(t, m, "enter")
+
+	if typed := host.typed(); len(typed) != 1 || typed[0] != "hunter" {
+		t.Fatalf("the daemon was given %q", typed)
+	}
+
+	if m.lockWord() != bridge.StateUnlocked {
+		t.Errorf("the store reads %q after unlocking", m.lockWord())
+	}
+
+	// And the screen goes back to being the screen that waits for requests.
+	if m.mode != modeCard {
+		t.Error("the passphrase field is still up after the store opened")
+	}
+
+	if !strings.Contains(m.View(), "The store is open") {
+		t.Errorf("nothing says the store opened:\n%s", m.View())
+	}
+}
+
+// TestAWrongPassphraseSaysSoAndKeepsTheField: the daemon's sentence, because it
+// is the one that tells a wrong passphrase apart from a store that could not be
+// opened at all — and nothing typed survives the attempt.
+func TestAWrongPassphraseSaysSoAndKeepsTheField(t *testing.T) {
+	host := &stub{
+		view:  gitView(),
+		lock:  bridge.StateSealed,
+		wrong: "that is not the passphrase for this store",
+	}
+	m := newModel(&api{handler: host.handler()}, "/run/user/1000/ladulas/control.sock")
+
+	m.width = 100
+	m.height = 40
+	m.attached = true
+
+	if cmd := m.stateCmd(); cmd != nil {
+		m.Update(cmd())
+	}
+
+	press(t, m, "u", "n", "o", "p", "e", "enter")
+
+	if m.mode != modeUnlock {
+		t.Error("a refused passphrase closed the field")
+	}
+
+	if len(m.typed) != 0 {
+		t.Error("what was typed is still in the field after being sent")
+	}
+
+	if !strings.Contains(m.View(), "not the passphrase") {
+		t.Errorf("the screen does not say what happened:\n%s", m.View())
+	}
+}
+
+// TestTheWaitingClockIsTheRequestsOwn: a request this terminal joined was
+// raised before it started (decision AL), so "waiting 0s" would be wrong about
+// the one number somebody uses to decide whether to hurry.
+func TestTheWaitingClockIsTheRequestsOwn(t *testing.T) {
+	host := &stub{view: gitView()}
+	m := newModel(&api{handler: host.handler()}, "/run/user/1000/ladulas/control.sock")
+
+	m.width = 100
+	m.height = 40
+	m.attached = true
+
+	raised := time.Now().Add(-40 * time.Minute)
+
+	view := gitView()
+	view.CreatedAt = raised.Format(time.RFC3339)
+
+	m.present(presentMsg{id: "req-1", since: time.Now(), view: view})
+
+	item := m.current()
+	if item == nil {
+		t.Fatal("the request is not on screen")
+	}
+
+	if waited := time.Since(item.since); waited < 39*time.Minute {
+		t.Errorf("the card says it has been waiting %s", waited)
 	}
 }

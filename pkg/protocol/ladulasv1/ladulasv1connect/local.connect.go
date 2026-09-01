@@ -458,9 +458,17 @@ type ControlServiceClient interface {
 	// A request in flight when the stream drops loses this approver: the daemon
 	// withdraws the prompt from a screen that is no longer there, and whoever
 	// else could answer — a paired phone, a policy, a grant — answers as they
-	// would have. Restarting the front end does not re-raise it, because the
-	// question has already been asked of everyone it could be asked of and is
-	// waiting on the requester's own timeout.
+	// would have.
+	//
+	// Opening the stream picks up whatever is still waiting (decision AL). It did
+	// not, for a while, and the reason was arithmetic rather than authority: the
+	// engine settled the set of approvers when it fanned a request out, so a
+	// front end that attached a second later was one it would not ask. So
+	// restarting a front end — or starting `ladulas tui` on a box where a
+	// signature is blocking somebody's shell — does raise the cards that are
+	// still open. They keep the budget they started with: the deadline belongs
+	// to the request, and an approver able to restart the clock by attaching
+	// could hold a terminal open by opening a window.
 	WatchApprovals(context.Context, *connect.Request[ladulasv1.WatchApprovalsRequest]) (*connect.ServerStreamForClient[ladulasv1.ApprovalPrompt], error)
 	// AnswerApproval settles a request the stream raised. It is a separate call
 	// rather than the other half of a bidirectional stream so that an answer is
@@ -1300,9 +1308,17 @@ type ControlServiceHandler interface {
 	// A request in flight when the stream drops loses this approver: the daemon
 	// withdraws the prompt from a screen that is no longer there, and whoever
 	// else could answer — a paired phone, a policy, a grant — answers as they
-	// would have. Restarting the front end does not re-raise it, because the
-	// question has already been asked of everyone it could be asked of and is
-	// waiting on the requester's own timeout.
+	// would have.
+	//
+	// Opening the stream picks up whatever is still waiting (decision AL). It did
+	// not, for a while, and the reason was arithmetic rather than authority: the
+	// engine settled the set of approvers when it fanned a request out, so a
+	// front end that attached a second later was one it would not ask. So
+	// restarting a front end — or starting `ladulas tui` on a box where a
+	// signature is blocking somebody's shell — does raise the cards that are
+	// still open. They keep the budget they started with: the deadline belongs
+	// to the request, and an approver able to restart the clock by attaching
+	// could hold a terminal open by opening a window.
 	WatchApprovals(context.Context, *connect.Request[ladulasv1.WatchApprovalsRequest], *connect.ServerStream[ladulasv1.ApprovalPrompt]) error
 	// AnswerApproval settles a request the stream raised. It is a separate call
 	// rather than the other half of a bidirectional stream so that an answer is

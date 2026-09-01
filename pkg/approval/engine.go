@@ -253,6 +253,14 @@ type Engine struct {
 	// softLocked suspends local approval authority (§10). Set through
 	// SuspendLocalPrompts.
 	softLocked bool
+
+	// flights are the requests out with approvers, by request id, so that an
+	// approver arriving late can be given the ones still waiting (decision AL).
+	// It has a lock of its own rather than sharing mu: joining a request calls
+	// into a handler, and holding the lock that guards the handler list while
+	// doing that is how the two would deadlock.
+	flightMu sync.Mutex
+	flights  map[string]*inflight
 }
 
 // New creates an engine.
@@ -297,6 +305,12 @@ func (e *Engine) Register(h Handler) func() {
 	e.mu.Lock()
 	e.handlers = append(e.handlers, h)
 	e.mu.Unlock()
+
+	// Anything already waiting is put in front of it. An approver that
+	// registers a second after a request was raised is an approver that can
+	// answer it, and the set being settled at fan-out was an accident of where
+	// the loop kept its count rather than a rule about authority (decision AL).
+	e.offer(h)
 
 	var once sync.Once
 
@@ -351,9 +365,17 @@ func (e *Engine) HasLocalApprover() bool {
 // while somebody was here to make them.
 func (e *Engine) SuspendLocalPrompts(suspended bool) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	e.softLocked = suspended
+	e.mu.Unlock()
+
+	if suspended {
+		return
+	}
+
+	// Lifting it is a set of approvers becoming eligible, which is the same
+	// event as one registering: whatever was waiting on a remote approver while
+	// the screen here was suspended can now be answered here (decision AL).
+	e.offerLocal()
 }
 
 // LocalPromptsSuspended reports whether the soft lock is on.
@@ -737,39 +759,23 @@ func (e *Engine) prompt(
 	ctx, cancel := withOptionalTimeout(ctx, timeout)
 	defer cancel()
 
-	type result struct {
-		handler Handler
-		answer  *Answer
-	}
-
-	results := make(chan result, len(handlers))
-	failures := make(chan struct{}, len(handlers))
+	// From here the request is joinable: an approver that registers, or a local
+	// prompt a soft lock is lifted from, is asked as well and counts towards
+	// the tally below (decision AL). `land` closes it to joiners again, and
+	// runs before the cancel above it because the two are the same statement
+	// made twice — this question is over.
+	flight := e.takeoff(ctx, req, handlers)
+	defer e.land(flight)
 
 	for _, h := range handlers {
-		go func() {
-			answer, err := h.Decide(ctx, req)
-			if err != nil {
-				if ctx.Err() == nil {
-					e.log.Warn("approver failed",
-						"approver", h.ID(),
-						"request_id", req.Msg.GetRequestId(),
-						"error", err.Error())
-				}
-
-				failures <- struct{}{}
-
-				return
-			}
-
-			results <- result{handler: h, answer: answer}
-		}()
+		go e.ask(flight, h)
 	}
 
 	var failed int
 
 	for {
 		select {
-		case r := <-results:
+		case r := <-flight.results:
 			// A peer with nobody to ask has reported on itself rather than
 			// decided anything, and it does it instantly — so it goes on the
 			// same path as an approver that could not be reached at all
@@ -777,7 +783,7 @@ func (e *Engine) prompt(
 			if declined(r.handler, r.answer) {
 				failed++
 
-				if failed == len(handlers) {
+				if flight.allGone(failed) {
 					return deny(
 						ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER,
 						"no approver could be reached"), nil
@@ -791,14 +797,20 @@ func (e *Engine) prompt(
 			cancel()
 
 			return e.answerToResponse(req, r.handler, r.answer)
-		case <-failures:
+		case <-flight.failures:
 			failed++
 
 			// Every approver that could have answered has gone. Waiting out the
 			// timeout would tell the user nothing they do not already know, and
 			// the difference between "the desktop said no" and "the desktop was
 			// not there" is worth having in the log and on the terminal.
-			if failed == len(handlers) {
+			//
+			// The tally is read under the flight's lock rather than against a
+			// `len()`, because somebody attaching a front end moves it: a
+			// request that had run out of approvers is a request with one again,
+			// and denying it at the moment somebody arrived to answer is the
+			// shape of the bug decision AC was.
+			if flight.allGone(failed) {
 				return deny(ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER,
 					"no approver could be reached"), nil
 			}
@@ -861,6 +873,10 @@ func withOptionalTimeout(
 }
 
 // eligible is the set of approvers a request of this origin may be shown to.
+//
+// The test itself is mayAnswerLocked, shared with the one a late joiner is put
+// through (decision AL), so that fanning a request out and joining one already
+// out cannot come to different answers about the same handler.
 func (e *Engine) eligible(origin Origin) []Handler {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -868,14 +884,7 @@ func (e *Engine) eligible(origin Origin) []Handler {
 	out := make([]Handler, 0, len(e.handlers))
 
 	for _, h := range e.handlers {
-		// Any request that came from a peer stops here, whichever door it came
-		// through: passing one on would make this instance a relay for somebody
-		// else's decision. See RemoteHandler.
-		if _, remote := h.(RemoteHandler); remote && origin != OriginLocal {
-			continue
-		}
-
-		if _, local := h.(LocalPrompt); local && e.softLocked {
+		if !e.mayAnswerLocked(h, origin) {
 			continue
 		}
 

@@ -61,6 +61,8 @@ func (m *model) footerHeight() int {
 		return 4
 	case modeHelp:
 		return 1
+	case modeUnlock:
+		return 3
 	case modeCard:
 		return 2
 	}
@@ -284,11 +286,45 @@ func (m *model) footer() string {
 		return m.help()
 	case modeGrant:
 		return m.grant()
+	case modeUnlock:
+		return m.passphrase()
 	case modeCard:
 		return m.keys()
 	}
 
 	return m.keys()
+}
+
+// passphrase is the unlock field: one thing to type, and two ways out of it.
+//
+// What is typed is drawn as dots and is never anywhere else — not in the log,
+// which this program does not write to the screen anyway, and not in the status
+// line. The length shows, which is what every passphrase field does and is a
+// deliberate trade against typing blind into a terminal.
+func (m *model) passphrase() string {
+	prompt := " " + m.st.label.Render("Passphrase  ") +
+		m.st.fieldOn.Render(strings.Repeat("•", len(m.typed)))
+
+	if m.unlocking {
+		prompt = " " + m.st.dim.Render("Opening the store…")
+	}
+
+	hint := m.st.dim.Render("enter opens it · esc goes back")
+
+	if m.lock != nil && m.lock.KeyringEnrolled && len(m.typed) == 0 {
+		hint = m.st.dim.Render(
+			"enter with nothing typed uses the keychain · esc goes back")
+	}
+
+	note := m.status
+	style := m.st.dim
+
+	if m.statusErr {
+		style = m.st.err
+	}
+
+	return prompt + "\n" + " " + hint + "\n" +
+		" " + style.Render(truncate(note, max(m.width-2, 10)))
 }
 
 // keys is the answer line and the status line under it. The answer line does
@@ -298,7 +334,17 @@ func (m *model) keys() string {
 	item := m.current()
 
 	if item == nil {
-		return m.status0(m.st.dim.Render(" ? keys · q quit"))
+		hints := []string{}
+
+		if m.canUnlock() {
+			hints = append(hints, m.st.key.Render("u")+" unlock the store")
+		}
+
+		hints = append(hints,
+			m.st.key.Render("?")+" keys",
+			m.st.key.Render("q")+" quit")
+
+		return m.status0(" " + strings.Join(hints, m.st.dim.Render(" · ")))
 	}
 
 	parts := []string{
@@ -457,6 +503,8 @@ func (m *model) helpRows() []string {
 		{"enter", "open or close the file under the cursor"},
 		{"e / c", "open or close every file"},
 		{"f", "ask the requesting machine for the rest of a truncated diff"},
+		{"", ""},
+		{"u", "unlock the store, when it is sealed or locked"},
 		{"", ""},
 		{"tab", "the next waiting request, when more than one is"},
 		{"q", "leave; anything waiting is left to the other approvers"},

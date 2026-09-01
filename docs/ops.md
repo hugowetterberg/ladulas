@@ -302,8 +302,9 @@ show` prints the budget in force and the desktop's Settings screen
 changes it. Two consequences worth having in mind before reading the
 graph. A hung `git commit` is now hung for an hour, so somebody reporting
 a stuck terminal is describing a request that is still waiting and can
-still be answered — from the desktop window, from a paired phone, or with
-`ladulas tui` if there is a terminal on the box. And the wait histogram's
+still be answered — from the desktop window, from a paired phone, or by
+starting `ladulas tui` on the box now, which picks up what is already
+waiting (decision AL). And the wait histogram's
 buckets go to 3600s to match, so a p99 read off an older dashboard is
 comparing against a scale that has changed.
 
@@ -427,27 +428,33 @@ attached, is the ordinary sealed store: nothing can sign, and the window shows
 the passphrase panel in place of its screens until it is unlocked — which it
 opens itself, once, the moment it attaches to a sealed instance.
 
-### `ladulas tui` shows nothing while a request is plainly waiting
+### A front end shows nothing while a request is plainly waiting
 
-`ladulas tui` is a front end like the window (decision AK), and the engine
-fixes the set of approvers when it fans a request out: a request raised
-*before* the terminal attached is one it will never be shown. The screen
-says "Nothing is waiting" and means it — about itself.
+This used to be the ordinary state and is now a fault. The engine settled the
+set of approvers when it fanned a request out, so a front end that attached
+after the request was raised — a restarted window, a `ladulas tui` started
+because something was already stuck — was one it would never ask, and the
+screen said "Nothing is waiting" and meant it about itself. Decision AL took
+that away: opening the approval stream picks up whatever is still open.
 
-**How to tell it apart from a terminal that is not attached at all:** the
-header says `attached` or `not attached`, and that is the only thing on
-this screen that can be wrong about the daemon. Attached-and-empty with a
-`git commit` hanging in another window is this, and not a fault.
+**So if a screen is empty while a request is waiting, check in this order.**
 
-**Action:** answer it where it was raised — the desktop window, or the
-paired phone. A terminal started *before* the next request sees that one
-normally, which is the whole of the workaround: leave one running rather
-than starting one when something is already stuck. This is written down as
-open in
-[architecture §12](architecture.md#12-gui-stacks-—-decisions-b-and-c);
-it got worse rather than better when the signing budget went from five
-minutes to an hour, because an hour is long enough to walk to another
-machine and try.
+1. `ladulas status` — a **sealed** store raises no requests at all, and the
+   terminal and the window both say so on their own screens now. Nothing to
+   fix but the passphrase.
+2. The header, or the tray label: `attached` versus `not attached`. A front
+   end that is not attached is not an approver, and it retries every two
+   seconds.
+3. **`locked`** rather than sealed, which is the case that looks most like
+   this: the keys are here and paired approvers are answering, but the prompts
+   at this instance have left the eligible set (§10). Unlocking offers what is
+   waiting immediately, without the request having to be raised again.
+4. `ladulas audit -n 5`. A request that was answered by a grant or a policy
+   never raised a card anywhere, and the log is where those are visible at all.
+
+If none of those explains it, it is worth a report: a request in flight and an
+attached, unlocked front end that was not asked is the thing decision AL is
+supposed to have made impossible.
 
 ### The daemon died and the store is sealed again
 
