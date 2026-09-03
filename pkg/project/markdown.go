@@ -96,6 +96,11 @@ type Block struct {
 	Rows   []TableRow `json:"rows,omitempty"`
 	// Align is one entry per column, from the delimiter row.
 	Align []string `json:"align,omitempty"`
+	// Change is set only on a document produced by Compare, and says whether
+	// this block was added or removed since the version being compared against
+	// (decision AP). Empty on every document nobody has diffed, which is most
+	// of them.
+	Change Change `json:"change,omitempty"`
 }
 
 // TableRow is one row of a table: inline content per cell.
@@ -119,6 +124,8 @@ type Span struct {
 	// with a fragment and no target is a place in this document, and is the one
 	// kind of link that navigates nothing — the viewer scrolls.
 	Fragment string `json:"fragment,omitempty"`
+	// Change is set only by Compare, as on Block.
+	Change Change `json:"change,omitempty"`
 }
 
 // Document is a parsed markdown file.
