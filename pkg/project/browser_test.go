@@ -22,6 +22,9 @@ type publisher struct {
 	name        string
 	publication *ladulasv1.Publication
 	offline     bool
+	// asked counts the exchanges that reached this machine, which is what a
+	// reader is waiting for when a screen is slow.
+	asked int
 }
 
 func (p *publisher) Publishers() []project.Publisher {
@@ -39,6 +42,8 @@ func (p *publisher) Ask(
 	if fingerprint != p.fingerprint {
 		return errors.New("no such peer")
 	}
+
+	p.asked++
 
 	return fn(ctx, p)
 }
@@ -376,4 +381,112 @@ func (p *publisher) FetchProjectVersion(
 	_ context.Context, _ *connect.Request[ladulasv1.FetchProjectVersionRequest],
 ) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error) {
 	return nil, errors.New("this fake keeps no versions")
+}
+
+// What opening a project and reading a document costs in calls to the
+// publishing machine.
+//
+// **This is the test that was missing, and both regressions it now covers were
+// shipped.** Each was a call added in front of the thing being made faster
+// rather than a slow call made quicker, which is exactly the shape no other
+// test here could see: every one of them asserts what came back, and none
+// asserts what it took to get it.
+//
+// The first: reading reached the cache only after a network call had failed, so
+// the sync filled a cache that every open dialled past. The second: the file
+// picker asked the publisher to walk its whole project before anything could be
+// drawn, which was slower than the directory listing it replaced.
+//
+// Both look right in a diff and both are one number away in this test.
+func TestOpeningASyncedProjectCostsNoCalls(t *testing.T) {
+	reader, source := browser(t)
+
+	ctx := context.Background()
+	id := source.publication.GetProjectId()
+
+	// Fill the cache the way anything does — the syncer over the wire, or a
+	// read. What this is about is what happens afterwards, so it goes through
+	// the read path rather than standing up a streaming fake.
+	held := []string{"README.md", "docs/deployment.md", "docs/architecture.md"}
+
+	for _, name := range held {
+		if _, err := reader.File(ctx, source.fingerprint, id, name); err != nil {
+			t.Fatalf("fill the cache with %s: %v", name, err)
+		}
+	}
+
+	filled := source.asked
+
+	if filled == 0 {
+		t.Fatal("filling the cache reached the publisher no times")
+	}
+
+	// Now a person opening the project and reading it: the picker's list, a
+	// document, that document again, and another one.
+	documents := reader.Documents(source.fingerprint, id)
+
+	if len(documents) != len(held) {
+		t.Fatalf("the picker offers %v, want the %d documents held",
+			documents, len(held))
+	}
+
+	for _, name := range []string{
+		documents[0], documents[0], documents[len(documents)-1],
+	} {
+		if _, err := reader.File(ctx, source.fingerprint, id, name); err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+	}
+
+	if source.asked != filled {
+		t.Errorf(
+			"opening the project and reading three documents took %d calls to "+
+				"the publisher, want none: the cache already had them",
+			source.asked-filled)
+	}
+}
+
+// A document nothing has synced is fetched, because there is nowhere else to
+// get it — the cache-first read must not turn a miss into a blank page.
+func TestADocumentThatWasNeverSyncedIsStillFetched(t *testing.T) {
+	reader, source := browser(t)
+
+	before := source.asked
+
+	page, err := reader.File(context.Background(), source.fingerprint,
+		source.publication.GetProjectId(), "README.md")
+	if err != nil {
+		t.Fatalf("read an unsynced document: %v", err)
+	}
+
+	if len(page.Content) == 0 {
+		t.Error("the document came back empty")
+	}
+
+	if source.asked == before {
+		t.Error("a cache miss did not reach the publisher, so it guessed")
+	}
+}
+
+// And the second read of it is free, because the first one kept it.
+func TestTheSecondReadOfADocumentIsFree(t *testing.T) {
+	reader, source := browser(t)
+
+	ctx := context.Background()
+	id := source.publication.GetProjectId()
+
+	if _, err := reader.File(ctx, source.fingerprint, id, "README.md"); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	after := source.asked
+
+	if _, err := reader.File(ctx, source.fingerprint, id, "README.md"); err != nil {
+		t.Fatalf("second read: %v", err)
+	}
+
+	if source.asked != after {
+		t.Errorf("reading the same document twice took %d calls, want the "+
+			"second to be free", source.asked-after+1)
+	}
 }
