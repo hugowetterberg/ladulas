@@ -419,6 +419,26 @@ message ApprovalRequest {
   // the bytes it approved are the bytes that got signed.
   bytes payload_sha256 = 9;
 
+  // True when this request asks for a promise and never for a signature
+  // (decision AO). `ladulas ssh-grant` builds the request a later login would
+  // make — same key, same username, same host key, same session — so that the
+  // grant minted from it has the scope that login will derive; there is no
+  // payload, nothing is signed, and the only answers are a denial or an
+  // approval carrying a grant_ttl.
+  //
+  // The kind stays REQUEST_KIND_SSH_AUTH, and must: a grant's scope pins the
+  // kind, so a request wearing a kind of its own would mint a promise that
+  // could never cover the login it was made for.
+  bool grant_only = 10;
+
+  // The promise length the requester asked for, if it said. A suggestion and
+  // never a demand: it joins the lengths the offer puts one tap away, so that
+  // an approver can agree to what was asked for without setting a clock, and
+  // the approver is as free to pick another as they always were. Dropped
+  // silently when it is longer than this instance promises — the bound is the
+  // instance's and is not something a caller can argue with (decision V).
+  google.protobuf.Duration requested_grant_ttl = 11;
+
   oneof operation {
     SshAuthRequest ssh_auth = 20;
     SshsigRequest sshsig = 21;

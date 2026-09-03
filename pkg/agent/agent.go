@@ -454,30 +454,50 @@ func (c *connAgent) Extension(extensionType string, contents []byte) ([]byte, er
 	return nil, nil
 }
 
+// refuseMutation logs a refused key-management request and returns the error
+// every one of them returns.
+//
+// The logging is the whole of it, because the wire has nowhere to put a reason:
+// SSH_AGENT_FAILURE is a bare byte, so `ssh-add -D` prints "Failed to remove all
+// identities" and `ssh-add key` prints "Could not add identity" whatever we say
+// here. ErrMutationNotSupported names `ladulas keys` and reaches nobody. So the
+// verb goes to the log at info, where somebody asking why ssh-add did nothing
+// can find it with `journalctl --user -u ladulas` — and where `ladulas doctor`
+// cannot help, having no way to know a mutation was ever attempted.
+func (c *connAgent) refuseMutation(verb string) error {
+	c.server.log.Info("refused an agent key-management request",
+		"verb", verb,
+		"pid", c.peer.GetPid(),
+		"exe", c.peer.GetExecutable(),
+		"reason", "key management goes through ladulas keys")
+
+	return ErrMutationNotSupported
+}
+
 // Add refuses to add keys. Key management goes through Ladulås (§4).
 func (c *connAgent) Add(sshagent.AddedKey) error {
-	return ErrMutationNotSupported
+	return c.refuseMutation("add")
 }
 
 // Remove refuses to remove keys.
 func (c *connAgent) Remove(ssh.PublicKey) error {
-	return ErrMutationNotSupported
+	return c.refuseMutation("remove")
 }
 
 // RemoveAll refuses to remove keys.
 func (c *connAgent) RemoveAll() error {
-	return ErrMutationNotSupported
+	return c.refuseMutation("remove-all")
 }
 
 // Lock is not supported; the store's own lock state is not the agent's to
 // change.
 func (c *connAgent) Lock([]byte) error {
-	return ErrMutationNotSupported
+	return c.refuseMutation("lock")
 }
 
 // Unlock is not supported.
 func (c *connAgent) Unlock([]byte) error {
-	return ErrMutationNotSupported
+	return c.refuseMutation("unlock")
 }
 
 // Signers refuses to hand out signers. Handing a caller an ssh.Signer would

@@ -108,7 +108,7 @@ async function renderPromptPane() {
   // to in order to reach it — and a window that opened part-way down the commit
   // because something in it took focus is a window whose first screen was never
   // read.
-  prompt.approve.focus({ preventScroll: true });
+  prompt.focus.focus({ preventScroll: true });
 }
 
 // renderDiffPane is the diff and nothing else — no card, no buttons.

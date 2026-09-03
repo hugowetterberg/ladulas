@@ -2,6 +2,7 @@ package approval
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -113,7 +114,39 @@ func AssertedScope(req *ladulasv1.ApprovalRequest) []Detail {
 		})
 	}
 
+	// A grant request's host key is asserted too — nothing has been signed, so
+	// it is this machine's word rather than a fact proven inside a payload
+	// (decision AO). It is not listed here, and the reason is worth writing
+	// down: this function feeds the note shown when a promise would rest on
+	// *another* machine's word, and a grant request only ever comes from this
+	// one. The card says where the host key came from in its own row, which is
+	// where somebody deciding will read it.
 	return facts
+}
+
+// withRequestedTTL puts a requester's asked-for length among the ones the
+// prompt offers as a single tap, sorted so the list still reads as a scale.
+//
+// Over the instance's bound it is dropped rather than clamped, and in silence:
+// a length nobody offered must not appear on a card, and a length trimmed to
+// fit is a different promise from the one that was asked for. The requester
+// hears about it the way it hears about everything else — in what was actually
+// granted.
+func withRequestedTTL(
+	ttls []time.Duration, requested, maxTTL time.Duration,
+) []time.Duration {
+	if requested <= 0 || requested > maxTTL {
+		return ttls
+	}
+
+	if slices.Contains(ttls, requested) {
+		return ttls
+	}
+
+	out := append(slices.Clone(ttls), requested)
+	slices.Sort(out)
+
+	return out
 }
 
 // covers reports whether a promise made under one scope answers a request.

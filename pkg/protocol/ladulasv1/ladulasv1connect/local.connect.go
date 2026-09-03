@@ -102,6 +102,9 @@ const (
 	// ControlServiceExtendGrantProcedure is the fully-qualified name of the ControlService's
 	// ExtendGrant RPC.
 	ControlServiceExtendGrantProcedure = "/ladulas.v1.ControlService/ExtendGrant"
+	// ControlServiceRequestGrantProcedure is the fully-qualified name of the ControlService's
+	// RequestGrant RPC.
+	ControlServiceRequestGrantProcedure = "/ladulas.v1.ControlService/RequestGrant"
 	// ControlServiceListDelegationsProcedure is the fully-qualified name of the ControlService's
 	// ListDelegations RPC.
 	ControlServiceListDelegationsProcedure = "/ladulas.v1.ControlService/ListDelegations"
@@ -376,6 +379,19 @@ type ControlServiceClient interface {
 	// an extension that did not happen — the record here would otherwise say
 	// more than the machine acting on it will do.
 	ExtendGrant(context.Context, *connect.Request[ladulasv1.ExtendGrantRequest]) (*connect.Response[ladulasv1.ExtendGrantResponse], error)
+	// RequestGrant asks for a promise ahead of the login it is for, and holds
+	// until somebody answers (decision AO). It is what `ladulas ssh-grant` calls,
+	// and it exists because an SSH login is the one operation here with somebody
+	// else's clock on it: sshd closes the connection after LoginGraceTime, so an
+	// approval that has to arrive on a phone has about ninety seconds. Asked as
+	// its own request there is no handshake waiting, so it takes the signing
+	// budget instead and the answer has as long as a commit does.
+	//
+	// The caller has already done the work of finding out what the login will
+	// look like — which key the server accepts, which user, which host key — and
+	// sends it, because a promise whose scope does not match what the login
+	// derives is a promise that covers nothing.
+	RequestGrant(context.Context, *connect.Request[ladulasv1.RequestGrantRequest]) (*connect.Response[ladulasv1.RequestGrantResponse], error)
 	// ListDelegations reports the standing permissions this instance was given
 	// by somebody else and is acting on itself (§19, decision P). They are the
 	// other half of ListGrants and are deliberately a separate verb: a grant is
@@ -662,6 +678,12 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("ExtendGrant")),
 			connect.WithClientOptions(opts...),
 		),
+		requestGrant: connect.NewClient[ladulasv1.RequestGrantRequest, ladulasv1.RequestGrantResponse](
+			httpClient,
+			baseURL+ControlServiceRequestGrantProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("RequestGrant")),
+			connect.WithClientOptions(opts...),
+		),
 		listDelegations: connect.NewClient[ladulasv1.ListDelegationsRequest, ladulasv1.ListDelegationsResponse](
 			httpClient,
 			baseURL+ControlServiceListDelegationsProcedure,
@@ -850,6 +872,7 @@ type controlServiceClient struct {
 	listGrants           *connect.Client[ladulasv1.ListGrantsRequest, ladulasv1.ListGrantsResponse]
 	revokeGrant          *connect.Client[ladulasv1.RevokeGrantRequest, ladulasv1.RevokeGrantResponse]
 	extendGrant          *connect.Client[ladulasv1.ExtendGrantRequest, ladulasv1.ExtendGrantResponse]
+	requestGrant         *connect.Client[ladulasv1.RequestGrantRequest, ladulasv1.RequestGrantResponse]
 	listDelegations      *connect.Client[ladulasv1.ListDelegationsRequest, ladulasv1.ListDelegationsResponse]
 	listEndorsements     *connect.Client[ladulasv1.ListEndorsementsRequest, ladulasv1.ListEndorsementsResponse]
 	retractEndorsement   *connect.Client[ladulasv1.RetractEndorsementRequest, ladulasv1.RetractEndorsementResponse]
@@ -982,6 +1005,11 @@ func (c *controlServiceClient) RevokeGrant(ctx context.Context, req *connect.Req
 // ExtendGrant calls ladulas.v1.ControlService.ExtendGrant.
 func (c *controlServiceClient) ExtendGrant(ctx context.Context, req *connect.Request[ladulasv1.ExtendGrantRequest]) (*connect.Response[ladulasv1.ExtendGrantResponse], error) {
 	return c.extendGrant.CallUnary(ctx, req)
+}
+
+// RequestGrant calls ladulas.v1.ControlService.RequestGrant.
+func (c *controlServiceClient) RequestGrant(ctx context.Context, req *connect.Request[ladulasv1.RequestGrantRequest]) (*connect.Response[ladulasv1.RequestGrantResponse], error) {
+	return c.requestGrant.CallUnary(ctx, req)
 }
 
 // ListDelegations calls ladulas.v1.ControlService.ListDelegations.
@@ -1226,6 +1254,19 @@ type ControlServiceHandler interface {
 	// an extension that did not happen — the record here would otherwise say
 	// more than the machine acting on it will do.
 	ExtendGrant(context.Context, *connect.Request[ladulasv1.ExtendGrantRequest]) (*connect.Response[ladulasv1.ExtendGrantResponse], error)
+	// RequestGrant asks for a promise ahead of the login it is for, and holds
+	// until somebody answers (decision AO). It is what `ladulas ssh-grant` calls,
+	// and it exists because an SSH login is the one operation here with somebody
+	// else's clock on it: sshd closes the connection after LoginGraceTime, so an
+	// approval that has to arrive on a phone has about ninety seconds. Asked as
+	// its own request there is no handshake waiting, so it takes the signing
+	// budget instead and the answer has as long as a commit does.
+	//
+	// The caller has already done the work of finding out what the login will
+	// look like — which key the server accepts, which user, which host key — and
+	// sends it, because a promise whose scope does not match what the login
+	// derives is a promise that covers nothing.
+	RequestGrant(context.Context, *connect.Request[ladulasv1.RequestGrantRequest]) (*connect.Response[ladulasv1.RequestGrantResponse], error)
 	// ListDelegations reports the standing permissions this instance was given
 	// by somebody else and is acting on itself (§19, decision P). They are the
 	// other half of ListGrants and are deliberately a separate verb: a grant is
@@ -1508,6 +1549,12 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("ExtendGrant")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceRequestGrantHandler := connect.NewUnaryHandler(
+		ControlServiceRequestGrantProcedure,
+		svc.RequestGrant,
+		connect.WithSchema(controlServiceMethods.ByName("RequestGrant")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceListDelegationsHandler := connect.NewUnaryHandler(
 		ControlServiceListDelegationsProcedure,
 		svc.ListDelegations,
@@ -1714,6 +1761,8 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceRevokeGrantHandler.ServeHTTP(w, r)
 		case ControlServiceExtendGrantProcedure:
 			controlServiceExtendGrantHandler.ServeHTTP(w, r)
+		case ControlServiceRequestGrantProcedure:
+			controlServiceRequestGrantHandler.ServeHTTP(w, r)
 		case ControlServiceListDelegationsProcedure:
 			controlServiceListDelegationsHandler.ServeHTTP(w, r)
 		case ControlServiceListEndorsementsProcedure:
@@ -1859,6 +1908,10 @@ func (UnimplementedControlServiceHandler) RevokeGrant(context.Context, *connect.
 
 func (UnimplementedControlServiceHandler) ExtendGrant(context.Context, *connect.Request[ladulasv1.ExtendGrantRequest]) (*connect.Response[ladulasv1.ExtendGrantResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ExtendGrant is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) RequestGrant(context.Context, *connect.Request[ladulasv1.RequestGrantRequest]) (*connect.Response[ladulasv1.RequestGrantResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.RequestGrant is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) ListDelegations(context.Context, *connect.Request[ladulasv1.ListDelegationsRequest]) (*connect.Response[ladulasv1.ListDelegationsResponse], error) {

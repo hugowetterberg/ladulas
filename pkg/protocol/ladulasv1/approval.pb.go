@@ -2098,6 +2098,24 @@ type ApprovalRequest struct {
 	// SHA-256 of the exact payload to be signed. Lets an approver confirm that
 	// the bytes it approved are the bytes that got signed.
 	PayloadSha256 []byte `protobuf:"bytes,9,opt,name=payload_sha256,json=payloadSha256,proto3" json:"payload_sha256,omitempty"`
+	// True when this request asks for a promise and never for a signature
+	// (decision AO). `ladulas ssh-grant` builds the request a later login would
+	// make — same key, same username, same host key, same session — so that the
+	// grant minted from it has the scope that login will derive; there is no
+	// payload, nothing is signed, and the only answers are a denial or an
+	// approval carrying a grant_ttl.
+	//
+	// The kind stays REQUEST_KIND_SSH_AUTH, and must: a grant's scope pins the
+	// kind, so a request wearing a kind of its own would mint a promise that
+	// could never cover the login it was made for.
+	GrantOnly bool `protobuf:"varint,10,opt,name=grant_only,json=grantOnly,proto3" json:"grant_only,omitempty"`
+	// The promise length the requester asked for, if it said. A suggestion and
+	// never a demand: it joins the lengths the offer puts one tap away, so that
+	// an approver can agree to what was asked for without setting a clock, and
+	// the approver is as free to pick another as they always were. Dropped
+	// silently when it is longer than this instance promises — the bound is the
+	// instance's and is not something a caller can argue with (decision V).
+	RequestedGrantTtl *durationpb.Duration `protobuf:"bytes,11,opt,name=requested_grant_ttl,json=requestedGrantTtl,proto3" json:"requested_grant_ttl,omitempty"`
 	// Types that are valid to be assigned to Operation:
 	//
 	//	*ApprovalRequest_SshAuth
@@ -2199,6 +2217,20 @@ func (x *ApprovalRequest) GetSignatureAlgorithm() string {
 func (x *ApprovalRequest) GetPayloadSha256() []byte {
 	if x != nil {
 		return x.PayloadSha256
+	}
+	return nil
+}
+
+func (x *ApprovalRequest) GetGrantOnly() bool {
+	if x != nil {
+		return x.GrantOnly
+	}
+	return false
+}
+
+func (x *ApprovalRequest) GetRequestedGrantTtl() *durationpb.Duration {
+	if x != nil {
+		return x.RequestedGrantTtl
 	}
 	return nil
 }
@@ -3877,7 +3909,7 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"*\n" +
 	"\x0eKeyListRequest\x12\x18\n" +
-	"\apurpose\x18\x01 \x01(\tR\apurpose\"\xdb\x05\n" +
+	"\apurpose\x18\x01 \x01(\tR\apurpose\"\xc5\x06\n" +
 	"\x0fApprovalRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x129\n" +
@@ -3889,7 +3921,11 @@ const file_ladulas_v1_approval_proto_rawDesc = "" +
 	"\atimeout\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\atimeout\x12'\n" +
 	"\x0fsignature_flags\x18\a \x01(\rR\x0esignatureFlags\x12/\n" +
 	"\x13signature_algorithm\x18\b \x01(\tR\x12signatureAlgorithm\x12%\n" +
-	"\x0epayload_sha256\x18\t \x01(\fR\rpayloadSha256\x127\n" +
+	"\x0epayload_sha256\x18\t \x01(\fR\rpayloadSha256\x12\x1d\n" +
+	"\n" +
+	"grant_only\x18\n" +
+	" \x01(\bR\tgrantOnly\x12I\n" +
+	"\x13requested_grant_ttl\x18\v \x01(\v2\x19.google.protobuf.DurationR\x11requestedGrantTtl\x127\n" +
 	"\bssh_auth\x18\x14 \x01(\v2\x1a.ladulas.v1.SshAuthRequestH\x00R\asshAuth\x123\n" +
 	"\x06sshsig\x18\x15 \x01(\v2\x19.ladulas.v1.SshsigRequestH\x00R\x06sshsig\x12@\n" +
 	"\vopaque_sign\x18\x16 \x01(\v2\x1d.ladulas.v1.OpaqueSignRequestH\x00R\n" +
@@ -4144,41 +4180,42 @@ var file_ladulas_v1_approval_proto_depIdxs = []int32{
 	0,  // 21: ladulas.v1.ApprovalRequest.kind:type_name -> ladulas.v1.RequestKind
 	4,  // 22: ladulas.v1.ApprovalRequest.key:type_name -> ladulas.v1.KeyRef
 	38, // 23: ladulas.v1.ApprovalRequest.timeout:type_name -> google.protobuf.Duration
-	10, // 24: ladulas.v1.ApprovalRequest.ssh_auth:type_name -> ladulas.v1.SshAuthRequest
-	19, // 25: ladulas.v1.ApprovalRequest.sshsig:type_name -> ladulas.v1.SshsigRequest
-	20, // 26: ladulas.v1.ApprovalRequest.opaque_sign:type_name -> ladulas.v1.OpaqueSignRequest
-	21, // 27: ladulas.v1.ApprovalRequest.pairing:type_name -> ladulas.v1.PairingRequest
-	22, // 28: ladulas.v1.ApprovalRequest.key_list:type_name -> ladulas.v1.KeyListRequest
-	0,  // 29: ladulas.v1.GrantScope.kind:type_name -> ladulas.v1.RequestKind
-	24, // 30: ladulas.v1.Grant.scope:type_name -> ladulas.v1.GrantScope
-	37, // 31: ladulas.v1.Grant.created_at:type_name -> google.protobuf.Timestamp
-	37, // 32: ladulas.v1.Grant.expires_at:type_name -> google.protobuf.Timestamp
-	26, // 33: ladulas.v1.Grant.recent_uses:type_name -> ladulas.v1.GrantUse
-	37, // 34: ladulas.v1.Grant.revoke_requested_at:type_name -> google.protobuf.Timestamp
-	37, // 35: ladulas.v1.GrantUse.used_at:type_name -> google.protobuf.Timestamp
-	37, // 36: ladulas.v1.GrantUse.reported_at:type_name -> google.protobuf.Timestamp
-	0,  // 37: ladulas.v1.GrantUse.kind:type_name -> ladulas.v1.RequestKind
-	24, // 38: ladulas.v1.Delegation.scope:type_name -> ladulas.v1.GrantScope
-	37, // 39: ladulas.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
-	37, // 40: ladulas.v1.Delegation.expires_at:type_name -> google.protobuf.Timestamp
-	2,  // 41: ladulas.v1.ApprovalResponse.decision:type_name -> ladulas.v1.Decision
-	3,  // 42: ladulas.v1.ApprovalResponse.source:type_name -> ladulas.v1.DecisionSource
-	37, // 43: ladulas.v1.ApprovalResponse.decided_at:type_name -> google.protobuf.Timestamp
-	29, // 44: ladulas.v1.ApprovalResponse.approver:type_name -> ladulas.v1.ApproverInfo
-	25, // 45: ladulas.v1.ApprovalResponse.grant:type_name -> ladulas.v1.Grant
-	28, // 46: ladulas.v1.ApprovalResponse.delegation:type_name -> ladulas.v1.SignedDelegation
-	33, // 47: ladulas.v1.ApprovalResponse.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	24, // 48: ladulas.v1.Endorsement.scope:type_name -> ladulas.v1.GrantScope
-	37, // 49: ladulas.v1.Endorsement.created_at:type_name -> google.protobuf.Timestamp
-	37, // 50: ladulas.v1.Endorsement.expires_at:type_name -> google.protobuf.Timestamp
-	37, // 51: ladulas.v1.Retraction.issued_before:type_name -> google.protobuf.Timestamp
-	37, // 52: ladulas.v1.Retraction.issued_at:type_name -> google.protobuf.Timestamp
-	37, // 53: ladulas.v1.Retraction.remember_until:type_name -> google.protobuf.Timestamp
-	54, // [54:54] is the sub-list for method output_type
-	54, // [54:54] is the sub-list for method input_type
-	54, // [54:54] is the sub-list for extension type_name
-	54, // [54:54] is the sub-list for extension extendee
-	0,  // [0:54] is the sub-list for field type_name
+	38, // 24: ladulas.v1.ApprovalRequest.requested_grant_ttl:type_name -> google.protobuf.Duration
+	10, // 25: ladulas.v1.ApprovalRequest.ssh_auth:type_name -> ladulas.v1.SshAuthRequest
+	19, // 26: ladulas.v1.ApprovalRequest.sshsig:type_name -> ladulas.v1.SshsigRequest
+	20, // 27: ladulas.v1.ApprovalRequest.opaque_sign:type_name -> ladulas.v1.OpaqueSignRequest
+	21, // 28: ladulas.v1.ApprovalRequest.pairing:type_name -> ladulas.v1.PairingRequest
+	22, // 29: ladulas.v1.ApprovalRequest.key_list:type_name -> ladulas.v1.KeyListRequest
+	0,  // 30: ladulas.v1.GrantScope.kind:type_name -> ladulas.v1.RequestKind
+	24, // 31: ladulas.v1.Grant.scope:type_name -> ladulas.v1.GrantScope
+	37, // 32: ladulas.v1.Grant.created_at:type_name -> google.protobuf.Timestamp
+	37, // 33: ladulas.v1.Grant.expires_at:type_name -> google.protobuf.Timestamp
+	26, // 34: ladulas.v1.Grant.recent_uses:type_name -> ladulas.v1.GrantUse
+	37, // 35: ladulas.v1.Grant.revoke_requested_at:type_name -> google.protobuf.Timestamp
+	37, // 36: ladulas.v1.GrantUse.used_at:type_name -> google.protobuf.Timestamp
+	37, // 37: ladulas.v1.GrantUse.reported_at:type_name -> google.protobuf.Timestamp
+	0,  // 38: ladulas.v1.GrantUse.kind:type_name -> ladulas.v1.RequestKind
+	24, // 39: ladulas.v1.Delegation.scope:type_name -> ladulas.v1.GrantScope
+	37, // 40: ladulas.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
+	37, // 41: ladulas.v1.Delegation.expires_at:type_name -> google.protobuf.Timestamp
+	2,  // 42: ladulas.v1.ApprovalResponse.decision:type_name -> ladulas.v1.Decision
+	3,  // 43: ladulas.v1.ApprovalResponse.source:type_name -> ladulas.v1.DecisionSource
+	37, // 44: ladulas.v1.ApprovalResponse.decided_at:type_name -> google.protobuf.Timestamp
+	29, // 45: ladulas.v1.ApprovalResponse.approver:type_name -> ladulas.v1.ApproverInfo
+	25, // 46: ladulas.v1.ApprovalResponse.grant:type_name -> ladulas.v1.Grant
+	28, // 47: ladulas.v1.ApprovalResponse.delegation:type_name -> ladulas.v1.SignedDelegation
+	33, // 48: ladulas.v1.ApprovalResponse.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	24, // 49: ladulas.v1.Endorsement.scope:type_name -> ladulas.v1.GrantScope
+	37, // 50: ladulas.v1.Endorsement.created_at:type_name -> google.protobuf.Timestamp
+	37, // 51: ladulas.v1.Endorsement.expires_at:type_name -> google.protobuf.Timestamp
+	37, // 52: ladulas.v1.Retraction.issued_before:type_name -> google.protobuf.Timestamp
+	37, // 53: ladulas.v1.Retraction.issued_at:type_name -> google.protobuf.Timestamp
+	37, // 54: ladulas.v1.Retraction.remember_until:type_name -> google.protobuf.Timestamp
+	55, // [55:55] is the sub-list for method output_type
+	55, // [55:55] is the sub-list for method input_type
+	55, // [55:55] is the sub-list for extension type_name
+	55, // [55:55] is the sub-list for extension extendee
+	0,  // [0:55] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_approval_proto_init() }

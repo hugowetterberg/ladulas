@@ -351,6 +351,18 @@ Verified mechanics (against git master, openssh-portable, and
   mechanism rather than an optimization on poll-on-open, and a holder with
   no route is not advertised at all.
 
+* **A public key can be offered without signing anything**, and that is
+  what makes a promise askable before the login it is about (decision AO).
+  RFC 4252 §7's request carries a `has_signature` boolean; with it false
+  the client is asking whether a key *would* be accepted, and a server that
+  would accept it answers `SSH_MSG_USERAUTH_PK_OK`. ssh uses it on every
+  login to avoid spending an agent signature on a key the server does not
+  want, and `ladulas ssh-grant` uses it for the same reason turned around:
+  it is how the command learns which of several identities the server
+  accepts without raising the approval it is trying to ask for in advance.
+  `internal/sshprobe` is the implementation, and it never signs — the
+  server-side test counts signatures and fails on one.
+
 An SSH auth prompt can therefore say:
 
 > **SSH login** as `hugo` to `bastion.example.net`
@@ -1013,6 +1025,17 @@ person answering is punished for having been in another room. It was five
 minutes, which is long enough to walk to the kitchen and not long enough to
 be in a meeting.
 
+**A third budget belongs to a request that asks only for a promise**
+(decision AO). `ladulas ssh-grant <destination>` asks about a login before
+there is one, and nothing is holding a handshake open while it waits — no
+sshd counting, no git blocking, only a command that was run on purpose. So
+it takes the signing budget rather than authentication's ninety seconds,
+and that is the whole reason the shape exists: the ~90 s is not a number
+this design chose and is not one it can raise, so the way to give an
+approver an hour to answer a login is to ask at a moment when nobody's
+grace period has started. The wording on the card says which of the two it
+is, because the answers differ.
+
 Two numbers elsewhere are the same number and move with it. A request
 collected out of an inbox by a phone (§8) is capped at what the budget is,
 having been capped at fifteen minutes against a five-minute budget where it
@@ -1129,7 +1152,75 @@ temporary unlock, Tailscale's `checkPeriod`, `ssh-add -c`):
 
 Hard rules that policies cannot override: forwarded-agent requests always
 prompt (§4); requests that parse as neither SSHSIG nor RFC 4252 are denied;
-pairing changes always prompt.
+pairing changes always prompt; a grant request that did not come from this
+machine is denied (decision AO).
+
+**A promise can be asked for before the thing it is about** — decision AO,
+and it exists because of the one clock in this design that belongs to
+somebody else. An ssh login is bounded by the far server's
+`LoginGraceTime`, so an approval that has to reach a phone has about ninety
+seconds to be noticed, read and answered, and the ordinary reason it is not
+is that the person is driving or in a meeting. `ladulas ssh-grant
+<destination>` asks the same question with no handshake waiting on it.
+
+It connects to the server first, and that is not a convenience. A grant's
+scope is matched by strict equality against what the login derives, and two
+of those fields are the *server's* answer rather than ours: which key it
+accepts, and — through ssh's own configuration resolution — which user. A
+scope assembled from a guess produces a promise that covers nothing, which
+is worse than an error because it looks like it worked. The connection
+costs nothing to approve: RFC 4252 §7's query form offers a public key with
+`has_signature` false and the server answers `SSH_MSG_USERAUTH_PK_OK`,
+which is what ssh does before it asks an agent for anything.
+
+The host key is verified against known_hosts and an unknown host is
+**refused**, rather than shown to somebody to decide about. The fingerprint
+learned here becomes the scope of the promise, so a probe that accepted any
+key would let a machine in the middle name itself as a grant's destination.
+
+What is left asserted cannot widen anything, and the reason is worth
+keeping beside decision X's. The fingerprint is this machine's word at the
+moment the promise is made, because nothing has been signed yet — but the
+promise is *spent* only against the host key proven inside a real login's
+payload. A fingerprint that names a host the requester cannot reach
+therefore mints a promise covering **no** login rather than the wrong one.
+What the assertion costs is the approver's understanding of which host they
+agreed to, which is why the card shows the label only beside the
+fingerprint and says where the fingerprint came from.
+
+Three things follow from the scope having to match.
+
+* The request wears `REQUEST_KIND_SSH_AUTH` and carries a `grant_only`
+  flag, rather than taking a kind of its own. A scope pins the kind, so a
+  kind of its own would mint a promise that could never cover the login it
+  was made for.
+* **There is no plain approval on it.** A yes with no length attached would
+  settle the card having authorized nothing — there is no payload behind it
+  — so the answer routes refuse one and leave the request waiting, the way
+  an over-long length is refused, and every surface draws the lengths
+  without an Approve button.
+
+  **The lengths then have to move into the answer row and wear the
+  affirmative colour**, which is not decoration. On an ordinary card the
+  reach buttons are the quieter alternative to "Approve once" and sit in a
+  row of their own below it; take the Approve away and what is left in the
+  answer row is a lone red Deny, with the actual answer looking like a
+  secondary detail underneath it. The card then reads as something that
+  ought to be refused — the opposite of what is being asked. So on a grant
+  request the reach buttons are lifted into the row beside Deny and
+  coloured as the approval they are.
+* It is local only, by the hard rule above. One arriving over the peer
+  channel would be a peer naming a host key of its choosing to mint a
+  promise over a key it borrows. Nothing legitimate is refused: a peer
+  wanting a standing promise asks for one at a prompt and has it delegated
+  (decision P).
+
+The length asked for with `--for` is a suggestion and nothing more. It
+joins the lengths the offer puts one tap away, so that an approver can
+agree to what was asked for without setting a clock, and it is dropped in
+silence when it exceeds this instance's own maximum — a length trimmed to
+fit is not the promise anybody asked for, and the bound stays the
+instance's (decision V).
 
 **Where a TTL grant lives follows the key it is about** — decision P,
 argued in full in §19:
@@ -2841,6 +2932,28 @@ The surface (existing pieces from M2/M3 plus planned):
   reads. What it is for is watching a machine that is waiting for a person
    — a script, a deploy, or an agent that has to stop and let somebody type
   a passphrase;
+* `ssh-grant <destination>` — ask for a standing permission to log in to a
+  server, before there is a login waiting on it (decision AO). It works out
+  what the login would look like by connecting and offering keys without
+  signing, prints that, and then blocks until somebody answers, with the
+  signing budget rather than authentication's. The exit status is the
+  answer, as `wait`'s is: 0 granted or already covered, 1 refused. It must
+  run in the shell the work will happen in, because the promise is scoped
+  to the session it was asked from (decision U) — which is also why it
+  blocks in the foreground rather than detaching;
+* `doctor` — check that the machine around the daemon can reach it:
+  `SSH_AUTH_SOCK` unset or pointing at another agent, the socket answering,
+  `ladulas-sign` on the `PATH`, git's `gpg.format`, `gpg.ssh.program` and
+  `user.signingkey`, and whether the signing key is one the agent actually
+  offers. It is a separate verb from `status` because they answer different
+  questions and only one of them is the daemon's: `status` is what this
+  instance *is*, and none of it can see an environment variable in somebody
+  else's shell. Every fault here surfaces somewhere else in words that name
+  neither Ladulås nor the cause — `ssh-add` says "could not open a
+  connection to your authentication agent", `ssh` says "agent refused
+  operation", git signs with a poorer prompt and says nothing at all, and a
+  second agent holding the variable answers cheerfully with the wrong keys.
+  Exit 1 when something is wrong, so a script or an agent can ask;
 * peers — list, rename, revoke, and set directions/roles (`allow`);
 * listen — `ladulas listen` says what the peer channel is bound to, what
   peers are told to dial, and every address the automatic policy passed over
@@ -3401,6 +3514,8 @@ Added 2026-09-01:
 | AL | Whether an approver that arrives late may answer a request already waiting | **it may, and the set is no longer fixed when the request goes out.** The engine settled the eligible approvers as it fanned a request out and never looked again, so a front end that attached a second later was one it would not ask: a signature blocking a terminal could only be answered by something that happened to be running already, and `ssh` in, start the terminal approver, and the screen was empty while `git commit` hung. **That was never a rule about authority.** The question has been asked of this machine, a front end is authorised by the socket it is on (§14, "possession of the unix account is the authority"), and a late arrival can answer nothing an earlier one could not — the deadline stays the request's, the answer is signed and logged the same way, and the card is drawn from the same digest-covered bytes. It was where the fan-out kept its count. So an approver that registers is offered everything still waiting, and so is a local prompt the moment a soft lock is lifted from one, which is the same event: a set of approvers becoming eligible. **The count is the part this decision is careful about.** `prompt` denies with `NO_APPROVER` once every approver it asked has gone, and decision AC is the bug that lived in exactly that arithmetic — a peer with nobody to ask reported instantly, won every race, and vetoed every signature on the machine. The denominator therefore moves under a lock rather than being a `len()` in the loop, is re-read on each pass, and grows only through the one function that also refuses three things: a request that has been settled, a request whose context has finished, and an approver already asked. The eligibility test itself is shared with the fan-out's rather than copied, so a request from a peer cannot reach another peer through this door and a soft lock cannot be walked around by attaching. Results are sent with a `select` on the request's context, because a joiner may find a channel sized for the approvers asked up front already full and a blocking send would leak the goroutine for the life of the process. What surfaces get for free: a request joined this way carries its own `created_at`, so a card says how long the thing has really been waiting instead of how long this screen has been looking at it. Rejected: parking local requests the way the peer inbox parks them for a phone (§8), which is a second mechanism for the same idea and would have the front end poll for what the engine can hand it. Qualifies decision Z's "restarting the front end does not re-raise it", which is withdrawn. Rationale in §9 |
 
 | AM | What an answer on the control socket names | **the prompt, not the request.** Two front ends attached at once are two approvers and both are asked (decision Z), so one request id names two cards on two screens. `AnswerApproval` carried only the id, so the daemon delivered the answer to every prompt waiting under it: both approvers' `Decide` returned with it, neither reached the branch that sends `WITHDRAWN`, and the desktop's popup went on asking after the terminal had answered and the commit had been signed. **The withdrawal machinery was never broken** — the engine cancels the losers on the first decision and a cancelled approver takes its own card down — it just never ran, because nobody lost. So the daemon mints a token per card, sends it on the `ApprovalPrompt`, and the front end echoes it back; the answer settles that one prompt and the rest are cancelled and withdrawn as they always were. Rejected: matching on the approver id, which two terminals share by default and which would have made the fix work on a desktop-plus-terminal pair and not on two terminals; and broadcasting `WITHDRAWN` to every prompt after an answer, which fixes the symptom by sending the answering front end a withdrawal it is expected to ignore because its card happens to be gone already — correct only by an accident of ordering. A front end that sends no token is answered the old way, which is right when it is the only one attached and cannot be got right when it is not, so it says so in the log. Not found by a test for a year because one attached front end is the case every test had; the reproduction attaches two that share a name. Rationale in §9 |
+
+| AO | How an SSH login gets an approval that is not racing the server's clock | **it is asked for beforehand, as a request that can only be answered with a length.** An SSH login is the one operation here with somebody else's clock on it: sshd closes the connection after `LoginGraceTime`, two minutes by default and not ours to set, so decision AJ gives authentication ~90 s and must — a budget past the grace period is a login that fails after the person answered it. That is fine when the approver is at the keyboard and hopeless when it is a phone in a pocket, which is the case the wake-up path (§11) exists for. `ladulas ssh-grant <destination>` moves the question off that clock instead of trying to lengthen it, which cannot be done from this side: nothing is holding a handshake open, so the request takes the **signing** budget and the answer has as long as a commit signature does. What it produces is an ordinary grant, and the logins afterwards fall under it by the ordinary path. **It has to connect to the server, and that is the load-bearing part.** A grant's scope is matched for strict equality against what the login derives (`covers`), and two of those fields are facts about the server rather than about us: which key it accepts — with several in the agent, guessing wrong is the ordinary case — and the user name ssh's own configuration resolves to. So the command asks, using RFC 4252 §7's query form: a public key offered with `has_signature` false, answered with `SSH_MSG_USERAUTH_PK_OK`, which is what ssh itself does and needs no signature and therefore no approval. A promise built on a guess is not a weaker promise but one that silently covers nothing, and its failure mode is a grant sitting in the list looking like it should have worked. **The host key is checked against known_hosts and an unknown host is refused**, not shown to somebody to decide about: the fingerprint learned here becomes the scope, so a probe that accepted any key would let a machine in the middle name itself as a grant's destination. What makes the remaining assertion safe is the other end — the promise is spent only against a host key proven inside a real login's signed payload (decision X), so a wrong fingerprint yields a promise covering *no* login rather than the wrong one. It can never widen anything; what it costs is the approver's understanding of which host they agreed to, which is why the card shows the label only beside the fingerprint. Three consequences. The request wears `REQUEST_KIND_SSH_AUTH` and is marked `grant_only` rather than taking a kind of its own, because a scope pins the kind and a kind of its own would mint a promise that could never cover the login it was made for. There is no plain approval on the card — a yes with no length attached would settle it having authorized nothing — so the answer routes refuse one and leave the request waiting, and every surface draws the lengths without an Approve button. And it is **local only**, by hard rule: one arriving over the peer channel would be a peer naming a host key of its choosing to mint a promise over a key it borrows, and a peer wanting a standing promise asks for one at a prompt as it always did. Rejected: raising the SSH budget past `LoginGraceTime`, which buys nothing the far end will wait for; and letting the caller name the promise's length, which decision V already settled — `--for` is a suggestion put one tap in front of the approver, dropped in silence when it exceeds this instance's own maximum, because a length trimmed to fit is not the promise anybody asked for. Qualifies decision AJ, which now has three budgets rather than two. Rationale in §9 |
 
 | AN | How a change is read in the terminal, and what `enter` means | **three screens, and `enter` is the answer on one of them.** The card is the facts and a list of the files it touches; `f` opens that list, where every printable key narrows it and `esc` is the only way out; and one file's hunks are a screen of their own, left with `enter`. The window folds the hunks into the card behind disclosures and this deliberately does not, for two reasons that only appear in a terminal. A card whose length follows the shape of the change pushes the four facts a decision rests on (decision W) off the screen on any commit worth reading, which is the same failure the pinned answer line exists to prevent — here the card is the same length whether the commit touched one file or thirty. And a screen somebody is *in* is what makes `enter` safe as the answer given most often: on the card it approves, in a change it closes the change. The letters keep answering from inside a change, being deliberate rather than reflexive; having to come back to the card to refuse something you have just read would be its own small insult. **It went the other way first, and the way it failed is the argument.** The hunks were disclosures in the card with a cursor beside the files and `enter` toggling the one under it. The cursor moved on `n` and `p`, which were in the help table and nowhere else, while the arrows scrolled and `left`/`right` moved between waiting requests — so with one request waiting, which is the ordinary case, every arrow key appeared dead and the second file of a change was unreachable. The first `enter` was spent placing the cursor instead of opening anything, producing a marker beside a file that stayed shut. Widening the cursor's keys to the arrows fixed the reachability and left the real problem: one set of keys that sometimes scrolls and sometimes walks a cursor is two programs sharing a keyboard. Rejected, therefore: tuning the cursor's key bindings, which is what the first repair was. Also rejected: `enter` approving on every screen, which is a one-keystroke approval under the thumb of somebody scrolling through code they are still reading. Extends decision AK. Rationale in §12 |
 

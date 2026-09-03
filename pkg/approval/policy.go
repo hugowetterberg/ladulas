@@ -172,6 +172,24 @@ func (p *Policy) Document() *ladulasv1.PolicyDocument {
 // a person can answer tomorrow without it being any less true. The clock that
 // does bound a pairing is trust.CodeValidity, and it has already run by the
 // time this confirmation exists (§7).
+// GrantRequestTimeout is how long to wait for an answer to a request that asks
+// for a promise and nothing else (decision AO).
+//
+// It is the signing budget rather than the SSH one, and that is the whole
+// reason the request kind exists. An ordinary login gets ninety seconds because
+// the far server's LoginGraceTime is counting and an answer that arrives after
+// it is a login that failed anyway. Nothing is counting here: `ssh-grant` holds
+// no handshake open, it blocks a command the way git blocks on a commit
+// signature, and the cost of giving up early is the same — the person answering
+// is punished for having been in another room.
+//
+// It takes no argument so that it stays bindable (§21); the caller knows it is
+// asking about a grant request.
+func (p *Policy) GrantRequestTimeout() time.Duration {
+	return durationOr(
+		p.doc.GetDefaults().GetSignTimeout(), DefaultSignTimeout)
+}
+
 func (p *Policy) Timeout(kind ladulasv1.RequestKind) time.Duration {
 	defaults := p.doc.GetDefaults()
 

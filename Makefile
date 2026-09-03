@@ -190,6 +190,32 @@ uninstall-autostart:
 	rm -f $(AUTOSTART)/ladulas.desktop
 	@echo "the desktop application will not start at login"
 
+# install-env points the session's SSH_AUTH_SOCK at this agent, so that ssh,
+# ssh-add and git find it without a line in anybody's shell rc.
+#
+# It is not part of `install`, for the reason install-autostart is not: taking
+# over SSH_AUTH_SOCK for a whole login session is a decision about the machine
+# and not a build step, and a tool whose entire claim is that nothing happens
+# without being approved should not quietly redirect the SSH agent of every
+# program the user runs. `ladulas doctor` is how somebody finds out they want
+# it — it says the variable is unset, and names this target.
+#
+# It takes effect at the next login. `systemctl --user import-environment` will
+# not do it: the user manager reads environment.d at its own startup, and
+# nothing re-reads it for a session already running.
+ENVIRONMENT_D ?= $(HOME)/.config/environment.d
+
+.PHONY: install-env
+install-env:
+	mkdir -p $(ENVIRONMENT_D)
+	cp contrib/50-ladulas-agent.conf $(ENVIRONMENT_D)/50-ladulas-agent.conf
+	@echo "SSH_AUTH_SOCK will point at the Ladulås agent from the next login"
+
+.PHONY: uninstall-env
+uninstall-env:
+	rm -f $(ENVIRONMENT_D)/50-ladulas-agent.conf
+	@echo "removed; SSH_AUTH_SOCK is whatever it was before from the next login"
+
 # There is no phone target here: nothing in this repository compiles against
 # gomobile, so nothing here notices when a change to pkg/ stops being bindable
 # (§21). gomobile takes strings, signed integers, booleans, []byte, errors and

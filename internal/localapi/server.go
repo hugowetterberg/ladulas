@@ -640,3 +640,15 @@ func peerFrom(ctx context.Context) *ladulasv1.ClientProcess {
 
 	return process
 }
+
+// PeerFrom is peerFrom for the handlers that live in internal/app. It is the
+// same listener underneath — one socket, one guard, one set of credentials —
+// and the split is only where the handler was written.
+//
+// It returns nil when the credentials could not be read, which is a state the
+// caller has to handle rather than assume away: a request with no process
+// behind it is scoped to the whole machine rather than to a session, because a
+// session it cannot name is not one it may promise to (decision U).
+func PeerFrom(ctx context.Context) *ladulasv1.ClientProcess {
+	return peerFrom(ctx)
+}

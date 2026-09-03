@@ -249,14 +249,67 @@ involved. That is the recovery path of last resort and it is deliberate.
    describe the state wanted, so anything left out is withdrawn. A pairing
    that skipped this is correct and useless, which is
    [M12's discovery](architecture.md#20-milestones).
-6. **`export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/ladulas/agent.sock`**, and set
-   `gpg.ssh.program`/`user.signingkey` for signing.
+6. **`make install-env`**, and set `gpg.ssh.program`/`user.signingkey` for
+   signing. That writes `SSH_AUTH_SOCK` into `~/.config/environment.d/`,
+   which reaches everything systemd starts from the next login; a session
+   systemd did not start — an `ssh` into the box, a bare TTY — still needs
+   `export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/ladulas/agent.sock` in a shell rc.
+7. **`ladulas doctor`**, which is how you find out that any of the above did
+   not take.
 
 Out of order, the failures are quiet rather than loud: a pairing with no
 key allowed announces an empty key list, and an agent socket exported
 before `init` lists nothing.
 
 ## Failure modes
+
+### `ssh-add -l` says "Could not open a connection to your authentication agent"
+
+The variable is unset, or points somewhere with nothing listening. It is
+not a fault in the daemon, and the daemon cannot see it: `SSH_AUTH_SOCK`
+lives in the environment of whatever shell is asking.
+
+**Action:** `ladulas doctor`. It says which of the three it is — unset,
+pointing at another agent, or pointing at a path that does not answer — and
+names the remedy. Step 6 of the bootstrap order above is the one that gets
+skipped.
+
+### `ssh-add -l` lists keys, but not the ones Ladulås holds
+
+Worse than the above, because everything appears to work. `SSH_AUTH_SOCK`
+is pointing at a different agent — GnuPG's `gpg-agent-ssh.socket` is the
+usual one, since it is enabled on many desktops and wants the same variable
+— and every login and signature goes to it, unapproved, with keys Ladulås
+never saw.
+
+**Signal:** `ladulas doctor` reports the variable pointing elsewhere and
+names the agent it guesses from the path. Ladulås's own metrics stay flat
+while ssh works fine, which is the tell.
+**Action:** `make install-env` orders Ladulås's `environment.d` snippet at
+50, ahead of a user's own `90-`; if something later in the ordering is
+setting it, that is the thing to remove.
+
+### A grant was made and the login still asks
+
+A promise is matched by strict equality on the key, the kind, the user
+name, the proven host key and the session (§9). If any one of them differs
+from what the login derives, the grant covers nothing and there is no
+error anywhere — it sits in `ladulas grants list` looking as though it
+should have worked.
+
+The two ordinary causes, both about `ladulas ssh-grant`:
+
+* **A different session.** The promise is scoped to the session it was
+  asked from (decision U), so a grant taken in one terminal window does not
+  cover a `git push` in another. Answer with the **Machine** reach on the
+  card, or ask again in the shell doing the work.
+* **A server too old for `publickey-hostbound-v00@openssh.com`.** A login
+  that method cannot cover derives an empty destination, and a promise made
+  with a host key in it does not match one without (§4). OpenSSH 8.9 and
+  later on both ends is the requirement.
+
+**Action:** `ladulas audit` shows what the login's request actually looked
+like beside the grant's scope, which is where the difference is visible.
 
 ### Every ssh login is refused, with `agent refused operation`
 

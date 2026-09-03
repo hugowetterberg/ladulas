@@ -30,6 +30,12 @@ type RequestView struct {
 	Warnings []string     `json:"warnings,omitempty"`
 	Details  []DetailView `json:"details,omitempty"`
 	Grant    *GrantOffer  `json:"grant,omitempty"`
+	// GrantOnly says the only approval on offer is a timed one: the request
+	// asked for a promise ahead of the login it is about and carries no payload,
+	// so a plain yes would grant nothing and settle the card (decision AO). A
+	// surface that sets this draws the lengths and no Approve button; one that
+	// ignores it draws a button the daemon refuses.
+	GrantOnly bool `json:"grantOnly,omitempty"`
 
 	Key       *KeyView       `json:"key,omitempty"`
 	Requester *RequesterView `json:"requester,omitempty"`
@@ -859,11 +865,12 @@ func requestView(req *approval.Request) RequestView {
 	msg := req.Msg
 
 	view := RequestView{
-		ID:       msg.GetRequestId(),
-		Kind:     kindName(msg.GetKind()),
-		Title:    req.Prompt.Title,
-		Subject:  req.Prompt.Subject,
-		Warnings: req.Prompt.Warnings,
+		ID:        msg.GetRequestId(),
+		Kind:      kindName(msg.GetKind()),
+		Title:     req.Prompt.Title,
+		Subject:   req.Prompt.Subject,
+		Warnings:  req.Prompt.Warnings,
+		GrantOnly: msg.GetGrantOnly(),
 	}
 
 	if created := msg.GetCreatedAt(); created != nil {
@@ -954,7 +961,7 @@ func programName(process *ladulasv1.ClientProcess) string {
 func attachOperation(view *RequestView, msg *ladulasv1.ApprovalRequest) {
 	switch {
 	case msg.GetSshAuth() != nil:
-		view.SSHAuth = sshAuthView(msg.GetSshAuth())
+		view.SSHAuth = sshAuthView(msg.GetSshAuth(), msg.GetGrantOnly())
 	case msg.GetSshsig() != nil:
 		sig := msg.GetSshsig()
 
@@ -997,7 +1004,9 @@ func attachOperation(view *RequestView, msg *ladulasv1.ApprovalRequest) {
 	}
 }
 
-func sshAuthView(auth *ladulasv1.SshAuthRequest) *SSHAuthView {
+func sshAuthView(
+	auth *ladulasv1.SshAuthRequest, grantOnly bool,
+) *SSHAuthView {
 	view := &SSHAuthView{
 		Destination: auth.GetDestinationLabel(),
 		Username:    auth.GetUsername(),
@@ -1012,6 +1021,20 @@ func sshAuthView(auth *ladulasv1.SshAuthRequest) *SSHAuthView {
 		view.KnownHosts = "not found in known_hosts"
 		if host.GetKnown() {
 			view.KnownHosts = "matched in known_hosts"
+		}
+
+		// On a grant request the fingerprint was read off the server a moment
+		// ago rather than proven inside a signature, because nothing has been
+		// signed yet (decision AO). The card has to say which of the two it is:
+		// "matched in known_hosts" is true either way and, on its own, invites
+		// the reader to think the host has been established the way a login
+		// establishes it. It cannot be spent on the wrong host — the promise is
+		// matched against the proven key when a login happens — but the person
+		// agreeing should know what they are looking at.
+		if grantOnly && host.GetKnown() {
+			view.KnownHosts = "matched in known_hosts; read from the server " +
+				"just now, and checked against the signed payload when a " +
+				"login actually happens"
 		}
 	}
 

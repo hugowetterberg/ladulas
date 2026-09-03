@@ -504,6 +504,16 @@ func (e *Engine) submit(
 	if grantable(msg.GetKind()) {
 		req.GrantTTLs = policy.GrantTTLs()
 		req.GrantMaxTTL = policy.MaxGrantTTL()
+
+		// A requester that said how long it wants gets that length put one tap
+		// away beside the policy's own, and nothing more than that: the offer
+		// is still the instance's, the bound is still the instance's, and the
+		// approver still chooses. It is the difference between `ssh-grant --for
+		// 2h` meaning something and being a comment (decision AO).
+		req.GrantTTLs = withRequestedTTL(
+			req.GrantTTLs,
+			msg.GetRequestedGrantTtl().AsDuration(),
+			req.GrantMaxTTL)
 	}
 
 	e.logEntry(&ladulasv1.AuditEntry{
@@ -594,6 +604,24 @@ func (e *Engine) decide(
 			ladulasv1.DecisionSource_DECISION_SOURCE_HARD_RULE, contextProblem), nil
 	}
 
+	// A promise asked for ahead of the login it is about is a local verb and
+	// nothing else (decision AO). `ssh-grant` runs on this machine, reaches the
+	// control socket, and has already checked the host key against this
+	// machine's known_hosts; a request wearing the flag that arrived over the
+	// peer channel did none of that, and would be a peer naming a host key of
+	// its choosing to mint a promise over a key it borrows.
+	//
+	// It is a hard rule rather than a check at the door because the flag changes
+	// what a card means — no payload, no signature, a length instead of a yes —
+	// and a kind of card that can only be raised one way is one fewer thing for
+	// the surfaces to be careful about. Nothing legitimate is refused: a peer
+	// wanting a standing promise asks for one at a prompt, which is what a grant
+	// has always been, and gets it delegated (decision P).
+	if msg.GetGrantOnly() && req.Origin != OriginLocal {
+		return deny(ladulasv1.DecisionSource_DECISION_SOURCE_HARD_RULE,
+			"a grant request can only be made on the machine it is about"), nil
+	}
+
 	// A forwarded agent socket is held by a machine we do not control, and a
 	// pairing change is the root of all later trust — both always ask.
 	mustPrompt := ""
@@ -630,7 +658,15 @@ func (e *Engine) decide(
 				grant.GetDescription())
 			resp.NotifyOnly = true
 
-			e.recordOwnUse(grant.GetGrantId(), msg)
+			// A grant request asking about a login already covered is answered
+			// from the promise, which is the useful answer — `ssh-grant` says
+			// "already allowed" rather than raising a second card for a
+			// permission that exists. It is not a *use* of the promise, though:
+			// nothing was signed, and a ledger that counts questions alongside
+			// signatures is one nobody can read a number out of (decision AO).
+			if !msg.GetGrantOnly() {
+				e.recordOwnUse(grant.GetGrantId(), msg)
+			}
 			e.notify(req, resp)
 
 			return resp, nil
@@ -648,7 +684,17 @@ func (e *Engine) decide(
 					d.GetDescription())
 				resp.NotifyOnly = true
 
-				e.recordDelegatedUse(msg, d)
+				// As with a grant, a question is not a use (decision AO) — and
+				// here it matters more than bookkeeping. This ledger is an
+				// account *owed to the approver*: it is reported back to the
+				// machine that made the promise, so a grant request counted
+				// here would tell somebody's phone that this machine made a
+				// signature it never made. An account that overstates what was
+				// done under a promise is worse than no account.
+				if !msg.GetGrantOnly() {
+					e.recordDelegatedUse(msg, d)
+				}
+
 				e.notify(req, resp)
 
 				return resp, nil
@@ -749,6 +795,15 @@ func (e *Engine) prompt(
 	}
 
 	timeout := policy.Timeout(req.Msg.GetKind())
+
+	// A request that asks only for a promise wears the SSH auth kind, because
+	// the scope it mints has to match the login it is for — but nothing is
+	// holding a handshake open, so it must not inherit the handshake's clock
+	// (decision AO).
+	if req.Msg.GetGrantOnly() {
+		timeout = policy.GrantRequestTimeout()
+	}
+
 	if requested := req.Msg.GetTimeout(); requested != nil && requested.AsDuration() > 0 {
 		timeout = requested.AsDuration()
 	}
@@ -917,6 +972,17 @@ func (e *Engine) answerToResponse(
 		resp.Approver = answer.Approver
 
 		return resp, answer.Signed
+	}
+
+	// A request that asks only for a promise cannot be approved without one:
+	// there is no payload behind it, so a bare approval would authorize nothing
+	// and report success (decision AO). The answer routes refuse this and leave
+	// the request waiting, which is the state it can still be answered from;
+	// this is the backstop for an approver that does not, and it denies rather
+	// than inventing a length nobody chose.
+	if req.Msg.GetGrantOnly() && answer.GrantTTL <= 0 {
+		return deny(ladulasv1.DecisionSource_DECISION_SOURCE_ERROR,
+			"a grant request can only be approved for a length of time"), nil
 	}
 
 	resp := approve(source, reason)
@@ -1125,8 +1191,15 @@ func (e *Engine) createGrant(
 		Detail:    grant.GetDescription(),
 	})
 
-	// The request that produced the promise is the first thing it covered.
-	e.recordOwnUse(grant.GetGrantId(), msg)
+	// The request that produced the promise is the first thing it covered —
+	// somebody who says "approve, and for the next hour as well" has approved
+	// this one too. A grant request is the exception, because there was no
+	// first thing: it authorized nothing itself, and a promise whose ledger
+	// opens with a signature that never happened is a list that lies about the
+	// only number on it (decision AO).
+	if !msg.GetGrantOnly() {
+		e.recordOwnUse(grant.GetGrantId(), msg)
+	}
 
 	return grant
 }

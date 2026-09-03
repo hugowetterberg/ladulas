@@ -209,6 +209,20 @@ service ControlService {
   // more than the machine acting on it will do.
   rpc ExtendGrant(ExtendGrantRequest) returns (ExtendGrantResponse);
 
+  // RequestGrant asks for a promise ahead of the login it is for, and holds
+  // until somebody answers (decision AO). It is what `ladulas ssh-grant` calls,
+  // and it exists because an SSH login is the one operation here with somebody
+  // else's clock on it: sshd closes the connection after LoginGraceTime, so an
+  // approval that has to arrive on a phone has about ninety seconds. Asked as
+  // its own request there is no handshake waiting, so it takes the signing
+  // budget instead and the answer has as long as a commit does.
+  //
+  // The caller has already done the work of finding out what the login will
+  // look like — which key the server accepts, which user, which host key — and
+  // sends it, because a promise whose scope does not match what the login
+  // derives is a promise that covers nothing.
+  rpc RequestGrant(RequestGrantRequest) returns (RequestGrantResponse);
+
   // ListDelegations reports the standing permissions this instance was given
   // by somebody else and is acting on itself (§19, decision P). They are the
   // other half of ListGrants and are deliberately a separate verb: a grant is
@@ -891,6 +905,44 @@ message ExtendGrantRequest {
 
 message ExtendGrantResponse {
   Grant grant = 1;
+}
+
+message RequestGrantRequest {
+  // The key the server said it would accept, as an SSH wire-format public key
+  // blob. The caller found it by offering each identity to the server without a
+  // signature (RFC 4252 §7's query form), which is what ssh itself does and
+  // needs no approval — so which key this is, is the server's answer and not a
+  // guess.
+  bytes public_key = 1;
+  // The user being authenticated as on the remote host, resolved the way ssh
+  // resolves it.
+  string username = 2;
+  // The server's host key, verified against known_hosts by the caller before it
+  // got here. This is the field the promise is pinned on.
+  //
+  // It is the caller's word at this point, since nothing has been signed yet —
+  // and it is the one asserted scope field that cannot widen anything. When the
+  // login finally happens the grant is matched against the host key inside the
+  // signed hostbound payload, which is proven, so a caller that named a host it
+  // cannot reach has minted a promise that covers nothing. What the assertion
+  // costs is the approver's understanding of what they agreed to, which is why
+  // the label below is shown beside the fingerprint and never instead of it.
+  bytes host_key = 3;
+  // What to call the destination on the card: the name known_hosts matched, or
+  // what the user typed. Never shown without the fingerprint.
+  string destination_label = 4;
+  // How long a promise to ask for. A suggestion the approver may overrule, and
+  // refused outright if it is longer than this instance promises. Zero leaves
+  // the length entirely to whoever answers.
+  google.protobuf.Duration ttl = 5;
+}
+
+message RequestGrantResponse {
+  // The promise that was made. Absent when the request was denied.
+  Grant grant = 1;
+  Decision decision = 2;
+  // What the approver said, or why it was refused.
+  string reason = 3;
 }
 
 message ListDelegationsRequest {}

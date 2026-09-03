@@ -363,7 +363,22 @@ func (s *controlService) AnswerApproval(
 		Reason:   req.Msg.GetReason(),
 	}
 
-	if ttl := req.Msg.GetGrantTtl().AsDuration(); ttl > 0 {
+	ttl := req.Msg.GetGrantTtl().AsDuration()
+
+	// A request that asks only for a promise has no other kind of yes in it: the
+	// bytes it would have authorized do not exist, so approving without a length
+	// would settle the card and grant nothing (decision AO). Refused rather than
+	// answered, which leaves the request waiting — the state it can still be
+	// answered properly from, exactly as an over-long length is handled below.
+	if waiting[0].req.Msg.GetGrantOnly() &&
+		req.Msg.GetDecision() == ladulasv1.Decision_DECISION_APPROVE &&
+		ttl <= 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("a grant request is approved for a length of time or "+
+				"not at all"))
+	}
+
+	if ttl > 0 {
 		// The front end draws the bound; it does not own it. A promise past it
 		// is refused rather than trimmed, because a promise quietly shortened is
 		// a promise nobody made (decision V).

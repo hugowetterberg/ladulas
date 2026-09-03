@@ -43,8 +43,21 @@ func (c *ConsoleHandler) Decide(ctx context.Context, req *Request) (*Answer, err
 	defer c.mu.Unlock()
 
 	fmt.Fprintf(c.Out, "\n%s\n", req.Prompt.Text())
-	fmt.Fprintf(c.Out, "\n  [y] approve once  [n] deny%s\n> ",
-		grantOptionsText(req.GrantTTLs, req.GrantSubject))
+
+	// "Approve once" is not one of the answers to a request that asks only for a
+	// promise: there are no bytes to approve, and a yes with no length attached
+	// would settle the card having granted nothing (decision AO). The engine and
+	// the answer routes both refuse one, so offering it here would be offering a
+	// key that does not turn.
+	grantOnly := req.Msg.GetGrantOnly()
+
+	if grantOnly {
+		fmt.Fprintf(c.Out, "\n  [n] deny%s\n> ",
+			grantOptionsText(req.GrantTTLs, req.GrantSubject))
+	} else {
+		fmt.Fprintf(c.Out, "\n  [y] approve once  [n] deny%s\n> ",
+			grantOptionsText(req.GrantTTLs, req.GrantSubject))
+	}
 
 	line, err := readLine(ctx, c.In)
 	if err != nil {
@@ -54,7 +67,7 @@ func (c *ConsoleHandler) Decide(ctx context.Context, req *Request) (*Answer, err
 	answer := strings.TrimSpace(strings.ToLower(line))
 
 	switch {
-	case answer == "y" || answer == "yes":
+	case (answer == "y" || answer == "yes") && !grantOnly:
 		return &Answer{
 			Decision: ladulasv1.Decision_DECISION_APPROVE,
 			Reason:   "approved at the console",

@@ -215,8 +215,11 @@ func (e *Engine) delegate(
 	// The request that produced the promise is the first thing it covered.
 	// Somebody who says "approve, and for the next hour as well" has approved
 	// this one too, and a list that started at the second would be missing the
-	// only entry anybody actually looked at.
-	e.recordOwnUse(id, msg)
+	// only entry anybody actually looked at. A grant request is the exception:
+	// it authorized nothing, so there is no first entry to record (decision AO).
+	if !msg.GetGrantOnly() {
+		e.recordOwnUse(id, msg)
+	}
 
 	return signed, grant
 }

@@ -114,6 +114,20 @@ func renderSSHAuth(p *Prompt, req *ladulasv1.ApprovalRequest) {
 		p.Title = "SSH login as " + auth.GetUsername()
 	}
 
+	// A request asking for a promise ahead of the login wears the login's kind,
+	// so it would otherwise be drawn as a login that is happening — and it is
+	// not: nothing is waiting to connect, and saying yes signs nothing. The card
+	// has to say which of the two it is, because the answers differ. The wording
+	// carries it rather than a note, because the other half is the buttons: a
+	// grant request has no plain approval on it, only a length (decision AO).
+	if req.GetGrantOnly() {
+		p.Title = "Allow SSH logins"
+
+		if auth.GetUsername() != "" {
+			p.Title = "Allow SSH logins as " + auth.GetUsername()
+		}
+	}
+
 	p.Subject = auth.GetDestinationLabel()
 
 	if host := auth.GetDestination(); host != nil {
@@ -129,9 +143,22 @@ func renderSSHAuth(p *Prompt, req *ladulasv1.ApprovalRequest) {
 		// on another device: one that is inside the payload is part of what the
 		// signature will cover, and cannot be a story the asking machine told
 		// (§4, §15).
+		//
+		// A grant request has no payload, so the same sentence would be a lie —
+		// the fingerprint is one this machine read off the server and checked
+		// against known_hosts, which is a weaker thing and has to read as one.
+		// What makes it safe rather than merely disclosed is the other end: the
+		// promise is spent only against a host key proven inside a real login's
+		// signature, so a wrong fingerprint here yields a promise that covers no
+		// login rather than one that covers the wrong login (decision AO).
 		if payload := auth.GetPayloadDestination(); payload != nil &&
 			payload.GetFingerprint() == host.GetFingerprint() {
-			value += "; named in the signed payload"
+			if req.GetGrantOnly() {
+				value += "; read from the server now, and matched against " +
+					"the signed payload when a login actually happens"
+			} else {
+				value += "; named in the signed payload"
+			}
 		}
 
 		p.Details = append(p.Details, Detail{Label: "Host key", Value: value})

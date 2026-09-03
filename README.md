@@ -151,11 +151,30 @@ ladulas keys list
 Then point ssh and git at it:
 
 ```
-export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/ladulas/agent.sock
+make install-env        # SSH_AUTH_SOCK, from the next login onwards
 git config --global gpg.format ssh
 git config --global gpg.ssh.program ladulas-sign
 git config --global user.signingkey "key::$(ladulas keys public work)"
+
+ladulas doctor          # says whether any of that did not take
 ```
+
+`make install-env` puts `contrib/50-ladulas-agent.conf` in
+`~/.config/environment.d/`, which the systemd user manager reads at
+startup — so the GUI, every user unit and every terminal opened from the
+desktop get the variable without a line in anybody's shell rc. It takes
+effect at the **next login**; for this one, and for sessions systemd did
+not start (an `ssh` into the box, a bare TTY), add it to your shell rc:
+
+```
+export SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/ladulas/agent.sock
+```
+
+**`SSH_AUTH_SOCK` is contended**, and the interesting failure is not that
+it is unset but that it is set to somebody else's agent: GnuPG's
+`gpg-agent-ssh.socket`, 1Password and Secretive all want it, whichever
+writes last wins, and the symptom is a key list from the wrong agent rather
+than an error. `ladulas doctor` names which agent has it.
 
 On a box with no display, or with a webkit that `GUI_TAGS` does not match,
 use **`make install-headless`** instead of `make install` — the package
@@ -293,6 +312,59 @@ replaces the list.
 if the new addresses cannot be bound the previous ones come back and it says
 so. It cannot lock you out of the CLI, which reaches the daemon over a unix
 socket, only out of peering.
+
+### Asking for permission before the login needs it
+
+```
+ladulas ssh-grant git@github.com          # blocks until somebody answers
+ladulas ssh-grant bastion --for 2h        # a length to suggest to the approver
+```
+
+An SSH login runs on the far server's clock: sshd closes the connection
+after `LoginGraceTime`, typically two minutes, so an approval that has to
+reach a phone has about ninety seconds to be noticed and answered. That is
+fine at a keyboard and hopeless in a pocket, and it is not a number this
+side can raise.
+
+`ssh-grant` asks the same question with nothing waiting on it, so the
+answer gets the signing budget — an hour by default — and what it produces
+is an ordinary grant that the logins afterwards fall under. Use it before
+a `git push` or a batch of logins that would otherwise each ask.
+
+It connects to the destination first, and prints what it found:
+
+```
+Asking git@github.com what a login would look like…
+  Server    github.com:22
+  User      git
+  Key       SHA256:bgle/IWUw6RDTxbiZ9Zik+ApYrxUMqk+I7ubmJOCqsU
+  Host key  SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s
+```
+
+Nothing is signed by that: it offers each key the agent holds without a
+signature, which is what ssh does to find out the same thing, and the
+server says which one it would accept. The connection is necessary because
+a promise is matched on strict equality against what the login derives — a
+scope built from a guess covers nothing, and looks like it should have.
+
+The destination is written the way ssh takes it, and **ssh's own
+configuration decides what it means**: `Host`/`Match` blocks, `User`,
+`Port` and `IdentityFile` are all resolved by `ssh -G`.
+
+Two things to know:
+
+* **Run it in the shell that will do the work.** The promise is scoped to
+  the session it was asked from, so a grant taken in one terminal does not
+  cover a `git push` in another. Approve with the Machine reach on the card
+  if that is what you want.
+* **The host must be in `known_hosts`.** An unknown host is refused rather
+  than guessed at — the fingerprint learned here becomes the scope of the
+  promise. Log in with `ssh` once, which is the moment designed for looking
+  at a fingerprint, and run it again.
+
+The card has no plain Approve on it: there is nothing to sign, so the
+answer is a length or a denial. The exit status is the answer — 0 granted
+or already covered, 1 refused or unanswered — so a script can use it.
 
 ### The standing permissions, from both ends
 
@@ -666,7 +738,20 @@ show` prints it, the desktop's Settings screen changes it, and it lands in
 `policy.json` as `signTimeout` (architecture §9, decision AJ). It is meant to
 be long — a request that gives up costs the commit, and the person answering
 may be in another room. SSH authentication keeps its own much shorter budget,
-because the server at the other end is counting too.
+because the server at the other end is counting too. `ladulas ssh-grant` is
+how a login gets the long budget anyway: asked before there is a handshake,
+there is nothing at the other end to count (architecture §9, decision AO).
+
+### `ladulas ssh-grant`
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--for` | — | A promise length to suggest. It joins the lengths the card offers as one tap; the approver still chooses, and a length past what this instance promises is dropped rather than trimmed |
+| `--probe-timeout` | `15s` | How long to give the connection that works out what the login would look like |
+| `--quiet` | off | Say nothing, and answer with the exit status alone |
+
+The wait for an answer is the instance's signing budget and is not a flag
+here: it is one number, set in one place, for the reason decision AJ gives.
 
 ### `ladulas-relay`
 

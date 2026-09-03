@@ -38,14 +38,26 @@ export function renderPrompt(request, done) {
   // choice somebody made rather than the only answer there is.
   const pairing = request.kind === "pairing";
 
+  // A grant request is the mirror image: it has an offer and nothing else. It
+  // carries no payload, so there is nothing for "approve once" to be an
+  // approval of, and a yes with no length on it is refused by the daemon —
+  // drawing the button would be drawing a key that does not turn (decision AO).
+  // Deny is real, and stays.
+  const grantOnly = request.grantOnly === true;
+
   const approve = el("button", "approve", pairing ? "Pair" : "Approve once");
   approve.onclick = () => answer("approve", 0);
 
   const deny = el("button", "deny", pairing ? "Don’t pair" : "Deny");
   deny.onclick = () => answer("deny", 0);
 
-  buttons.push(approve, deny);
-  actions.append(approve, deny);
+  if (grantOnly) {
+    buttons.push(deny);
+    actions.append(deny);
+  } else {
+    buttons.push(approve, deny);
+    actions.append(approve, deny);
+  }
 
   // The answer sits in a footer that stays at the bottom of whatever is
   // scrolling the card, because a card is as long as the diff in it and the
@@ -59,7 +71,7 @@ export function renderPrompt(request, done) {
   footer.append(actions);
 
   if (request.grant) {
-    const offer = grantOffer(request.grant, answer, buttons);
+    const offer = grantOffer(request.grant, answer, buttons, grantOnly);
 
     // The trust note stays in the body rather than riding along in the footer.
     // It is prose to be read before making a promise (decision X), not a
@@ -69,12 +81,25 @@ export function renderPrompt(request, done) {
       card.append(offer.trust);
     }
 
+    // On a grant request the timed answers *are* the approval, so they belong
+    // beside Deny and wearing the affirmative colour. Left in the offer's own
+    // row below, a lone red Deny sits where the answer goes and the card reads
+    // as something that ought to be refused, with the real answer looking like
+    // a secondary detail underneath — which inverts what is being asked.
+    if (grantOnly && offer.reach.length > 0) {
+      actions.prepend(...offer.reach);
+    }
+
     footer.append(offer.controls);
   }
 
   card.append(footer);
 
-  return { card, approve, deny, answer };
+  // focus is whichever button is actually in the footer. A grant request has no
+  // Approve, and focusing the detached one silently focuses nothing — leaving
+  // the window with no keyboard focus at all, which is worse than either button
+  // having it.
+  return { card, approve, deny, answer, focus: grantOnly ? deny : approve };
 }
 
 // grantOffer is "approve for a while", asked as the two questions it is
@@ -89,7 +114,7 @@ export function renderPrompt(request, done) {
 // It returns the two halves apart, because they are drawn in different places:
 // the controls go in the pinned footer with the other buttons, and the trust
 // note stays in the body above it.
-function grantOffer(offer, answer, buttons) {
+function grantOffer(offer, answer, buttons, grantOnly) {
   const root = el("div", "grant-offer");
   const choices = el("div", "actions");
   const picker = el("div", "grant-picker");
@@ -141,7 +166,10 @@ function grantOffer(offer, answer, buttons) {
     // raising the font size raised the space around it and not the clock. A
     // stroked icon is sized by its box, takes the button's colour, and is the
     // same clock the sidebar and the activity list already use.
-    const button = el("button", "grant");
+    // A grant request has no other kind of yes, so the reach buttons are the
+    // approval and are coloured like one; on an ordinary card they are the
+    // quieter alternative to "Approve once" and stay neutral.
+    const button = el("button", grantOnly ? "grant approve" : "grant");
 
     append(button, icon("clock"), el("span", "grant-label", choice.label));
 
@@ -166,13 +194,24 @@ function grantOffer(offer, answer, buttons) {
   picker.append(promise, clock, confirm);
   picker.hidden = true;
 
-  root.append(choices, picker);
+  // The choices are returned separately for a grant request, so the caller can
+  // lift them into the answer row next to Deny rather than leaving them in a
+  // second row of their own.
+  if (grantOnly) {
+    root.append(picker);
+  } else {
+    root.append(choices, picker);
+  }
 
   // The trust note comes before the choices: what a timed promise leans on is
   // worth reading before deciding to make one, not after (decision X). It is
   // returned rather than nested so that the caller can leave it in the scrolling
   // body while the choices go in the footer, which keeps that order on screen.
-  return { trust: offer.trust ? grantTrust(offer.trust) : null, controls: root };
+  return {
+    trust: offer.trust ? grantTrust(offer.trust) : null,
+    controls: root,
+    reach: grantOnly ? Array.from(choices.children) : [],
+  };
 }
 
 // grantTrust is the note a timed promise carries when its scope would pin

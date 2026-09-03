@@ -466,8 +466,14 @@ func (m *model) keys() string {
 		return m.status0(" " + strings.Join(hints, m.st.dim.Render(" · ")))
 	}
 
-	parts := []string{
-		m.st.key.Render("a") + " approve once",
+	// A grant request has no "approve once" in it: there is no payload behind it,
+	// so a yes with no length attached grants nothing and the daemon refuses one
+	// (decision AO). Offering the key would offer a keystroke that only ever
+	// produces an error.
+	var parts []string
+
+	if !item.view.GrantOnly {
+		parts = append(parts, m.st.key.Render("a")+" approve once")
 	}
 
 	if item.view.Grant != nil {

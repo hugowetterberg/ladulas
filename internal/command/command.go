@@ -236,9 +236,11 @@ func Commands() []*cli.Command {
 	return []*cli.Command{
 		initCommand(),
 		statusCommand(),
+		doctorCommand(),
 		keysCommand(),
 		policyCommand(),
 		grantsCommand(),
+		sshGrantCommand(),
 		delegationsCommand(),
 		endorsementsCommand(),
 		auditCommand(),

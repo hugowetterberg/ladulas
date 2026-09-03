@@ -815,6 +815,17 @@ func (m *model) diffKey(key string) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.fetchDiff(item)
 	case "a":
+		// Not offered on a grant request, and refused by the daemon if it were
+		// sent — so it is answered here, where the reason can be a sentence
+		// rather than an error from the socket (decision AO).
+		if item.view.GrantOnly {
+			item.note = "This asks for a promise, not a signature. " +
+				"Press w to say how long, or d to deny."
+			item.noteErr = false
+
+			return m, nil
+		}
+
 		return m, m.answer(item, answerBody{Decision: "approve"})
 	case "d":
 		return m, m.answer(item, answerBody{Decision: "deny"})
