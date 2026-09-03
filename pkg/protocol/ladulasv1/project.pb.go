@@ -287,8 +287,16 @@ type ProjectEntry struct {
 	// A walk that hits its own cap before finding anything reports false for the
 	// same reason: not knowing is not the same as knowing there is nothing.
 	NothingReadable bool `protobuf:"varint,8,opt,name=nothing_readable,json=nothingReadable,proto3" json:"nothing_readable,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The contents are a prefix of the file: it is longer than the per-file cap,
+	// and what is served is cut back to the last line ending before it. `size`
+	// stays the whole file's size, so a reader can say how much of it is here.
+	//
+	// Stated the empty way round, like nothing_readable: a publisher that has
+	// never heard of the field sends nothing, which reads as false, and a reader
+	// then says nothing rather than labelling every document as cut short.
+	Truncated     bool `protobuf:"varint,9,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProjectEntry) Reset() {
@@ -373,6 +381,13 @@ func (x *ProjectEntry) GetReason() string {
 func (x *ProjectEntry) GetNothingReadable() bool {
 	if x != nil {
 		return x.NothingReadable
+	}
+	return false
+}
+
+func (x *ProjectEntry) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
 	}
 	return false
 }
@@ -639,7 +654,7 @@ const file_ladulas_v1_project_proto_rawDesc = "" +
 	"origin_url\x18\x04 \x01(\tR\toriginUrl\x12\x16\n" +
 	"\x06branch\x18\x05 \x01(\tR\x06branch\x12\x16\n" +
 	"\x06commit\x18\x06 \x01(\tR\x06commit\x12=\n" +
-	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\"\xff\x01\n" +
+	"\fpublished_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\"\x9d\x02\n" +
 	"\fProjectEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1c\n" +
@@ -648,7 +663,8 @@ const file_ladulas_v1_project_proto_rawDesc = "" +
 	"\bmodified\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bmodified\x12\x1a\n" +
 	"\breadable\x18\x06 \x01(\bR\breadable\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x12)\n" +
-	"\x10nothing_readable\x18\b \x01(\bR\x0fnothingReadable\"\x86\x01\n" +
+	"\x10nothing_readable\x18\b \x01(\bR\x0fnothingReadable\x12\x1c\n" +
+	"\ttruncated\x18\t \x01(\bR\ttruncated\"\x86\x01\n" +
 	"\n" +
 	"KindPolicy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +

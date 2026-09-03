@@ -141,12 +141,19 @@ func (c *Cache) Keep(
 	cached.LastReadAt = now
 
 	page := &ladulasv1.CachedFile{
-		Path:       entry.GetPath(),
-		Digest:     digest[:],
+		Path:   entry.GetPath(),
+		Digest: digest[:],
+		// The size of what is here, which is what the budget counts and what
+		// the blob hashes to.
 		Size:       int64(len(content)),
 		ModifiedAt: entry.GetModified(),
 		ReadAt:     now,
 		Commit:     publication.GetCommit(),
+		// And, when the publisher cut it short, how big the whole document is
+		// (decision AP). Held rather than recomputed because this side never
+		// sees the rest of it: the only machine that can say is the one that
+		// did the cutting.
+		FullSize: truncatedSize(entry),
 	}
 
 	kept := []*ladulasv1.CachedFile{page}
@@ -544,4 +551,18 @@ func (c *Cache) writeBlob(dir string, digest, content []byte) error {
 
 func (c *Cache) readBlob(dir string, digest []byte) ([]byte, error) {
 	return unsealBlob(c.cipher, dir, digest)
+}
+
+// truncatedSize is the whole document's size when a page is only the start of
+// it, and zero when it is complete.
+//
+// Zero rather than the real size for a complete page, so that "is this all of
+// it" is one comparison against nothing rather than a comparison between two
+// numbers that are equal for almost every document there is.
+func truncatedSize(entry *ladulasv1.ProjectEntry) int64 {
+	if !entry.GetTruncated() {
+		return 0
+	}
+
+	return entry.GetSize()
 }

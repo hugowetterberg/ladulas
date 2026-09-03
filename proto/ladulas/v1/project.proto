@@ -69,6 +69,14 @@ message ProjectEntry {
   // A walk that hits its own cap before finding anything reports false for the
   // same reason: not knowing is not the same as knowing there is nothing.
   bool nothing_readable = 8;
+  // The contents are a prefix of the file: it is longer than the per-file cap,
+  // and what is served is cut back to the last line ending before it. `size`
+  // stays the whole file's size, so a reader can say how much of it is here.
+  //
+  // Stated the empty way round, like nothing_readable: a publisher that has
+  // never heard of the field sends nothing, which reads as false, and a reader
+  // then says nothing rather than labelling every document as cut short.
+  bool truncated = 9;
 }
 
 // KindPolicy is what a publisher does with one kind of file (decision AP).

@@ -1282,6 +1282,10 @@ message CachedFile {
   // The commit the project was at when this page was read, which is what "the
   // documentation you have is from before this change" is computed against.
   string commit = 6;
+  // The whole file's size, when what is held is only the start of it. Zero
+  // means the copy is complete, so `size` is the answer to both questions for
+  // every document that fits.
+  int64 full_size = 7;
 }
 
 // TrackedProject is the working-tree history this instance keeps for one
@@ -1553,6 +1557,9 @@ message PeerPage {
   string commit = 5;
   bool live = 6;
   string error = 7;
+  // The whole document's size when the content is only the start of it, and
+  // zero when it is all here (decision AP).
+  int64 full_size = 8;
 }
 
 message ListPeerProjectsRequest {

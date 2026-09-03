@@ -156,18 +156,6 @@ func Reconcile(
 			return nil
 		}
 
-		// Over the per-file cap it is not servable, so it is not pushed. It is
-		// deliberately not reported as removed either: an approver that holds
-		// an older, smaller copy has a page it may legitimately read, and
-		// taking it away because the file has since grown would lose something
-		// for nothing. What it will find, when somebody opens it, is that the
-		// digest no longer matches and that the fetch says why.
-		if info.Size() > serving.Limits.FileBytes {
-			seen[name] = true
-
-			return nil
-		}
-
 		seen[name] = true
 
 		body, err := confined.ReadFile(name)
@@ -178,6 +166,24 @@ func Reconcile(
 			return nil //nolint:nilerr // the walk continues past what it cannot read
 		}
 
+		// A file over the cap is pushed cut short rather than skipped. It used
+		// to be skipped, on the reasoning that what cannot be served should not
+		// be sent — which was right while the cap meant "not offered", and
+		// became a way of hiding long documents once it stopped meaning that.
+		body, cut := ServeBytes(body, serving.Caps().FileBytes)
+
+		// Except when it is not text, where half a file is not a shorter one.
+		// Marked seen, so an approver holding an older copy keeps it: taking a
+		// page away because the file has since grown past what can be sent
+		// would lose something for nothing.
+		if cut && !IsText(body) {
+			return nil
+		}
+
+		// The digest is of what is sent, not of what is on disk. It is what the
+		// other side will hold and hash, and a digest of the whole file would
+		// never match the bytes that went with it — so every sweep would send
+		// the same document again for ever.
 		digest := sha256.Sum256(body)
 
 		if held, ok := have[name]; ok && string(held) == string(digest[:]) {
@@ -193,11 +199,14 @@ func Reconcile(
 		result.Bytes += int64(len(body))
 
 		entry := &Entry{
-			Name:     filepath.Base(name),
-			Path:     name,
-			Size:     info.Size(),
-			Modified: timestamppb.New(info.ModTime()),
-			Readable: true,
+			Name: filepath.Base(name),
+			Path: name,
+			// The size on disk, not the size of what is being sent, so that
+			// the other side can say how much of the document it has.
+			Size:      info.Size(),
+			Modified:  timestamppb.New(info.ModTime()),
+			Readable:  true,
+			Truncated: cut,
 		}
 
 		return emit(SyncChange{Path: name, Entry: entry, Content: body})

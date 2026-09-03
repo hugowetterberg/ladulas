@@ -5862,7 +5862,11 @@ type CachedFile struct {
 	ReadAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=read_at,json=readAt,proto3" json:"read_at,omitempty"`
 	// The commit the project was at when this page was read, which is what "the
 	// documentation you have is from before this change" is computed against.
-	Commit        string `protobuf:"bytes,6,opt,name=commit,proto3" json:"commit,omitempty"`
+	Commit string `protobuf:"bytes,6,opt,name=commit,proto3" json:"commit,omitempty"`
+	// The whole file's size, when what is held is only the start of it. Zero
+	// means the copy is complete, so `size` is the answer to both questions for
+	// every document that fits.
+	FullSize      int64 `protobuf:"varint,7,opt,name=full_size,json=fullSize,proto3" json:"full_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5937,6 +5941,13 @@ func (x *CachedFile) GetCommit() string {
 		return x.Commit
 	}
 	return ""
+}
+
+func (x *CachedFile) GetFullSize() int64 {
+	if x != nil {
+		return x.FullSize
+	}
+	return 0
 }
 
 // TrackedProject is the working-tree history this instance keeps for one
@@ -7260,9 +7271,12 @@ type PeerPage struct {
 	Modified *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=modified,proto3" json:"modified,omitempty"`
 	ReadAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=read_at,json=readAt,proto3" json:"read_at,omitempty"`
 	// The commit the project was at when this was read.
-	Commit        string `protobuf:"bytes,5,opt,name=commit,proto3" json:"commit,omitempty"`
-	Live          bool   `protobuf:"varint,6,opt,name=live,proto3" json:"live,omitempty"`
-	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	Commit string `protobuf:"bytes,5,opt,name=commit,proto3" json:"commit,omitempty"`
+	Live   bool   `protobuf:"varint,6,opt,name=live,proto3" json:"live,omitempty"`
+	Error  string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	// The whole document's size when the content is only the start of it, and
+	// zero when it is all here (decision AP).
+	FullSize      int64 `protobuf:"varint,8,opt,name=full_size,json=fullSize,proto3" json:"full_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7344,6 +7358,13 @@ func (x *PeerPage) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *PeerPage) GetFullSize() int64 {
+	if x != nil {
+		return x.FullSize
+	}
+	return 0
 }
 
 type ListPeerProjectsRequest struct {
@@ -8584,7 +8605,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\rfirst_read_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vfirstReadAt\x12<\n" +
 	"\flast_read_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastReadAt\x12,\n" +
-	"\x05files\x18\a \x03(\v2\x16.ladulas.v1.CachedFileR\x05files\"\xd6\x01\n" +
+	"\x05files\x18\a \x03(\v2\x16.ladulas.v1.CachedFileR\x05files\"\xf3\x01\n" +
 	"\n" +
 	"CachedFile\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
@@ -8593,7 +8614,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\vmodified_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"modifiedAt\x123\n" +
 	"\aread_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x06readAt\x12\x16\n" +
-	"\x06commit\x18\x06 \x01(\tR\x06commit\"\xb9\x01\n" +
+	"\x06commit\x18\x06 \x01(\tR\x06commit\x12\x1b\n" +
+	"\tfull_size\x18\a \x01(\x03R\bfullSize\"\xb9\x01\n" +
 	"\x0eTrackedProject\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
@@ -8682,7 +8704,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\ttruncated\x18\x05 \x01(\bR\ttruncated\x12\x12\n" +
 	"\x04live\x18\x06 \x01(\bR\x04live\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x125\n" +
-	"\tpublisher\x18\b \x01(\v2\x17.ladulas.v1.PeerProjectR\tpublisher\"\xe7\x01\n" +
+	"\tpublisher\x18\b \x01(\v2\x17.ladulas.v1.PeerProjectR\tpublisher\"\x84\x02\n" +
 	"\bPeerPage\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x126\n" +
@@ -8690,7 +8712,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\aread_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x06readAt\x12\x16\n" +
 	"\x06commit\x18\x05 \x01(\tR\x06commit\x12\x12\n" +
 	"\x04live\x18\x06 \x01(\bR\x04live\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error\";\n" +
+	"\x05error\x18\a \x01(\tR\x05error\x12\x1b\n" +
+	"\tfull_size\x18\b \x01(\x03R\bfullSize\";\n" +
 	"\x17ListPeerProjectsRequest\x12 \n" +
 	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"O\n" +
 	"\x18ListPeerProjectsResponse\x123\n" +

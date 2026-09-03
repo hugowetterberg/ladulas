@@ -299,6 +299,7 @@ async function showDocument(
 
     append(body,
       comparedBanner(page, () => draw(null)),
+      truncatedBanner(page),
       page.note ? el("p", "note-line kept", page.note) : null,
       article);
 
@@ -308,6 +309,27 @@ async function showDocument(
   }
 
   await draw(null);
+}
+
+// truncatedBanner says the document stops before the document does.
+//
+// It goes above the text rather than at the end of it, where the reader is
+// already lost: a document that simply runs out two thirds of the way through
+// reads as one somebody never finished writing, and the whole point is to say
+// that the rest exists and is on another machine.
+//
+// The sentence is composed in Go, like every other line of prose the reader is
+// shown (pkg/bridge/projects.go).
+function truncatedBanner(page) {
+  if (!page.truncated || !page.truncatedNote) {
+    return null;
+  }
+
+  const banner = el("div", "compare-banner truncated-banner");
+
+  banner.append(el("span", "compare-banner-text", page.truncatedNote));
+
+  return banner;
 }
 
 // compareOf turns a chosen version into what the file call takes, and null into
@@ -376,6 +398,7 @@ export async function renderReader(fingerprint, projectID, file, fragment) {
     append(body,
       bar,
       comparedBanner(page, () => draw(null)),
+      truncatedBanner(page),
       page.note ? el("p", "note-line kept", page.note) : null,
       article);
 

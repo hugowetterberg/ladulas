@@ -102,6 +102,10 @@ type Page struct {
 	Commit string
 	Live   bool
 	Err    string
+	// FullSize is the whole document's size when Content is only the start of
+	// it, and zero when the page is all of it (decision AP). The publisher is
+	// the only side that can say, because it is the side that did the cutting.
+	FullSize int64
 }
 
 // Browser reads published projects and keeps what it has read.
@@ -524,11 +528,16 @@ func (b *Browser) File(
 		// field a compromised requester would want to choose, and it does not
 		// get to choose the name a page is kept under here.
 		entry := &ladulasv1.ProjectEntry{
-			Name:     path.Base(name),
-			Path:     name,
-			Size:     int64(len(body)),
-			Modified: resp.Msg.GetFile().GetModified(),
-			Readable: true,
+			Name: path.Base(name),
+			Path: name,
+			// Two of the facts are the publisher's, because this side cannot
+			// work them out: whether what came back is the whole document, and
+			// how big the whole of it is. Everything else is still built from
+			// what was asked for.
+			Size:      servedSize(resp.Msg.GetFile(), body),
+			Modified:  resp.Msg.GetFile().GetModified(),
+			Readable:  true,
+			Truncated: resp.Msg.GetFile().GetTruncated(),
 		}
 
 		if _, err := b.cache.Keep(
@@ -543,6 +552,7 @@ func (b *Browser) File(
 			ReadAt:   time.Now(),
 			Commit:   found.GetCommit(),
 			Live:     true,
+			FullSize: truncatedSize(entry),
 		}
 
 		return nil
@@ -775,6 +785,7 @@ func (b *Browser) keptPage(
 		ReadAt:   file.GetReadAt().AsTime(),
 		Commit:   file.GetCommit(),
 		Err:      problem,
+		FullSize: file.GetFullSize(),
 	}, nil
 }
 
@@ -846,4 +857,18 @@ func sortEntries(entries []*ladulasv1.ProjectEntry) {
 
 		return entries[i].GetPath() < entries[j].GetPath()
 	})
+}
+
+// servedSize is the size to record for a page: the whole document's when the
+// publisher cut it short, and the size of what arrived when it did not.
+//
+// The publisher's number is taken only for the truncated case. Believing it for
+// every page would let a peer state a size that disagrees with the bytes it
+// sent, and every cap on this side is counted against what is actually held.
+func servedSize(file *ladulasv1.ProjectEntry, body []byte) int64 {
+	if file.GetTruncated() {
+		return file.GetSize()
+	}
+
+	return int64(len(body))
 }

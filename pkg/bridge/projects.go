@@ -145,6 +145,19 @@ type ProjectPageView struct {
 	// asked for and has since gone. The document is still here and still
 	// readable; only the comparison is missing.
 	CompareError string `json:"compareError,omitempty"`
+	// Truncated says this is the start of a longer document: it is over the
+	// publisher's per-file cap, so what was sent was cut back to a line ending
+	// (decision AP).
+	//
+	// It is said rather than left to be noticed. A document that simply stops
+	// two thirds of the way through looks like one somebody has not finished
+	// writing, and the reader would go looking for the rest of a sentence that
+	// is on another machine.
+	//
+	// TruncatedNote is the sentence, composed here for the same reason pageNote
+	// is: the viewer renders prose and does not compose it.
+	Truncated     bool   `json:"truncated,omitempty"`
+	TruncatedNote string `json:"truncatedNote,omitempty"`
 }
 
 // RequestProjectView ties a signing request to the documentation behind it, and
@@ -431,13 +444,16 @@ func (s *Session) handleProjectFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view := ProjectPageView{
-		Path:     read.Page.Path,
-		Title:    s.documentTitle(read.Document, fingerprint, id, name),
-		Blocks:   read.Document.Blocks,
-		Note:     pageNote(read.Page),
-		Live:     read.Page.Live,
-		Error:    read.Page.Err,
-		Compared: read.Compared,
+		Path:      read.Page.Path,
+		Title:     s.documentTitle(read.Document, fingerprint, id, name),
+		Blocks:    read.Document.Blocks,
+		Note:      pageNote(read.Page),
+		Live:      read.Page.Live,
+		Error:     read.Page.Err,
+		Compared:  read.Compared,
+		Truncated: read.Page.FullSize > 0,
+		TruncatedNote: truncatedNote(
+			int64(len(read.Page.Content)), read.Page.FullSize),
 	}
 
 	// A version that has gone since the list was read is not a reason to refuse
@@ -844,6 +860,21 @@ func listingNote(listing *project.Listing) string {
 // carries the reason; one that never needed to dial carries none, and saying
 // "could not be reached" about a machine nobody tried to reach would be the
 // note lying about the thing it exists to be honest about.
+// truncatedNote is what to say about a document that arrived cut short.
+//
+// Both numbers, because either one alone leaves the reader guessing at the
+// other: how much is here says nothing about how much is missing, and how big
+// the document is says nothing about where it stops.
+func truncatedNote(shown, full int64) string {
+	if full <= 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("You are reading the first %s of this %s document. "+
+		"The machine that publishes it sends no more of it than that.",
+		project.ByteSize(shown), project.ByteSize(full))
+}
+
 func pageNote(page *project.Page) string {
 	if page.Live {
 		return ""

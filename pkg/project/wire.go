@@ -102,11 +102,12 @@ func PageWire(page *Page) *ladulasv1.PeerPage {
 	}
 
 	wire := &ladulasv1.PeerPage{
-		Path:    page.Path,
-		Content: page.Content,
-		Commit:  page.Commit,
-		Live:    page.Live,
-		Error:   page.Err,
+		Path:     page.Path,
+		Content:  page.Content,
+		Commit:   page.Commit,
+		Live:     page.Live,
+		Error:    page.Err,
+		FullSize: page.FullSize,
 	}
 
 	if !page.Modified.IsZero() {
@@ -134,6 +135,7 @@ func PageFromWire(wire *ladulasv1.PeerPage) *Page {
 		Commit:   wire.GetCommit(),
 		Live:     wire.GetLive(),
 		Err:      wire.GetError(),
+		FullSize: wire.GetFullSize(),
 	}
 }
 

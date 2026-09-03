@@ -2120,6 +2120,14 @@ table.changed-added {
   border-left-color: var(--removed);
 }
 
+/* A document that was cut short is not an error and not a warning: nothing has
+ * gone wrong, and the part that is here is worth reading. It is marked with the
+ * same colour a removed line gets, because what it is saying is that something
+ * is missing. */
+.compare-banner.truncated-banner {
+  border-left-color: var(--removed);
+}
+
 .compare-banner-text {
   min-width: 0;
 }

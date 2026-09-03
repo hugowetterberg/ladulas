@@ -292,7 +292,8 @@ func ReadFile(root, rel string, serving Serving) ([]byte, *Entry, error) {
 		Modified: timestamppb.New(info.ModTime()),
 	}
 
-	entry.Readable, entry.Reason = servable(rel, info.Size(), serving)
+	entry.Readable, entry.Reason = servable(rel, serving)
+	entry.Truncated = entry.GetReadable() && willTruncate(info.Size(), serving)
 
 	if !entry.GetReadable() {
 		return nil, entry, fmt.Errorf("%s is not offered: %s", rel, entry.GetReason())
@@ -302,6 +303,23 @@ func ReadFile(root, rel string, serving Serving) ([]byte, *Entry, error) {
 	if err != nil {
 		return nil, entry, fmt.Errorf("read %s: %w", rel, err)
 	}
+
+	body, cut := ServeBytes(body, serving.Caps().FileBytes)
+
+	// Only text is cut short. Half of anything else is not a shorter version of
+	// it, so a kind somebody adds later that is not text is refused at its full
+	// size rather than served in pieces.
+	if cut && !IsText(body) {
+		entry.Readable = false
+		entry.Reason = fmt.Sprintf("larger than the %s this instance sends, "+
+			"and not text it can cut short",
+			ByteSize(serving.Caps().FileBytes))
+
+		return nil, entry, fmt.Errorf("%s is not offered: %s",
+			rel, entry.GetReason())
+	}
+
+	entry.Truncated = cut
 
 	return body, entry, nil
 }
@@ -343,7 +361,9 @@ func entryFor(confined *os.Root, rel string, d fs.DirEntry, serving Serving) *En
 		return entry
 	}
 
-	entry.Readable, entry.Reason = servable(rel, entry.GetSize(), serving)
+	entry.Readable, entry.Reason = servable(rel, serving)
+	entry.Truncated = entry.GetReadable() &&
+		willTruncate(entry.GetSize(), serving)
 
 	return entry
 }
@@ -401,12 +421,11 @@ func nothingReadable(confined *os.Root, rel string, serving Serving) bool {
 			return nil
 		}
 
-		size := int64(0)
-		if info, err := d.Info(); err == nil {
-			size = info.Size()
-		}
-
-		if ok, _ := servable(name, size, serving); ok {
+		// No size lookup: a file of a served kind counts whatever its size,
+		// because one too large for the cap is now served cut short rather
+		// than refused, and a folder holding one is not a folder with nothing
+		// in it.
+		if ok, _ := servable(name, serving); ok {
 			found = true
 
 			return fs.SkipAll
@@ -434,17 +453,20 @@ func nothingReadable(confined *os.Root, rel string, serving Serving) bool {
 // instance offers" is a sentence somebody reads while looking at a file they
 // can see — and a policy that could have been changed to include it is worth
 // pointing at.
-func servable(rel string, size int64, serving Serving) (bool, string) {
+func servable(rel string, serving Serving) (bool, string) {
 	if !serving.Policy.Serves(rel) {
 		return false, "not a kind this instance offers to read"
 	}
 
-	if size > serving.Limits.FileBytes {
-		return false, fmt.Sprintf("larger than the %s this instance sends",
-			byteSize(serving.Limits.FileBytes))
-	}
-
 	return true, ""
+}
+
+// willTruncate reports whether serving this file would cut it short.
+//
+// It is asked while listing, where nothing has been read yet, so it goes on the
+// size alone — which is the same thing ReadFile decides on, one stat later.
+func willTruncate(size int64, serving Serving) bool {
+	return size > serving.Caps().FileBytes
 }
 
 // hidden skips dotfiles. A project's documentation is not in them, and a

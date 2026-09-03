@@ -175,6 +175,7 @@ func (b *Browser) FileAt(
 			ReadAt:   time.Now(),
 			Commit:   resp.Msg.GetVersion().GetCommit(),
 			Live:     true,
+			FullSize: truncatedSize(resp.Msg.GetFile()),
 		}
 
 		return nil

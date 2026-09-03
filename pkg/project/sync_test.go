@@ -223,10 +223,14 @@ func TestTheSkippedDirectoriesAreNotSynced(t *testing.T) {
 	}
 }
 
-// A file over the per-file cap is not servable, so it is not pushed — and
-// deliberately not reported removed either, because an approver holding an
-// older smaller copy has a page it may legitimately read.
-func TestADocumentOverTheFileCapIsNeitherSentNorRemoved(t *testing.T) {
+// A file over the per-file cap is pushed cut short rather than skipped.
+//
+// It used to be skipped, on the reasoning that what cannot be served should not
+// be sent. That was right while the cap meant "not offered" and became a way of
+// hiding long documents once it stopped meaning that: the file was not sent,
+// not reported removed, and did not appear in a listing either, so the reader
+// was given no way to find out it existed.
+func TestADocumentOverTheFileCapIsSentCutShort(t *testing.T) {
 	root := browsable(t)
 
 	serving := project.Serving{
@@ -240,11 +244,33 @@ func TestADocumentOverTheFileCapIsNeitherSentNorRemoved(t *testing.T) {
 
 	changes, _ := collect(t, root, have, serving)
 
+	var sent *project.SyncChange
+
 	for _, change := range changes {
 		if change.Path == "README.md" {
-			t.Errorf("README.md over the cap produced %+v, want nothing",
-				change)
+			sent = &change
+
+			break
 		}
+	}
+
+	if sent == nil {
+		t.Fatal("README.md over the cap was not sent at all")
+	}
+
+	if !sent.Entry.GetTruncated() {
+		t.Error("the entry did not say it had been cut short")
+	}
+
+	if len(sent.Content) > 8 {
+		t.Errorf("%d bytes were sent, over the cap of 8", len(sent.Content))
+	}
+
+	// The size stays the file's own, so the reader can say how much of it it is
+	// looking at.
+	if sent.Entry.GetSize() <= int64(len(sent.Content)) {
+		t.Errorf("the entry reported size %d for %d bytes of content, want the "+
+			"whole file's size", sent.Entry.GetSize(), len(sent.Content))
 	}
 }
 

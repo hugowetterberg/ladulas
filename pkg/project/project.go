@@ -37,7 +37,9 @@ var Markdown = []string{".md", ".markdown"}
 // weighed, so what is bounded is what one call may return and what one project
 // may come to occupy on an approver that keeps reading it.
 type Limits struct {
-	// FileBytes caps one file, on the side that serves it.
+	// FileBytes caps one file, on the side that serves it. A file over it is
+	// served cut back to a line ending and marked as cut short, rather than
+	// refused (truncate.go).
 	FileBytes int64
 	// ProjectBytes caps what one project's pages may occupy in an approver's
 	// cache. Reading past it drops the pages that have gone longest unread,
@@ -66,7 +68,12 @@ type Limits struct {
 
 // DefaultLimits are what an instance uses unless told otherwise.
 var DefaultLimits = Limits{
-	FileBytes:    256 << 10,
+	// A megabyte, because the cap was set for a page and met a book. The core's
+	// own architecture.md is three hundred kilobytes and growing, and it is the
+	// document every other one points at — the old quarter of a megabyte made
+	// the design authority the one file nobody could open. A document that does
+	// not fit in this is served cut short rather than refused.
+	FileBytes:    1 << 20,
 	ProjectBytes: 4 << 20,
 	// Enough for a good number of doc sets and small enough that a phone's
 	// owner would not notice it. A doc set is prose: the whole of a large
@@ -170,7 +177,10 @@ func IsMarkdown(name string) bool {
 	return false
 }
 
-func byteSize(n int64) string {
+// ByteSize is a size in the words a person reads, and is exported because the
+// sentence about a document that was cut short is composed where the rest of
+// the reader's prose is.
+func ByteSize(n int64) string {
 	switch {
 	case n >= 1<<20:
 		return fmt.Sprintf("%d MiB", n>>20)

@@ -293,18 +293,26 @@ func (s *peerService) snapshotContent(
 		return nil, browseError(err)
 	}
 
+	full := int64(len(body))
+
+	body, cut, err := servedVersion(rel, body, s.node.serving.Caps().FileBytes)
+	if err != nil {
+		return nil, err
+	}
+
 	return connect.NewResponse(&ladulasv1.FetchProjectVersionResponse{
 		File: &ladulasv1.ProjectEntry{
-			Name:     path.Base(rel),
-			Path:     rel,
-			Size:     int64(len(body)),
-			Readable: true,
+			Name:      path.Base(rel),
+			Path:      rel,
+			Size:      full,
+			Readable:  true,
+			Truncated: cut,
 		},
 		Content: body,
 		Version: &ladulasv1.DocumentVersion{
 			Kind:   ladulasv1.DocumentVersionKind_DOCUMENT_VERSION_KIND_SNAPSHOT,
 			Digest: digest,
-			Size:   int64(len(body)),
+			Size:   full,
 		},
 	}), nil
 }
@@ -322,25 +330,51 @@ func (s *peerService) commitContent(
 		return nil, browseError(err)
 	}
 
-	if int64(len(body)) > s.node.serving.Caps().FileBytes {
-		return nil, connect.NewError(connect.CodeResourceExhausted,
-			fmt.Errorf("%s at %s is larger than this instance sends", rel, commit))
+	full := int64(len(body))
+
+	body, cut, err := servedVersion(rel, body, s.node.serving.Caps().FileBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	return connect.NewResponse(&ladulasv1.FetchProjectVersionResponse{
 		File: &ladulasv1.ProjectEntry{
-			Name:     path.Base(rel),
-			Path:     rel,
-			Size:     int64(len(body)),
-			Readable: true,
+			Name:      path.Base(rel),
+			Path:      rel,
+			Size:      full,
+			Readable:  true,
+			Truncated: cut,
 		},
 		Content: body,
 		Version: &ladulasv1.DocumentVersion{
+			// The entry beside this one carries whether it was cut short;
+			// the version is the identity of the revision and says how big it
+			// is, which is the whole of it either way.
 			Kind:   ladulasv1.DocumentVersionKind_DOCUMENT_VERSION_KIND_COMMIT,
 			Commit: commit,
-			Size:   int64(len(body)),
+			Size:   full,
 		},
 	}), nil
+}
+
+// servedVersion cuts an over-cap version back the way a current file is cut.
+//
+// A version is served under the same cap as the file it is a version of, and
+// for the same reason: an older revision of a long document is a long document.
+// It used to be refused outright, which meant the version list offered commits
+// whose contents could never be fetched.
+func servedVersion(
+	rel string, body []byte, limit int64,
+) ([]byte, bool, error) {
+	served, cut := project.ServeBytes(body, limit)
+
+	if cut && !project.IsText(served) {
+		return nil, false, connect.NewError(connect.CodeResourceExhausted,
+			fmt.Errorf("%s is larger than the %d bytes this instance sends, "+
+				"and is not text it can cut short", rel, limit))
+	}
+
+	return served, cut, nil
 }
 
 // commitLimit bounds how far back a version list walks. The shape is
