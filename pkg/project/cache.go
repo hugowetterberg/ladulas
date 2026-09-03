@@ -167,7 +167,116 @@ func (c *Cache) Keep(
 
 	c.sweep(dir, cached)
 
+	// And then the cap over every project together, which is the one that
+	// matters now that documentation arrives without being asked for
+	// (decision AP).
+	c.withinTotal(key, page.GetPath())
+
 	return cached, nil
+}
+
+// withinTotal drops the pages that have gone longest unread, across every
+// project, until the whole cache fits. Callers must hold the lock.
+//
+// It is a second pass rather than part of withinBudget because the two answer
+// different questions. A project's own cap keeps one project from filling a
+// disk, and it can be applied while holding just that project's record. This
+// one is about how many projects there are, which is a number the publishing
+// side chose, so it has to look at all of them.
+//
+// The page just written is never dropped, however far over the cap it puts
+// things. Fetching a document and then discarding it before anybody reads it
+// would be the one outcome worse than being over budget.
+func (c *Cache) withinTotal(keepKey, keepPath string) {
+	type held struct {
+		key  string
+		file *ladulasv1.CachedFile
+	}
+
+	entries, err := os.ReadDir(c.dir)
+	if err != nil {
+		return
+	}
+
+	var (
+		total   int64
+		pages   []held
+		records = map[string]*ladulasv1.CachedProject{}
+	)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		cached, err := c.read(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		records[entry.Name()] = cached
+
+		for _, file := range cached.GetFiles() {
+			total += file.GetSize()
+
+			if entry.Name() == keepKey && file.GetPath() == keepPath {
+				continue
+			}
+
+			pages = append(pages, held{key: entry.Name(), file: file})
+		}
+	}
+
+	if total <= c.limits.TotalBytes {
+		return
+	}
+
+	// Longest unread first, which is the order to give them up in — and the
+	// same order withinBudget uses within one project, so a reader cannot tell
+	// which cap took a page away.
+	sort.SliceStable(pages, func(i, j int) bool {
+		return pages[i].file.GetReadAt().AsTime().Before(
+			pages[j].file.GetReadAt().AsTime())
+	})
+
+	dropped := map[string]map[string]bool{}
+
+	for _, page := range pages {
+		if total <= c.limits.TotalBytes {
+			break
+		}
+
+		if dropped[page.key] == nil {
+			dropped[page.key] = map[string]bool{}
+		}
+
+		dropped[page.key][page.file.GetPath()] = true
+		total -= page.file.GetSize()
+	}
+
+	for key, paths := range dropped {
+		cached := records[key]
+
+		kept := make([]*ladulasv1.CachedFile, 0, len(cached.GetFiles()))
+
+		for _, file := range cached.GetFiles() {
+			if paths[file.GetPath()] {
+				continue
+			}
+
+			kept = append(kept, file)
+		}
+
+		cached.Files = kept
+
+		dir := filepath.Join(c.dir, key)
+
+		if err := c.writeMessage(filepath.Join(dir, "record"), cached); err != nil {
+			continue
+		}
+
+		c.sweep(dir, cached)
+	}
 }
 
 // withinBudget drops the pages that have gone longest unread until the project

@@ -315,3 +315,161 @@ func grepTree(t *testing.T, dir string, needles []string) string {
 
 	return found
 }
+
+// The cap over every project together (decision AP).
+//
+// ProjectBytes alone bounded a browser: somebody reading one large project
+// could not fill a disk with it. It does not bound a phone that is *sent* the
+// documentation of every project its peers publish, because how much that is
+// depends on how many projects somebody else marked published.
+
+func keptPage(
+	t *testing.T, cache *project.Cache, peer, id, path string, size int,
+) {
+	t.Helper()
+
+	body := make([]byte, size)
+	for i := range body {
+		body[i] = byte('a' + i%26)
+	}
+
+	_, err := cache.Keep(peer, "SHA256:"+peer, publicationOf(id, "abc123"),
+		&ladulasv1.ProjectEntry{Path: path, Name: path, Readable: true},
+		body)
+	if err != nil {
+		t.Fatalf("keep %s in %s: %v", path, id, err)
+	}
+}
+
+func totalHeld(t *testing.T, cache *project.Cache) int64 {
+	t.Helper()
+
+	projects, err := cache.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	var total int64
+
+	for _, held := range projects {
+		for _, file := range held.GetFiles() {
+			total += file.GetSize()
+		}
+	}
+
+	return total
+}
+
+func TestTheCacheIsBoundedAcrossProjectsAndNotOnlyWithinThem(t *testing.T) {
+	limits := project.Limits{
+		FileBytes:    4 << 10,
+		ProjectBytes: 4 << 10,
+		TotalBytes:   6 << 10,
+	}
+
+	cache, err := project.OpenCache(t.TempDir(), reverseCipher{}, limits)
+	if err != nil {
+		t.Fatalf("open the cache: %v", err)
+	}
+
+	// Four projects of a kilobyte each fits under ProjectBytes every time and
+	// blows the total, which is exactly the case the second cap exists for.
+	for _, id := range []string{"aaaa", "bbbb", "cccc", "dddd"} {
+		keptPage(t, cache, "laptop", id, "README.md", 2<<10)
+	}
+
+	if got := totalHeld(t, cache); got > limits.TotalBytes {
+		t.Errorf("the cache holds %d bytes, over the %d total",
+			got, limits.TotalBytes)
+	}
+}
+
+// The page just fetched is never the one dropped, however far over the cap it
+// puts things: fetching a document and discarding it before anybody reads it
+// is the one outcome worse than being over budget.
+func TestThePageJustReadSurvivesTheTotalCap(t *testing.T) {
+	limits := project.Limits{
+		FileBytes:    4 << 10,
+		ProjectBytes: 4 << 10,
+		TotalBytes:   1 << 10,
+	}
+
+	cache, err := project.OpenCache(t.TempDir(), reverseCipher{}, limits)
+	if err != nil {
+		t.Fatalf("open the cache: %v", err)
+	}
+
+	keptPage(t, cache, "laptop", "aaaa", "README.md", 2<<10)
+	keptPage(t, cache, "laptop", "bbbb", "OPS.md", 2<<10)
+
+	held, err := cache.Find("SHA256:laptop", "bbbb")
+	if err != nil {
+		t.Fatalf("find the project just read: %v", err)
+	}
+
+	var found bool
+
+	for _, file := range held.GetFiles() {
+		if file.GetPath() == "OPS.md" {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Error("the page just read was dropped by the total cap")
+	}
+}
+
+// Least-recently-read across projects, so the project somebody is reading
+// keeps its pages and the one read in March gives them up.
+func TestTheLongestUnreadPagesAreTheOnesDropped(t *testing.T) {
+	limits := project.Limits{
+		FileBytes:    4 << 10,
+		ProjectBytes: 8 << 10,
+		TotalBytes:   5 << 10,
+	}
+
+	cache, err := project.OpenCache(t.TempDir(), reverseCipher{}, limits)
+	if err != nil {
+		t.Fatalf("open the cache: %v", err)
+	}
+
+	// Oldest first, so the last one kept is the most recently read.
+	keptPage(t, cache, "laptop", "aaaa", "old.md", 2<<10)
+	keptPage(t, cache, "laptop", "bbbb", "middle.md", 2<<10)
+	keptPage(t, cache, "laptop", "cccc", "recent.md", 2<<10)
+
+	recent, err := cache.Find("SHA256:laptop", "cccc")
+	if err != nil {
+		t.Fatalf("find the most recent project: %v", err)
+	}
+
+	if len(recent.GetFiles()) != 1 {
+		t.Errorf("the most recently read project holds %d pages, want 1",
+			len(recent.GetFiles()))
+	}
+
+	// And the oldest is the one that went.
+	old, err := cache.Find("SHA256:laptop", "aaaa")
+	if err == nil && len(old.GetFiles()) != 0 {
+		t.Errorf("the longest-unread project still holds %d pages",
+			len(old.GetFiles()))
+	}
+}
+
+// A cache well under the cap is left entirely alone: the pass costs a
+// directory listing and then does nothing.
+func TestACacheUnderTheCapLosesNothing(t *testing.T) {
+	cache, err := project.OpenCache(
+		t.TempDir(), reverseCipher{}, project.DefaultLimits)
+	if err != nil {
+		t.Fatalf("open the cache: %v", err)
+	}
+
+	keptPage(t, cache, "laptop", "aaaa", "README.md", 512)
+	keptPage(t, cache, "laptop", "bbbb", "OPS.md", 512)
+
+	if got := totalHeld(t, cache); got != 1024 {
+		t.Errorf("the cache holds %d bytes, want both pages at 1024", got)
+	}
+}

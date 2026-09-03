@@ -44,12 +44,35 @@ type Limits struct {
 	// which is the behaviour somebody browsing a large project would choose if
 	// they were asked.
 	ProjectBytes int64
+	// TotalBytes caps what every project together may occupy, which is the cap
+	// that matters once documentation is pushed rather than pulled
+	// (decision AP).
+	//
+	// ProjectBytes alone bounded a browser: somebody reading one large project
+	// could not fill a disk with it. It does not bound a phone that is sent the
+	// documentation of every project its peers publish, because the answer to
+	// "how much is that" is a number nobody on this side chose — it is however
+	// many projects somebody else marked published. So there is a second cap
+	// over the lot, and reaching it drops the pages that have gone longest
+	// unread wherever they are, rather than fitting each project into its own
+	// share.
+	//
+	// Least-recently-read across projects rather than per project, because the
+	// alternative divides the budget by a number this side does not control:
+	// a peer that publishes forty projects would shrink every project's share
+	// to nothing, including the one being read.
+	TotalBytes int64
 }
 
 // DefaultLimits are what an instance uses unless told otherwise.
 var DefaultLimits = Limits{
 	FileBytes:    256 << 10,
 	ProjectBytes: 4 << 20,
+	// Enough for a good number of doc sets and small enough that a phone's
+	// owner would not notice it. A doc set is prose: the whole of a large
+	// project's documentation is a few hundred kilobytes, so this is dozens of
+	// them rather than a handful.
+	TotalBytes: 64 << 20,
 }
 
 func (l Limits) withDefaults() Limits {
@@ -59,6 +82,10 @@ func (l Limits) withDefaults() Limits {
 
 	if l.ProjectBytes <= 0 {
 		l.ProjectBytes = DefaultLimits.ProjectBytes
+	}
+
+	if l.TotalBytes <= 0 {
+		l.TotalBytes = DefaultLimits.TotalBytes
 	}
 
 	return l
