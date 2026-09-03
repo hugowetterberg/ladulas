@@ -521,12 +521,16 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 	}
 
 	node, err := peer.New(peer.Options{
-		Identity:     built.vault.Identity(),
-		Trust:        built.vault,
-		Engine:       built.engine,
-		Keys:         built.vault,
-		Projects:     built.projects,
-		Versions:     built.versions,
+		Identity: built.vault.Identity(),
+		Trust:    built.vault,
+		Engine:   built.engine,
+		Keys:     built.vault,
+		Projects: built.projects,
+		Versions: built.versions,
+		// Explicit rather than relying on the zero value resolving, so that the
+		// policy this instance serves under is one line to find and one line to
+		// change (decision AP).
+		Serving:      project.DefaultServing,
 		Delegations:  built.vault,
 		Wakeups:      built.vault,
 		Handovers:    built.vault,

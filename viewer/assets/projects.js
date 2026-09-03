@@ -458,8 +458,7 @@ function compareOf(version) {
 function comparedNote(page) {
   if (page.compareError) {
     return el("p", "note-line",
-      "Showing the latest version: the one you asked to compare against is no "
-      + "longer there.");
+      "Showing the latest version: " + page.compareError);
   }
 
   if (!page.compared) {

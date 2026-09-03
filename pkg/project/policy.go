@@ -211,6 +211,24 @@ func (s Serving) Kinds() []Kind {
 	return s.withDefaults().Policy.Kinds
 }
 
+// Caps is the resolved limits, and exists because reading Limits directly is a
+// trap this package set for itself.
+//
+// Every function in here resolves the zero value on the way in, so a Serving
+// that was never configured behaves like the default one. A caller in another
+// package that reaches for s.Limits.FileBytes gets a zero instead — and a zero
+// cap does not read as "no limit", it reads as "nothing may be sent", which
+// fails every file rather than none. That is exactly what happened: a version
+// fetch compared against an unset cap and refused every document as too large,
+// while every call that went through this package worked.
+//
+// So the limits are behind a method for the same reason the kinds are, and a
+// raw field read is the thing to look for when something is refused for a
+// reason that makes no sense.
+func (s Serving) Caps() Limits {
+	return s.withDefaults().Limits
+}
+
 func (s Serving) withDefaults() Serving {
 	s.Limits = s.Limits.withDefaults()
 	s.Policy = s.Policy.withDefaults()

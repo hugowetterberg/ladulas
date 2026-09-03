@@ -134,3 +134,37 @@ func TestAZeroPolicyIsTheDefaultOne(t *testing.T) {
 		t.Error("a zero policy should serve no more than the default policy")
 	}
 }
+
+// A zero Serving must behave like the default one through every accessor, not
+// only through the calls that happen to resolve it on the way in.
+//
+// This is a regression test for a real failure: a version fetch in another
+// package read Serving.Limits.FileBytes directly, got the zero value from a
+// node nobody had configured, and refused every document as "larger than this
+// instance sends" — because a zero cap does not mean no limit, it means nothing
+// may be sent.
+func TestAZeroServingResolvesItsCapsAndNotJustItsKinds(t *testing.T) {
+	var serving project.Serving
+
+	caps := serving.Caps()
+
+	if caps.FileBytes != project.DefaultLimits.FileBytes {
+		t.Errorf("FileBytes = %d, want the default %d — a zero cap refuses "+
+			"every file rather than none",
+			caps.FileBytes, project.DefaultLimits.FileBytes)
+	}
+
+	if caps.ProjectBytes != project.DefaultLimits.ProjectBytes {
+		t.Errorf("ProjectBytes = %d, want the default %d",
+			caps.ProjectBytes, project.DefaultLimits.ProjectBytes)
+	}
+
+	if caps.TotalBytes != project.DefaultLimits.TotalBytes {
+		t.Errorf("TotalBytes = %d, want the default %d",
+			caps.TotalBytes, project.DefaultLimits.TotalBytes)
+	}
+
+	if len(serving.Kinds()) == 0 {
+		t.Error("a zero Serving should resolve to the default kinds")
+	}
+}

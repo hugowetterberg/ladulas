@@ -96,9 +96,12 @@ async function fill(list, article, page, source, onCompare, close) {
       },
     }));
 
+  // Whatever went wrong, said as it was said. A snapshot expiring is the
+  // commonest reason and was once the only one this claimed — which made every
+  // other failure, from a cap to an unreachable peer, read as "gone".
   if (page.compareError) {
     list.append(el("p", "changes-note",
-      "The version you were comparing against is gone: " + page.compareError));
+      "Could not compare against that version: " + page.compareError));
   }
 
   const loading = el("p", "changes-note", "Reading the versions…");

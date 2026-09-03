@@ -308,7 +308,7 @@ func (s *peerService) commitContent(
 		return nil, browseError(err)
 	}
 
-	if int64(len(body)) > s.node.serving.Limits.FileBytes {
+	if int64(len(body)) > s.node.serving.Caps().FileBytes {
 		return nil, connect.NewError(connect.CodeResourceExhausted,
 			fmt.Errorf("%s at %s is larger than this instance sends", rel, commit))
 	}
