@@ -12,7 +12,7 @@ import { el, append, facts } from "./dom.js";
 import { bridge } from "./bridge.js";
 import * as ui from "./ui.js";
 import { renderDecision } from "./prompt.js";
-import { projectURL } from "./projects.js";
+import { documentsRoute } from "./projects.js";
 
 // The icon a waiting request gets, by kind. The same mapping the phone's home
 // screen uses.
@@ -1143,7 +1143,7 @@ function projectRow(project) {
   return ui.row(project.live ? "project" : "project kept",
     project.projectId
       ? () => {
-          location.href = projectURL(project.fingerprint, project.projectId);
+          location.hash = documentsRoute(project.fingerprint, project.projectId);
         }
       : null,
     ui.icon("book", "kind"),

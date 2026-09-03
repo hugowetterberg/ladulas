@@ -38,6 +38,31 @@ function withChanges(dock, article) {
   return dock;
 }
 
+// documentsRoute is the fragment for a place in the doc browser.
+//
+// The fields are the same ones projectURL puts in a query string — that is the
+// host's contract and is not changed — encoded into the one segment parseRoute
+// hands back, because a fingerprint is base64 and carries slashes.
+export function documentsRoute(fingerprint, projectID, params) {
+  const query = new URLSearchParams();
+
+  if (fingerprint) {
+    query.set("peer", fingerprint);
+  }
+
+  if (projectID) {
+    query.set("project", projectID);
+  }
+
+  for (const [name, value] of Object.entries(params || {})) {
+    if (value) {
+      query.set(name, value);
+    }
+  }
+
+  return "#/documents/" + encodeURIComponent(query.toString());
+}
+
 // projectURL is how every way in names a project: the peer that publishes it
 // and the identifier both ends derive (§6). Nothing here invents a handle, so a
 // card can link to a project nothing has been read of.
@@ -104,7 +129,7 @@ function projectCard(project) {
   const open = el("button", "project-open", project.name || project.peer);
   open.disabled = !project.projectId;
   open.onclick = () => {
-    location.href = projectURL(project.fingerprint, project.projectId);
+    location.hash = documentsRoute(project.fingerprint, project.projectId);
   };
 
   append(
@@ -178,7 +203,7 @@ function backButton() {
   const back = el("button", "back", "← All documentation");
 
   back.onclick = () => {
-    location.href = "/?projects=1";
+    location.hash = documentsRoute("", "", { projects: "1" });
   };
 
   return back;
@@ -254,7 +279,7 @@ async function showDocument(
     // A link inside a document keeps the reader in the project, because
     // following one is reading on rather than starting again.
     const article = renderDocument(page, (target, anchor) => {
-      location.href = projectURL(fingerprint, projectID, {
+      location.hash = documentsRoute(fingerprint, projectID, {
         file: target,
         frag: anchor,
       });
@@ -265,7 +290,7 @@ async function showDocument(
 
     append(bar,
       attachPicker(file, async () => files, (picked) => {
-        location.href = projectURL(fingerprint, projectID, { file: picked });
+        location.hash = documentsRoute(fingerprint, projectID, { file: picked });
       }),
       attachVersions(page,
         () => bridge.projectVersions(fingerprint, projectID, file),

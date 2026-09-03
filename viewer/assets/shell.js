@@ -26,7 +26,9 @@ import { bridge } from "./bridge.js";
 import * as ui from "./ui.js";
 import * as screens from "./screens.js";
 import { renderPrompt } from "./prompt.js";
-import { renderProject, renderProjectList } from "./projects.js";
+import {
+  renderProject, renderProjectList, documentsRoute,
+} from "./projects.js";
 import { renderUnlock, lockControls } from "./lock.js";
 import { addMachine } from "./pairing.js";
 
@@ -175,15 +177,6 @@ class Shell {
   }
 
   go(route) {
-    // A screen reached with a query string is the doc browser, and leaving it
-    // means leaving the query behind — which is a load rather than a change of
-    // fragment. Everything else is one page moving between its screens.
-    if (location.search) {
-      location.href = "/#/" + route;
-
-      return;
-    }
-
     location.hash = "#/" + route;
   }
 
@@ -361,7 +354,7 @@ class Shell {
       case "pair":
         return pairScreen(state);
       case "documents":
-        return documentsScreen();
+        return documentsScreen(this.route);
       case "settings":
         return screens.settings(state);
       case "request":
@@ -450,14 +443,25 @@ async function requestScreen(state, id, go) {
 // documentsScreen is the doc browser, in the pane rather than in a window of its
 // own (§6, decision Q).
 //
-// It reads where it is from the query string, because that is how the browser's
-// own links have always named a project — the peer that publishes it and the
-// identifier both ends derive — and a link inside a page is a load that lands
-// back here with a different query. Which is why the browser is not one of the
-// screens the poll may redraw: a repaint while somebody is three directories deep
-// would put them back at the front page.
-async function documentsScreen() {
-  const params = new URLSearchParams(location.search);
+// **Where it is lives in the fragment**, like every other screen's does, and
+// that is what makes leaving it free.
+//
+// It used to live in the query string, on the reasoning that a project is named
+// the way the browser's own links name it. What that cost was the one thing
+// nobody would have chosen: a query string cannot be left without loading the
+// page, so going from a document to Home or Keys tore the whole application
+// down and built it again — half a second of "Asking the daemon…" for a move
+// that is instant from anywhere else. A fragment carries the same three fields
+// and changes in place.
+//
+// A query string still works, because it is the host's: /?peer=…&project=… is
+// how iOS pushes a screen and how an external link names one, and both of those
+// are a load whatever this does.
+//
+// The browser is still not a screen the poll may redraw — a repaint while
+// somebody is reading would put them back at the front page.
+async function documentsScreen(route) {
+  const params = documentParams(route);
   const peer = params.get("peer");
   const projectID = params.get("project");
 
@@ -478,6 +482,16 @@ async function documentsScreen() {
     title: "Documentation",
     body: [renderProjectList(await bridge.projects(peer), peer)],
   };
+}
+
+// documentParams is where the doc browser is, from the fragment when the shell
+// put it there and from the query string when a host or an external link did.
+function documentParams(route) {
+  if (route && route.id) {
+    return new URLSearchParams(route.id);
+  }
+
+  return new URLSearchParams(location.search);
 }
 
 // parseRoute reads the screen out of the address.

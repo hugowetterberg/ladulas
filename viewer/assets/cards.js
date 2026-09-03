@@ -9,7 +9,7 @@
 
 import { el, append, facts, warnings, section } from "./dom.js";
 import { renderDiff, attachDiffFetch } from "./diff.js";
-import { projectURL } from "./projects.js";
+import { documentsRoute } from "./projects.js";
 
 export function renderCard(request) {
   const root = el("div", "card");
@@ -161,7 +161,7 @@ function renderProjectNote(project) {
   );
 
   open.onclick = () => {
-    location.href = projectURL(project.fingerprint, project.projectId);
+    location.hash = documentsRoute(project.fingerprint, project.projectId);
   };
 
   node.append(open);
