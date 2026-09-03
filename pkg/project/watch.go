@@ -398,26 +398,26 @@ func (w *Watcher) event(event fsnotify.Event) {
 	// A new directory is a new place documents can appear in, and it has to be
 	// watched before anything is written into it — which is racy by nature, so
 	// it is also walked, to pick up what landed in the gap.
-	if event.Has(fsnotify.Create) {
-		if info, err := os.Lstat(event.Name); err == nil && info.IsDir() {
-			if hidden(info.Name()) || skipped[info.Name()] {
-				return
-			}
+	if event.Has(fsnotify.Create) && isDirectory(event.Name) {
+		name := filepath.Base(event.Name)
 
-			if err := w.watchDir(entry, event.Name); err != nil {
-				w.log.Debug("a new directory could not be watched",
-					"path", event.Name, "error", err.Error())
+		if hidden(name) || skipped[name] {
+			return
+		}
 
-				return
-			}
-
-			// Anything written into it between its creation and the watch
-			// landing produced no event anybody heard, so the directory is
-			// walked for what is already in it.
-			w.sweepNew(entry, event.Name)
+		if err := w.watchDir(entry, event.Name); err != nil {
+			w.log.Debug("a new directory could not be watched",
+				"path", event.Name, "error", err.Error())
 
 			return
 		}
+
+		// Anything written into it between its creation and the watch landing
+		// produced no event anybody heard, so the directory is walked for what
+		// is already in it.
+		w.sweepNew(entry, event.Name)
+
+		return
 	}
 
 	rel, err := filepath.Rel(entry.root, event.Name)
@@ -456,9 +456,11 @@ func (w *Watcher) sweepNew(entry *watched, dir string) {
 		path := filepath.Join(dir, item.Name())
 
 		if item.IsDir() {
-			if err := w.watchDir(entry, path); err == nil {
-				w.sweepNew(entry, path)
+			if err := w.watchDir(entry, path); err != nil {
+				continue
 			}
+
+			w.sweepNew(entry, path)
 
 			continue
 		}
@@ -475,9 +477,13 @@ func (w *Watcher) sweepNew(entry *watched, dir string) {
 // withinGitDir reports whether a path is inside the repository's own directory.
 func withinGitDir(entry *watched, path string) bool {
 	rel, err := filepath.Rel(entry.gitDir, path)
+	if err != nil {
+		// No relative path between the two means the path is not under the git
+		// directory in any sense this cares about.
+		return false
+	}
 
-	return err == nil && rel != ".." && !filepath.IsAbs(rel) &&
-		!hasDotDotPrefix(rel)
+	return rel != ".." && !filepath.IsAbs(rel) && !hasDotDotPrefix(rel)
 }
 
 func hasDotDotPrefix(rel string) bool {
@@ -647,8 +653,7 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	//
 	// A document git has never heard of has nothing to compare against and is
 	// recorded, which is right: a new file is a real edit.
-	if committed, err := entry.repo.ContentAt(head, rel); err == nil &&
-		string(committed) == string(body) {
+	if sameAsCommitted(entry.repo, head, rel, body) {
 		w.signalSettled(entry.id, rel, false)
 
 		return
@@ -672,6 +677,32 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	}
 
 	w.signalSettled(entry.id, rel, recorded)
+}
+
+// isDirectory reports whether a path is one, and false for anything it cannot
+// find out about — which for a Create event means a file, and is handled as
+// one.
+func isDirectory(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+
+	return info.IsDir()
+}
+
+// sameAsCommitted reports whether the working tree holds exactly what the
+// commit does.
+//
+// A document git has never heard of returns false, which is right: a new file
+// is a real edit and there is nothing to compare it against.
+func sameAsCommitted(repo *Repository, head, rel string, body []byte) bool {
+	committed, err := repo.ContentAt(head, rel)
+	if err != nil {
+		return false
+	}
+
+	return string(committed) == string(body)
 }
 
 // announce hands an event to whoever asked for them, if anybody did.

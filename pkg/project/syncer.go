@@ -129,6 +129,14 @@ func (b *Browser) drain(
 					"project was")
 		}
 
+		// A path is checked once, here, for both kinds. It is a distrusted
+		// machine's string about to become a name in this cache, and one that
+		// would leave it is dropped rather than refused: a single bad entry
+		// should not cost the approver the rest of its sync.
+		if CheckPath(event.GetPath()) != nil {
+			continue
+		}
+
 		switch event.GetKind() {
 		case ladulasv1.SyncChangeKind_SYNC_CHANGE_KIND_PUT:
 			if err := b.put(
@@ -140,10 +148,6 @@ func (b *Browser) drain(
 			summary.Bytes += int64(len(event.GetContent()))
 
 		case ladulasv1.SyncChangeKind_SYNC_CHANGE_KIND_REMOVE:
-			if CheckPath(event.GetPath()) != nil {
-				continue
-			}
-
 			if err := b.cache.Forget(
 				fingerprint, projectID, event.GetPath()); err != nil {
 				return err
@@ -168,23 +172,17 @@ func (b *Browser) drain(
 
 // put keeps one document the publisher sent.
 //
-// The record is built from the path this side checked rather than from what
-// came back, apart from the one fact only the publisher has. A path is the
-// field a compromised requester would want to choose, and it does not get to
-// choose the name a page is kept under — the same rule File follows.
+// The path has already been checked by drain, which is the one place it is
+// checked for either kind of change. The record is built from it rather than
+// from what came back, apart from the one fact only the publisher has: a path
+// is the field a compromised requester would want to choose, and it does not
+// get to choose the name a page is kept under — the same rule File follows.
 func (b *Browser) put(
 	publisher *Publisher, fingerprint string,
 	publication *ladulasv1.Publication,
 	event *ladulasv1.SyncProjectEvent,
 ) error {
 	name := event.GetPath()
-
-	if err := CheckPath(name); err != nil {
-		// A path that would leave the cache is dropped rather than refused: one
-		// bad entry should not cost the approver the rest of its sync.
-		return nil //nolint:nilerr // a bad path is skipped, not fatal
-	}
-
 	body := event.GetContent()
 
 	entry := &ladulasv1.ProjectEntry{

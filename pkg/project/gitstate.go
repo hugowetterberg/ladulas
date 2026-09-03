@@ -155,9 +155,12 @@ var inProgress = []struct {
 // stopped working, and this is the line that tells them apart.
 func (r *Repository) Busy() (string, bool) {
 	for _, mark := range inProgress {
-		if _, err := os.Lstat(filepath.Join(r.gitDir, mark.path)); err == nil {
-			return mark.name, true
+		_, err := os.Lstat(filepath.Join(r.gitDir, mark.path))
+		if err != nil {
+			continue
 		}
+
+		return mark.name, true
 	}
 
 	return "", false

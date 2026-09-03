@@ -139,10 +139,7 @@ func (s *peerService) DocumentVersions(
 
 	// The document as it stands, hashed here so that a reader can answer "is
 	// what I am holding current" without another call.
-	if body, _, err := project.ReadFile(root, rel, serving); err == nil {
-		digest := sha256.Sum256(body)
-		response.CurrentDigest = digest[:]
-	}
+	response.CurrentDigest = currentDigest(root, rel, serving)
 
 	repo, repoErr := project.OpenRepository(root)
 
@@ -182,6 +179,23 @@ func (s *peerService) DocumentVersions(
 	}
 
 	return connect.NewResponse(response), nil
+}
+
+// currentDigest is the document as it stands, or nothing.
+//
+// A document that cannot be read right now leaves the field empty rather than
+// failing the call: the version list is still worth having, and a reader that
+// gets no digest simply cannot tell whether what it holds is current — which is
+// a smaller loss than being told the history does not exist.
+func currentDigest(root, rel string, serving project.Serving) []byte {
+	body, _, err := project.ReadFile(root, rel, serving)
+	if err != nil {
+		return nil
+	}
+
+	digest := sha256.Sum256(body)
+
+	return digest[:]
 }
 
 // snapshotVersions is the working-tree half, newest first.

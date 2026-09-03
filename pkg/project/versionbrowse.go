@@ -77,7 +77,7 @@ func (b *Browser) Versions(
 			&ladulasv1.DocumentVersionsRequest{
 				ProjectId:   projectID,
 				Path:        name,
-				CommitLimit: int32(limit), //nolint:gosec // a caller's page size
+				CommitLimit: commitLimitOnTheWire(limit),
 			}))
 		if err != nil {
 			return err //nolint:wrapcheck // the source wraps it with the address
@@ -99,6 +99,23 @@ func (b *Browser) Versions(
 	}
 
 	return out, nil
+}
+
+// commitLimitOnTheWire bounds a caller's limit into what the field can carry.
+//
+// The publisher clamps it again on arrival, so this is not the rail that
+// matters — it is that a limit nobody sanity-checked becomes a negative number
+// on the wire, which is a different request from the one the caller made.
+func commitLimitOnTheWire(limit int) int32 {
+	if limit <= 0 {
+		return 0
+	}
+
+	if limit > MaxCommitLimit {
+		return MaxCommitLimit
+	}
+
+	return int32(limit) //nolint:gosec // bounded by MaxCommitLimit just above
 }
 
 // ErrNoSuchVersion is returned for a version the publisher no longer has, which
