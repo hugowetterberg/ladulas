@@ -52,6 +52,48 @@ const REFRESH_MS = 4000;
 // back is a text field drawn into a screen in this set.
 const LIVE = new Set(["home", "keys", "activity", "settings"]);
 
+// What each live screen actually draws.
+//
+// The poll used to compare the whole instance and repaint when any byte of it
+// moved, which is how a peer's last-seen ticking redrew the Keys screen — a
+// screen that does not mention peers. With a link flapping, as one does
+// whenever a machine is asleep or a route is blackholed, that is a repaint
+// every few seconds: the pane is replaced, and what goes with it is the scroll
+// position, the focus, and any panel somebody had open. The flash is the
+// visible half of it and the lost state is the worse half.
+//
+// So a screen is repainted when what it draws has changed. A name missing from
+// here is compared whole, which is the safe way round: a new screen redraws too
+// often rather than not at all, and the fix is to add its fields.
+//
+// Keep this next to the screens. A screen that grows a field and is not added
+// here stops updating for it, which is the one failure this arrangement has.
+const DRAWS = {
+  home: [
+    "delegations", "grants", "offers", "pairings", "peers", "pending",
+  ],
+  keys: ["borrowed", "endorsements", "keys", "offers", "retractions"],
+  activity: ["recent"],
+  settings: ["fingerprint", "locations", "lock", "name", "settings"],
+};
+
+// screenStamp is what one screen draws, as something comparable.
+function screenStamp(name, instance) {
+  const fields = DRAWS[name];
+
+  if (!fields) {
+    return JSON.stringify(instance);
+  }
+
+  const drawn = {};
+
+  for (const field of fields) {
+    drawn[field] = instance[field];
+  }
+
+  return JSON.stringify(drawn);
+}
+
 // The store states that leave nothing else worth drawing (§10). A locked store
 // still has its keys, still lists its peers and can still be approved for by a
 // paired approver, so it is an ordinary screen with an Unlock button on it; these
@@ -147,11 +189,26 @@ class Shell {
     this.stamp = stamp;
     this.instance = instance;
 
+    // The sidebar is drawn from the lock, the waiting requests and the
+    // machines, and is small enough that redrawing it whenever any of them
+    // moves costs nothing anybody can see.
     this.paintSidebar();
 
-    if (first || LIVE.has(this.route.name)) {
+    if (first) {
       this.paintPane();
+
+      return;
     }
+
+    if (!LIVE.has(this.route.name)) {
+      return;
+    }
+
+    if (screenStamp(this.route.name, instance) === this.painted) {
+      return;
+    }
+
+    this.paintPane();
   }
 
   // The handle the screens are given: what to draw from, and the few things they
@@ -274,6 +331,11 @@ class Shell {
     const token = {};
 
     this.drawing = token;
+
+    // What this paint is of, so that the next poll can tell whether anything
+    // it draws has moved. Recorded here rather than in poll because a route
+    // change paints without going through one.
+    this.painted = screenStamp(this.route.name, this.instance || {});
 
     if (this.clock) {
       clearInterval(this.clock);
