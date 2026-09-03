@@ -14,6 +14,7 @@
 // that have a reader, and says that is what they are.
 
 import { el, append, facts } from "./dom.js";
+import * as ui from "./ui.js";
 import { bridge } from "./bridge.js";
 import { renderDocument } from "./markdown.js";
 import { attachOutline } from "./outline.js";
@@ -158,6 +159,13 @@ export async function renderProject(
   fingerprint, projectID, file, fragment, from) {
   const root = el("div", "project");
 
+  // What the (i) is looking at when somebody opens it. It is a box rather
+  // than an argument because the button is built once and the page under it
+  // changes every time the reader picks another file or another version —
+  // and the details have to be the ones on screen, not the ones that were
+  // there when the screen was drawn.
+  const showing = { facts: null, file: file, page: null };
+
   // The list of documents, which is both what the picker filters and how the
   // default one is chosen.
   //
@@ -173,10 +181,12 @@ export async function renderProject(
     append(root,
       el("p", "warning", "Could not read the project: " + error.message));
 
-    return root;
+    return { node: root, actions: [] };
   }
 
   const files = answer.documents || [];
+
+  showing.facts = answer;
 
   const chosen = file || defaultDocument(files);
 
@@ -189,13 +199,61 @@ export async function renderProject(
     reader.append(el("p", "empty",
       "This project has no documents this machine will serve."));
 
-    return root;
+    return { node: root, actions: [detailsButton(showing, fingerprint)] };
   }
 
-  await showDocument(
-    reader, bar, files, fingerprint, projectID, chosen, fragment, from);
+  showing.file = chosen;
 
-  return root;
+  await showDocument(
+    reader, bar, files, fingerprint, projectID, chosen, fragment, from, showing);
+
+  return { node: root, actions: [detailsButton(showing, fingerprint)] };
+}
+
+// detailsButton is the (i) in the title bar, and what it opens.
+//
+// The provenance line used to sit above the document — "Kept here, last updated
+// 3 Sep 18:22, at efbc9222c2" — where it was the first thing a reader met and
+// the least interesting thing on the screen. It is not a warning and it is not
+// news; it is the answer to a question somebody asks occasionally and has to be
+// able to ask, which core §6 requires. So it moves to where the phone already
+// puts it, beside the rest of the machine's account of itself.
+//
+// Two things stay out in the open, because they change what the words in front
+// of the reader mean rather than describing where they came from: that the
+// document was cut short, and that it is marked against another version.
+function detailsButton(showing, fingerprint) {
+  return ui.action("info", "Technical details",
+    () => detailsSheet(showing, fingerprint));
+}
+
+function detailsSheet(showing, fingerprint) {
+  const about = showing.facts || {};
+  const page = showing.page || {};
+
+  const sheet = ui.sheet("Details",
+    facts([
+      { label: "File", value: showing.file, mono: true },
+      { label: "Project", value: about.name },
+      { label: "Published by", value: about.peer },
+      { label: "Repository", value: about.path, mono: true },
+      { label: "Remote", value: about.originUrl, mono: true },
+      { label: "Branch", value: about.branch },
+      { label: "Commit", value: about.commit, mono: true },
+    ]),
+    ui.note("Everything here is the publishing machine's own account of "
+      + "itself. Nothing is checked against anything, and none of it says "
+      + "anything about any signature."));
+
+  const body = sheet.querySelector(".sheet-body");
+
+  body.append(ui.heading("Where this came from"));
+
+  append(body,
+    about.state ? el("p", "note-line", about.state) : null,
+    page.note ? el("p", "note-line kept", page.note) : null,
+    page.error ? el("p", "note-line warning", page.error) : null,
+    facts([{ label: "Machine", value: fingerprint, mono: true }]));
 }
 
 // defaultDocument is what opening a project shows before anybody has chosen.
@@ -244,7 +302,7 @@ function segments(path) {
 }
 
 async function showDocument(
-  reader, bar, files, fingerprint, projectID, file, fragment, from) {
+  reader, bar, files, fingerprint, projectID, file, fragment, from, showing) {
   // The document is redrawn in place when the reader picks a version to compare
   // against, so what changes lives in its own container — and the corner dock
   // goes inside it, which is what keeps it from outliving the screen.
@@ -273,6 +331,10 @@ async function showDocument(
       return;
     }
 
+    // What the (i) reports, kept current: the reader may have switched file or
+    // picked a version to compare against since the button was made.
+    showing.page = page;
+
     // A link inside a document keeps the reader in the project, because
     // following one is reading on rather than starting again.
     const article = renderDocument(page, (target, anchor) => {
@@ -300,7 +362,6 @@ async function showDocument(
     append(body,
       comparedBanner(page, () => draw(null)),
       truncatedBanner(page),
-      page.note ? el("p", "note-line kept", page.note) : null,
       article);
 
     body.append(withChanges(attachOutline(article), article));

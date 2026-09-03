@@ -529,17 +529,17 @@ async function documentsScreen(route, instance) {
   const from = params.get("from");
 
   if (peer && projectID) {
+    const reader = await renderProject(
+      peer, projectID, params.get("file"), params.get("frag"), from);
+
     return {
       title: "Documentation",
       wide: true,
       back: readerBack(from, peer, instance),
-      body: [await renderProject(
-        peer,
-        projectID,
-        params.get("file"),
-        params.get("frag"),
-        from,
-      )],
+      // The (i) is the reader's, not the shell's: it reports the document on
+      // screen, and only the reader knows which that is.
+      actions: reader.actions,
+      body: [reader.node],
     };
   }
 

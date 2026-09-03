@@ -147,15 +147,15 @@ type ProjectPageView struct {
 	CompareError string `json:"compareError,omitempty"`
 	// Truncated says this is the start of a longer document: it is over the
 	// publisher's per-file cap, so what was sent was cut back to a line ending
-	// (decision AP).
+	// (decision AP). Shown and FullSize are the two numbers a reader wants,
+	// which is how much is here against how much there is.
 	//
 	// It is said rather than left to be noticed. A document that simply stops
-	// two thirds of the way through looks like one somebody has not finished
-	// writing, and the reader would go looking for the rest of a sentence that
-	// is on another machine.
-	//
-	// TruncatedNote is the sentence, composed here for the same reason pageNote
-	// is: the viewer renders prose and does not compose it.
+	// two thirds of the way through looks like a document somebody has not
+	// finished writing, and the reader would go looking for the rest of a
+	// sentence that is on the other machine.
+	// TruncatedNote is that sentence, composed here for the same reason
+	// pageNote is: the viewer renders prose and does not compose it.
 	Truncated     bool   `json:"truncated,omitempty"`
 	TruncatedNote string `json:"truncatedNote,omitempty"`
 }
@@ -508,8 +508,9 @@ func (s *Session) handleProjectDocuments(w http.ResponseWriter, r *http.Request)
 	held := s.opts.Projects.Documents(fingerprint, id)
 	if len(held) > 0 {
 		writeJSON(w, http.StatusOK, ProjectDocumentsView{
-			Documents: held,
-			Kept:      true,
+			ProjectView: s.projectFacts(fingerprint, id),
+			Documents:   held,
+			Kept:        true,
 		})
 
 		return
@@ -527,6 +528,13 @@ func (s *Session) handleProjectDocuments(w http.ResponseWriter, r *http.Request)
 
 	view := ProjectDocumentsView{Live: listing.Live, Error: listing.Err}
 
+	switch {
+	case listing.Publisher != nil:
+		view.ProjectView = projectView(listing.Publisher)
+	default:
+		view.ProjectView = s.projectFacts(fingerprint, id)
+	}
+
 	for _, entry := range listing.Entries {
 		if entry.GetDirectory() || !entry.GetReadable() {
 			continue
@@ -538,8 +546,16 @@ func (s *Session) handleProjectDocuments(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, view)
 }
 
-// ProjectDocumentsView is the picker's list.
+// ProjectDocumentsView is the picker's list, and the reader's account of what
+// it is showing.
+//
+// The facts ride along because the reader asks for this once when it opens a
+// project and would otherwise need a second call to answer "which commit is
+// this README from" — the question core §6 requires be answerable, and the one
+// that makes documentation worth reading beside a signing request.
 type ProjectDocumentsView struct {
+	ProjectView
+
 	Documents []string `json:"documents"`
 	// Kept says the list came from what is held here rather than from the
 	// publisher, which is the ordinary case and the fast one.
@@ -675,6 +691,18 @@ func (s *Session) writeListing(
 	view.Error = listing.Err
 
 	writeJSON(w, http.StatusOK, view)
+}
+
+// projectFacts is the publishing machine's account of a project, from the copy
+// held here. It is what the (i) shows, and it is the same account the project
+// list shows, so the two never disagree.
+func (s *Session) projectFacts(fingerprint, id string) ProjectView {
+	cached, ok := s.opts.Projects.Cached(fingerprint, id)
+	if !ok {
+		return ProjectView{Fingerprint: fingerprint, ProjectID: id}
+	}
+
+	return projectView(cached)
 }
 
 // BrowseTimeout bounds a call made while somebody is looking at a screen.
