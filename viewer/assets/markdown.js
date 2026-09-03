@@ -55,7 +55,39 @@ function jumpToAnchor(anchors, anchor) {
   return true;
 }
 
+// changeClass is the mark Go's Compare left, as a class name.
+//
+// The two names are the only values it will ever be — anything else is a field
+// this bundle does not understand, and drawing an unknown mark as no mark at
+// all is the right failure: the document is still the document.
+function changeClass(change) {
+  if (change === "added") {
+    return "changed-added";
+  }
+
+  if (change === "removed") {
+    return "changed-removed";
+  }
+
+  return null;
+}
+
 function renderBlock(block, context) {
+  const node = renderBlockBody(block, context);
+
+  // A block Compare marked carries it on the block itself, and Go has already
+  // put the same mark on everything inside it — so nothing here has to work out
+  // whether nested content inherited one.
+  const marked = node && changeClass(block.change);
+
+  if (marked) {
+    node.classList.add(marked);
+  }
+
+  return node;
+}
+
+function renderBlockBody(block, context) {
   switch (block.kind) {
     case "heading":
       return renderHeading(block, context);
@@ -99,6 +131,18 @@ function renderInline(node, block, context) {
 }
 
 function renderSpan(span, context) {
+  const node = renderSpanBody(span, context);
+
+  const marked = changeClass(span.change);
+
+  if (marked) {
+    node.classList.add(marked);
+  }
+
+  return node;
+}
+
+function renderSpanBody(span, context) {
   switch (span.kind) {
     case "code":
       return el("code", null, span.text);

@@ -17,6 +17,24 @@ import { el, append, facts, section } from "./dom.js";
 import { bridge } from "./bridge.js";
 import { renderDocument } from "./markdown.js";
 import { attachOutline } from "./outline.js";
+import { attachChanges } from "./changes.js";
+
+// withChanges puts the change navigator above the outline's control in the
+// same corner stack, when the document has changes to navigate.
+//
+// Prepended rather than appended because the stack runs down the screen: the
+// outline's button stays where a thumb has learned to find it, and the new one
+// sits above it. It returns the dock either way, so a document nobody has
+// refreshed is exactly what it was.
+function withChanges(dock, article) {
+  const changes = attachChanges(article);
+
+  if (changes) {
+    dock.prepend(changes.panel, changes.toggle);
+  }
+
+  return dock;
+}
 
 // projectURL is how every way in names a project: the peer that publishes it
 // and the identifier both ends derive (§6). Nothing here invents a handle, so a
@@ -393,8 +411,9 @@ async function showDocument(
   );
 
   // The way around a long file, in the corner a thumb reaches: the headings,
-  // and a search over the whole of it.
-  document.body.append(attachOutline(article));
+  // and a search over the whole of it — with the changes above them when there
+  // are any (decision AP).
+  document.body.append(withChanges(attachOutline(article), article));
 
   land(article, fragment);
 }
@@ -440,7 +459,7 @@ export async function renderReader(fingerprint, projectID, file, fragment) {
 
   append(root, page.note ? el("p", "note-line kept", page.note) : null, article);
 
-  document.body.append(attachOutline(article));
+  document.body.append(withChanges(attachOutline(article), article));
 
   land(article, fragment);
 

@@ -1551,3 +1551,213 @@ button.sheet-close .icon { width: 15px; height: 15px; }
 /* The first heading in a sheet has the header above it and needs no air of its
    own; the ones after it separate the parts of the form. */
 .sheet-body > .section-label:first-child { margin-top: 0; }
+
+/* Change tracking in a refreshed document (decision AP).
+ *
+ * The two marks reuse the diff's own tokens rather than introducing colours,
+ * so a change in a document and a change in a commit look like the same kind
+ * of thing — which they are. Both are defined in the light and dark blocks
+ * above already.
+ *
+ * Added content is a highlighter wash rather than coloured text: the words are
+ * new but they are still the document, and recolouring them would make the
+ * page harder to read for a reason the reader did not ask for. Removed content
+ * is struck through and dimmed, because it is the only content on the screen
+ * that is not there any more. */
+.changed-added {
+  background: var(--added-bg);
+  box-shadow: 0 0 0 1px var(--added-bg);
+  border-radius: 2px;
+}
+
+.changed-removed {
+  text-decoration: line-through;
+  text-decoration-color: var(--removed);
+  color: var(--text-dim);
+}
+
+/* A removed block gets the wash as well, so that a deleted paragraph is
+ * findable by looking rather than only by reading the strikethrough. */
+p.changed-removed,
+h1.changed-removed,
+h2.changed-removed,
+h3.changed-removed,
+h4.changed-removed,
+h5.changed-removed,
+h6.changed-removed,
+blockquote.changed-removed,
+pre.changed-removed,
+ul.changed-removed,
+ol.changed-removed,
+table.changed-removed {
+  background: var(--removed-bg);
+  border-radius: 2px;
+}
+
+p.changed-added,
+h1.changed-added,
+h2.changed-added,
+h3.changed-added,
+h4.changed-added,
+h5.changed-added,
+h6.changed-added,
+blockquote.changed-added,
+pre.changed-added,
+ul.changed-added,
+ol.changed-added,
+table.changed-added {
+  box-shadow: none;
+}
+
+/* The corner control, above the outline's in the same stack. */
+.changes-toggle {
+  width: 48px;
+  height: 48px;
+  border-radius: 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 6px 20px var(--shadow);
+  align-self: flex-end;
+}
+
+/* A plus and a minus drawn out of elements, for the reason the outline's three
+ * bars are: a glyph would depend on a font the platform may not have. */
+.changes-plus,
+.changes-minus {
+  position: relative;
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.changes-plus {
+  background: var(--added);
+}
+
+.changes-plus::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: -7px;
+  width: 2px;
+  height: 16px;
+  border-radius: 1px;
+  background: var(--added);
+}
+
+.changes-minus {
+  background: var(--removed);
+}
+
+.changes-panel {
+  display: none;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(60vh, 460px);
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 30px var(--shadow);
+}
+
+.changes-panel.open {
+  display: flex;
+}
+
+.changes-count {
+  margin: 0 0 8px;
+  font-size: 0.85em;
+  color: var(--text-dim);
+}
+
+.changes-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.changes-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+.changes-group-heading,
+.changes-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.changes-group-heading {
+  font-weight: 600;
+}
+
+.changes-group-heading:hover,
+.changes-line:hover {
+  background: var(--bg-sunken);
+}
+
+.changes-line {
+  padding-left: 16px;
+}
+
+.changes-mark {
+  flex: none;
+  width: 1ch;
+  font-variant-numeric: tabular-nums;
+}
+
+.changes-line.changed-added .changes-mark { color: var(--added); }
+.changes-line.changed-removed .changes-mark { color: var(--removed); }
+
+/* The line's own text carries no wash: a panel of highlighter bars is harder
+ * to read than a list, and the mark in front of it already says which it is.
+ * The strikethrough stays, because it is the one that says "gone". */
+.changes-line.changed-added {
+  background: none;
+  box-shadow: none;
+}
+
+.changes-line.changed-removed {
+  background: none;
+  color: var(--text-dim);
+}
+
+.changes-line.changed-removed .changes-text {
+  text-decoration: line-through;
+  text-decoration-color: var(--removed);
+}
+
+.changes-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-heading {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-arrow {
+  color: var(--text-dim);
+}
