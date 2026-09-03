@@ -257,12 +257,20 @@ function segments(path) {
 async function showDocument(
   reader, bar, files, fingerprint, projectID, file, fragment) {
   // The document is redrawn in place when the reader picks a version to compare
-  // against, so what changes lives in its own container and the corner dock is
-  // tracked well enough to be replaced (decision AP).
+  // against, so what changes lives in its own container — and the corner dock
+  // goes inside it, which is what keeps it from outliving the screen.
+  //
+  // It used to be appended to document.body and taken down by hand — and that
+  // worked only because leaving a document was a page load, which took the
+  // whole window with it. Once leaving became a change of fragment the buttons
+  // stayed behind, floating over the next screen. Nothing here removes it now:
+  // it is a child of what gets replaced, so replacing that is the removal.
+  //
+  // It is position: fixed, and .pane sets no transform, filter, perspective or
+  // contain — none of which it may grow without moving the dock into the pane's
+  // corner instead of the window's.
   const body = el("div", "reader-body");
   reader.append(body);
-
-  let dock = null;
 
   async function draw(compare) {
     let page;
@@ -303,13 +311,7 @@ async function showDocument(
       page.note ? el("p", "note-line kept", page.note) : null,
       article);
 
-    if (dock) {
-      dock.remove();
-    }
-
-    dock = withChanges(attachOutline(article), article);
-
-    document.body.append(dock);
+    body.append(withChanges(attachOutline(article), article));
 
     land(article, fragment);
   }
@@ -353,8 +355,6 @@ export async function renderReader(fingerprint, projectID, file, fragment) {
   const body = el("div", "reader-body");
   root.append(body);
 
-  let dock = null;
-
   async function draw(compare) {
     const page = await bridge.projectFile(
       fingerprint, projectID, file, compare);
@@ -388,13 +388,7 @@ export async function renderReader(fingerprint, projectID, file, fragment) {
       page.note ? el("p", "note-line kept", page.note) : null,
       article);
 
-    if (dock) {
-      dock.remove();
-    }
-
-    dock = withChanges(attachOutline(article), article);
-
-    document.body.append(dock);
+    body.append(withChanges(attachOutline(article), article));
 
     land(article, fragment);
   }
