@@ -404,3 +404,42 @@ func TestBrowsingIsConfinedByTheKernel(t *testing.T) {
 		t.Errorf("the search followed a symlink out of the project: %+v", entries)
 	}
 }
+
+// A file picker filters on the reading side, so it has to be given the list.
+// An empty search used to answer nothing on the reasoning that it is not a
+// question; the walk was always bounded, and a caller that wants the whole
+// list is the caller the cap exists for.
+func TestAnEmptySearchIsEveryFile(t *testing.T) {
+	root := browsable(t)
+
+	all, _, _, err := project.Search(root, "", "", 0, project.DefaultServing)
+	if err != nil {
+		t.Fatalf("search everything: %v", err)
+	}
+
+	if len(all) == 0 {
+		t.Fatal("an empty search returned nothing")
+	}
+
+	var readme, main bool
+
+	for _, entry := range all {
+		switch entry.GetPath() {
+		case "README.md":
+			readme = true
+		case "main.go":
+			main = true
+		}
+
+		// The walk's own rules still apply: nothing hidden, nothing skipped.
+		if strings.HasPrefix(entry.GetPath(), ".") ||
+			strings.Contains(entry.GetPath(), "node_modules") {
+			t.Errorf("%s should not be in a search", entry.GetPath())
+		}
+	}
+
+	if !readme || !main {
+		t.Errorf("got %d entries, want at least README.md and main.go",
+			len(all))
+	}
+}

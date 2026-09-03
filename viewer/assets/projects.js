@@ -13,11 +13,13 @@
 // useless exactly when it is wanted — so what it shows instead is the pages
 // that have a reader, and says that is what they are.
 
-import { el, append, facts, section } from "./dom.js";
+import { el, append, facts } from "./dom.js";
 import { bridge } from "./bridge.js";
 import { renderDocument } from "./markdown.js";
 import { attachOutline } from "./outline.js";
 import { attachChanges } from "./changes.js";
+import { attachVersions, comparedBanner } from "./versions.js";
+import { attachPicker } from "./picker.js";
 
 // withChanges puts the change navigator above the outline's control in the
 // same corner stack, when the document has changes to navigate.
@@ -26,10 +28,12 @@ import { attachChanges } from "./changes.js";
 // outline's button stays where a thumb has learned to find it, and the new one
 // sits above it. It returns the dock either way, so a document nobody has
 // refreshed is exactly what it was.
-function withChanges(dock, article, page, source, onCompare) {
-  const changes = attachChanges(article, page, source, onCompare);
+function withChanges(dock, article) {
+  const changes = attachChanges(article);
 
-  dock.prepend(changes.panel, changes.toggle);
+  if (changes) {
+    dock.prepend(changes.panel, changes.toggle);
+  }
 
   return dock;
 }
@@ -126,261 +130,107 @@ function projectCard(project) {
 // renderProject is one project: where you are in it, what is there, and the
 // page being read.
 export async function renderProject(
-  fingerprint, projectID, path, file, query, fragment) {
-  const listing = query
-    ? await bridge.projectSearch(fingerprint, projectID, query)
-    : await bridge.projectDirectory(fingerprint, projectID, path);
-
+  fingerprint, projectID, file, fragment) {
   const root = el("div", "project");
 
-  root.append(header(listing, fingerprint, projectID, path, file, query));
+  // The list of documents, which is both what the picker filters and how the
+  // default one is chosen. An empty search is every file (decision AP).
+  let listing;
 
-  const body = el("div", "project-body");
-
-  body.append(entries(listing, fingerprint, projectID, file, query));
-
-  const reader = el("div", "project-reader");
-
-  body.append(reader);
-  root.append(body);
-
-  if (file) {
-    await showDocument(
-      reader, fingerprint, projectID, file, listing.dir, query, fragment);
-  } else {
-    reader.append(el("p", "empty", "Choose a file to read it."));
-  }
-
-  return root;
-}
-
-function header(listing, fingerprint, projectID, path, file, query) {
-  const root = el("div", "project-header");
-
-  const back = el("button", "back", "← All documentation");
-  back.onclick = () => {
-    location.href = "/?projects=1";
-  };
-
-  append(
-    root,
-    back,
-    el("h1", null, listing.name || "Documentation"),
-    el(
-      "p",
-      listing.live ? "provenance" : "provenance kept",
-      listing.state ||
-        "This is the publishing machine's account of itself. Nothing here is " +
-          "checked against anything.",
-    ),
-    facts([
-      { label: "Published by", value: listing.peer },
-      { label: "Repository", value: listing.path, asserted: true, mono: true },
-      { label: "Branch", value: listing.branch, asserted: true },
-      { label: "Commit", value: listing.commit, asserted: true, mono: true },
-    ]),
-    crumbs(fingerprint, projectID, path, file, query),
-    search(fingerprint, projectID, query),
-  );
-
-  if (listing.note) {
-    root.append(el("p", "note-line kept", listing.note));
-  }
-
-  if (listing.error) {
-    root.append(el("p", "warning", listing.error));
-  }
-
-  return root;
-}
-
-// crumbs is the way back up. A directory listing without one is a browser you
-// can only go deeper into.
-function crumbs(fingerprint, projectID, path, file, query) {
-  if (query) {
-    const back = el("nav", "crumbs");
-    const all = el("button", "crumb", "← Back to the files");
-
-    all.onclick = () => {
-      location.href = projectURL(fingerprint, projectID, { file });
-    };
-
-    back.append(all);
-
-    return back;
-  }
-
-  const nav = el("nav", "crumbs");
-  const parts = (path || "").split("/").filter(Boolean);
-
-  const root = el("button", "crumb", "/");
-  root.onclick = () => {
-    location.href = projectURL(fingerprint, projectID, { file });
-  };
-
-  nav.append(root);
-
-  let walked = "";
-
-  for (const part of parts) {
-    walked = walked ? walked + "/" + part : part;
-
-    const here = walked;
-    const crumb = el("button", "crumb", part);
-
-    crumb.onclick = () => {
-      location.href = projectURL(fingerprint, projectID, { path: here, file });
-    };
-
-    nav.append(el("span", "crumb-sep", "/"), crumb);
-  }
-
-  return nav;
-}
-
-// search is the question people actually have — where is the deployment runbook
-// — asked of the publisher rather than of a tree walked by hand (decision Q).
-function search(fingerprint, projectID, query) {
-  const form = el("form", "project-search");
-
-  const field = el("input", "search-field");
-  field.type = "search";
-  field.placeholder = "Find a file by name";
-  field.value = query || "";
-
-  const go = el("button", "search-go", "Search");
-  go.type = "submit";
-
-  form.onsubmit = (event) => {
-    event.preventDefault();
-
-    const wanted = field.value.trim();
-
-    location.href = wanted
-      ? projectURL(fingerprint, projectID, { q: wanted })
-      : projectURL(fingerprint, projectID);
-  };
-
-  append(form, field, go);
-
-  return form;
-}
-
-// entries is one page of a directory, or of a search.
-function entries(listing, fingerprint, projectID, current, query) {
-  const root = el("nav", "project-tree");
-
-  if (!(listing.entries || []).length) {
-    root.append(
-      el("p", "empty", query ? "Nothing matched." : "Nothing here."),
-    );
+  try {
+    listing = await bridge.projectSearch(fingerprint, projectID, "");
+  } catch (error) {
+    append(root,
+      backButton(),
+      el("p", "warning", "Could not read the project: " + error.message));
 
     return root;
   }
 
-  for (const entry of listing.entries) {
-    root.append(entryItem(entry, listing, fingerprint, projectID, current, query));
+  const files = (listing.entries || [])
+    .filter((entry) => entry.readable && !entry.directory)
+    .map((entry) => entry.path);
+
+  const chosen = file || defaultDocument(files);
+
+  const bar = el("div", "project-bar");
+  const reader = el("div", "project-reader");
+
+  append(root, backButton(), bar, reader);
+
+  if (!chosen) {
+    reader.append(el("p", "empty",
+      "This project has no documents this machine will serve."));
+
+    return root;
   }
 
-  if (listing.total > listing.entries.length || listing.next) {
-    root.append(
-      el(
-        "p",
-        "tree-count",
-        "Showing " + listing.entries.length + " of " + listing.total + ".",
-      ),
-    );
-  }
-
-  if (listing.next) {
-    const more = el("button", "tree-more", "Show more");
-
-    more.onclick = async () => {
-      more.disabled = true;
-      more.textContent = "Loading…";
-
-      const next = query
-        ? await bridge.projectSearch(fingerprint, projectID, query, listing.next)
-        : await bridge.projectDirectory(
-            fingerprint,
-            projectID,
-            listing.dir,
-            listing.next,
-          );
-
-      more.remove();
-
-      for (const entry of next.entries || []) {
-        root.append(
-          entryItem(entry, next, fingerprint, projectID, current, query),
-        );
-      }
-
-      if (next.next) {
-        root.append(more);
-        more.disabled = false;
-        more.textContent = "Show more";
-      }
-    };
-
-    root.append(more);
-  }
-
-  if (listing.truncated) {
-    root.append(
-      el(
-        "p",
-        "tree-count",
-        "The project was too large to search all of it.",
-      ),
-    );
-  }
+  await showDocument(
+    reader, bar, files, fingerprint, projectID, chosen, fragment);
 
   return root;
 }
 
-function entryItem(entry, listing, fingerprint, projectID, current, query) {
-  const label = entry.directory ? entry.name + "/" : entry.name;
-  const item = el("button", "tree-item", label);
+function backButton() {
+  const back = el("button", "back", "← All documentation");
 
-  if (entry.path === current) {
-    item.className = "tree-item current";
-  }
-
-  if (entry.directory) {
-    item.onclick = () => {
-      location.href = projectURL(fingerprint, projectID, { path: entry.path });
-    };
-
-    return item;
-  }
-
-  // A file the publisher will not hand over is still listed — hiding it would
-  // be lying about what the project contains — and says why it is not offered.
-  if (!entry.readable) {
-    item.className = "tree-item unreadable";
-    item.disabled = true;
-    item.title = entry.reason || "not offered by the publisher";
-
-    return item;
-  }
-
-  item.onclick = () => {
-    location.href = projectURL(fingerprint, projectID, {
-      path: listing.dir,
-      file: entry.path,
-      q: query,
-    });
+  back.onclick = () => {
+    location.href = "/?projects=1";
   };
 
-  return item;
+  return back;
+}
+
+// defaultDocument is what opening a project shows before anybody has chosen.
+//
+// README.md in the root first, because that is the document a project is
+// introduced by and the one somebody who clicked the project's name meant. Then
+// the first markdown file in the root, and only then further in — breadth
+// first, so a README one level down beats a stray note four levels down. A
+// project whose documentation is in docs/ is found on the second pass rather
+// than by guessing at directory names.
+export function defaultDocument(files) {
+  const documents = files.filter((path) => /\.(md|markdown)$/i.test(path));
+
+  if (!documents.length) {
+    return files[0] || "";
+  }
+
+  const readme = documents.find(
+    (path) => path.toLowerCase() === "readme.md");
+
+  if (readme) {
+    return readme;
+  }
+
+  // Shallowest first, then lexically, which is breadth first over a list of
+  // paths without having to build the tree it came from.
+  const sorted = documents.slice().sort((a, b) => {
+    const depth = segments(a) - segments(b);
+
+    return depth || a.localeCompare(b);
+  });
+
+  // A README anywhere beats a neighbour that merely sorts earlier, at the same
+  // depth: it is the document its directory is introduced by.
+  const shallowest = segments(sorted[0]);
+
+  const named = sorted.find(
+    (path) => segments(path) === shallowest &&
+      /(^|\/)readme\.(md|markdown)$/i.test(path));
+
+  return named || sorted[0];
+}
+
+function segments(path) {
+  return path.split("/").length;
 }
 
 async function showDocument(
-  reader, fingerprint, projectID, file, path, query, fragment) {
+  reader, bar, files, fingerprint, projectID, file, fragment) {
   // The document is redrawn in place when the reader picks a version to compare
-  // against, so the parts that change live in their own container and the dock
-  // is tracked well enough to be replaced (decision AP).
+  // against, so what changes lives in its own container and the corner dock is
+  // tracked well enough to be replaced (decision AP).
   const body = el("div", "reader-body");
   reader.append(body);
 
@@ -398,37 +248,38 @@ async function showDocument(
       return;
     }
 
-    // A link inside a document keeps the reader where they were in the project,
-    // because following one is reading on rather than starting again.
+    // A link inside a document keeps the reader in the project, because
+    // following one is reading on rather than starting again.
     const article = renderDocument(page, (target, anchor) => {
       location.href = projectURL(fingerprint, projectID, {
-        path,
         file: target,
-        q: query,
         frag: anchor,
       });
     });
 
+    // The top bar: what is being read, and what it is being read against.
+    bar.replaceChildren();
+
+    append(bar,
+      attachPicker(file, async () => files, (picked) => {
+        location.href = projectURL(fingerprint, projectID, { file: picked });
+      }),
+      attachVersions(page,
+        () => bridge.projectVersions(fingerprint, projectID, file),
+        (version) => draw(compareOf(version))));
+
     body.replaceChildren();
 
-    append(
-      body,
-      el("p", "path mono", page.path),
+    append(body,
+      comparedBanner(page, () => draw(null)),
       page.note ? el("p", "note-line kept", page.note) : null,
-      comparedNote(page),
-      article,
-    );
+      article);
 
     if (dock) {
       dock.remove();
     }
 
-    // The way around a long file, in the corner a thumb reaches: the headings
-    // and a search over the whole of it, with the versions above them.
-    dock = withChanges(
-      attachOutline(article), article, page,
-      () => bridge.projectVersions(fingerprint, projectID, file),
-      (version) => draw(compareOf(version)));
+    dock = withChanges(attachOutline(article), article);
 
     document.body.append(dock);
 
@@ -452,36 +303,6 @@ function compareOf(version) {
   return { digest: version.digest };
 }
 
-// comparedNote says what the marks in a document are against, above the
-// document rather than only inside the panel: a reader who scrolled away from
-// the corner should still be able to tell why the page is striped.
-function comparedNote(page) {
-  if (page.compareError) {
-    return el("p", "note-line",
-      "Showing the latest version: " + page.compareError);
-  }
-
-  if (!page.compared) {
-    return null;
-  }
-
-  const against = page.comparedTo || {};
-
-  if (against.commit) {
-    return el("p", "note-line",
-      "Marked against the commit " + against.commit.slice(0, 10) + ".");
-  }
-
-  return el("p", "note-line",
-    "Marked against an earlier saved version.");
-}
-
-// land scrolls a document that was arrived at through a link to a place in it.
-//
-// It is done after the article is in the page, because scrolling to something
-// that has not been laid out yet scrolls nowhere. A fragment naming a heading
-// this document does not have leaves the reader at the top, which is where they
-// would have been anyway.
 function land(article, fragment) {
   if (!fragment || !article.jumpToAnchor) {
     return;
@@ -522,21 +343,28 @@ export async function renderReader(fingerprint, projectID, file, fragment) {
       });
     });
 
+    // The version control rides above the document here rather than in a bar of
+    // its own: this mode is one document and nothing else (decision R), so
+    // there is no bar, and the host draws the file browsing natively.
+    const bar = el("div", "reader-bar");
+
+    bar.append(attachVersions(page,
+      () => bridge.projectVersions(fingerprint, projectID, file),
+      (version) => draw(compareOf(version))));
+
     body.replaceChildren();
 
     append(body,
+      bar,
+      comparedBanner(page, () => draw(null)),
       page.note ? el("p", "note-line kept", page.note) : null,
-      comparedNote(page),
       article);
 
     if (dock) {
       dock.remove();
     }
 
-    dock = withChanges(
-      attachOutline(article), article, page,
-      () => bridge.projectVersions(fingerprint, projectID, file),
-      (version) => draw(compareOf(version)));
+    dock = withChanges(attachOutline(article), article);
 
     document.body.append(dock);
 

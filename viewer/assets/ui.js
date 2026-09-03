@@ -26,6 +26,13 @@ const ICONS = {
     "M10.6 13.4 20 4m-2.6 2.6 2.4 2.4M14.4 9.6l2.4 2.4",
   ],
   clock: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z", "M12 7.5V12l3.5 2"],
+  // A clock with its arc left open and an arrow sweeping back into it: the
+  // version this document is being read against (decision AP).
+  rewind: [
+    "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
+    "M3 3v5h5",
+    "M12 7.5V12l3.5 2",
+  ],
   book: ["M4 19.5A2.5 2.5 0 0 1 6.5 17H20", "M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3z"],
   gear: [
     "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",

@@ -156,15 +156,19 @@ func ReadDir(
 // arbitrarily large, and a search that read all of it would hold a connection
 // open while somebody waited — so it says it stopped early rather than
 // reporting a partial answer as a complete one.
+//
+// **An empty query is every file, paged**, which is what a file picker needs:
+// one that matches on the reading side cannot filter what it has not been
+// given, and asking the publisher to match is the wrong shape for a picker that
+// narrows as somebody types. It used to answer nothing, on the reasoning that
+// an empty search is not a question — but the walk was always bounded and a
+// caller that wants the whole list is exactly the caller the cap exists for.
 func Search(
 	root, query, token string, size int, serving Serving,
 ) ([]*Entry, string, bool, error) {
 	serving = serving.withDefaults()
 
 	wanted := strings.ToLower(strings.TrimSpace(query))
-	if wanted == "" {
-		return nil, "", false, nil
-	}
 
 	confined, err := os.OpenRoot(root)
 	if err != nil {

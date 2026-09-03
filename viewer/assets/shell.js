@@ -468,9 +468,7 @@ async function documentsScreen() {
       body: [await renderProject(
         peer,
         projectID,
-        params.get("path"),
         params.get("file"),
-        params.get("q"),
         params.get("frag"),
       )],
     };
