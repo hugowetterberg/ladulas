@@ -290,3 +290,45 @@ func TestAStreamThatFailedIsReported(t *testing.T) {
 }
 
 var errRecvFailed = errors.New("the connection went away")
+
+// The picker's list, which is what opening a project draws before anything
+// else. It has to come from here rather than from the publisher: asking meant
+// walking somebody else's project over the network to be told what this
+// machine already had.
+func TestDocumentsAreAnsweredFromTheCache(t *testing.T) {
+	browser := syncBrowser(t)
+
+	if _, err := drainInto(t, browser,
+		header(),
+		put("docs/ops.md", "# Ops\n"),
+		put("README.md", "# One\n"),
+		put("docs/architecture.md", "# How\n")); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	got := browser.Documents(syncPeer, syncID)
+
+	want := []string{"README.md", "docs/architecture.md", "docs/ops.md"}
+
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+
+	// Sorted, because the cache keeps its pages newest-read first and that is
+	// not an order to show anybody a project in.
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("document %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// A project nothing has been synced of answers empty rather than failing, so
+// that the caller can fall back to asking the publisher on a first run.
+func TestDocumentsOfAnUnsyncedProjectIsEmpty(t *testing.T) {
+	browser := syncBrowser(t)
+
+	if got := browser.Documents(syncPeer, syncID); len(got) != 0 {
+		t.Errorf("got %v, want nothing", got)
+	}
+}

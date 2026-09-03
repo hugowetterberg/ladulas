@@ -134,11 +134,16 @@ export async function renderProject(
   const root = el("div", "project");
 
   // The list of documents, which is both what the picker filters and how the
-  // default one is chosen. An empty search is every file (decision AP).
-  let listing;
+  // default one is chosen.
+  //
+  // It comes from what is held here (decision AP). Asking the publisher meant
+  // walking its whole project over the network before anything could be drawn,
+  // which was slower than the one directory page this screen used to fetch —
+  // the list is already on this machine, because the sync put it there.
+  let answer;
 
   try {
-    listing = await bridge.projectSearch(fingerprint, projectID, "");
+    answer = await bridge.projectDocuments(fingerprint, projectID);
   } catch (error) {
     append(root,
       backButton(),
@@ -147,9 +152,7 @@ export async function renderProject(
     return root;
   }
 
-  const files = (listing.entries || [])
-    .filter((entry) => entry.readable && !entry.directory)
-    .map((entry) => entry.path);
+  const files = answer.documents || [];
 
   const chosen = file || defaultDocument(files);
 

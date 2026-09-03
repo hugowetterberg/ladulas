@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"connectrpc.com/connect"
@@ -739,6 +740,46 @@ func (p *projects) Read(
 	}
 
 	return out, nil
+}
+
+// Documents is the picker's list, and is answered out of what the daemon has
+// already read rather than by asking anybody (decision AP).
+//
+// It goes through ListPublications rather than a control call of its own,
+// because that answer already carries the cached projects and their pages —
+// the daemon holds the cache and the window does not, and one round trip over a
+// unix socket is what stands between them.
+func (p *projects) Documents(fingerprint, projectID string) []string {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := p.front.client.ListPublications(ctx, connect.NewRequest(
+		&ladulasv1.ListPublicationsRequest{}))
+	if err != nil {
+		return nil
+	}
+
+	for _, cached := range resp.Msg.GetCached() {
+		if cached.GetPeerFingerprint() != fingerprint {
+			continue
+		}
+
+		if cached.GetProject().GetProjectId() != projectID {
+			continue
+		}
+
+		out := make([]string, 0, len(cached.GetFiles()))
+
+		for _, file := range cached.GetFiles() {
+			out = append(out, file.GetPath())
+		}
+
+		sort.Strings(out)
+
+		return out
+	}
+
+	return nil
 }
 
 // Cached is what a card asks: somebody is waiting in front of it, so it is

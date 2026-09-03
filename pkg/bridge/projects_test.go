@@ -936,3 +936,15 @@ func (p *pagedProjects) Read(
 ) (*project.DocumentAt, error) {
 	return nil, project.ErrNoSuchFile
 }
+
+// Documents is the picker's list. Neither fake keeps one, so both answer
+// empty and the handler falls through to the live search — which is the
+// first-run path and the one worth exercising here.
+
+func (b *browsedProjects) Documents(_, _ string) []string {
+	return nil
+}
+
+func (p *pagedProjects) Documents(_, _ string) []string {
+	return nil
+}

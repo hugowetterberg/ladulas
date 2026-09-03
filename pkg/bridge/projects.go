@@ -62,6 +62,9 @@ type Projects interface {
 		ctx context.Context, fingerprint, projectID, path string,
 		digest []byte, commit string,
 	) (*project.DocumentAt, error)
+	// Documents is every document held here of a project, without dialling.
+	// Empty means nothing has been synced yet.
+	Documents(fingerprint, projectID string) []string
 }
 
 // ProjectView is one project in a listing.
@@ -466,6 +469,67 @@ func versionDigest(value string) ([]byte, error) {
 	}
 
 	return out, nil
+}
+
+// handleProjectDocuments is what a file picker offers: the documents held here,
+// answered without dialling anybody (decision AP).
+//
+// A live search is the fallback rather than the source. After a sync the cache
+// holds every document the publisher pushes, so the list is already here; going
+// to the publisher for it means walking somebody else's disk over a network to
+// be told what this machine could have said at once — which is what opening a
+// project was doing, and it was slower than the directory listing it replaced.
+func (s *Session) handleProjectDocuments(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
+		return
+	}
+
+	defer cancel()
+
+	fingerprint, id := where(r)
+
+	held := s.opts.Projects.Documents(fingerprint, id)
+	if len(held) > 0 {
+		writeJSON(w, http.StatusOK, ProjectDocumentsView{
+			Documents: held,
+			Kept:      true,
+		})
+
+		return
+	}
+
+	// Nothing synced yet — a project opened before the first sweep, or one
+	// whose publisher has never been reached. Ask, so that a first run is not
+	// an empty picker.
+	listing, err := s.opts.Projects.Search(ctx, fingerprint, id, "", "", 0)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+
+		return
+	}
+
+	view := ProjectDocumentsView{Live: listing.Live, Error: listing.Err}
+
+	for _, entry := range listing.Entries {
+		if entry.GetDirectory() || !entry.GetReadable() {
+			continue
+		}
+
+		view.Documents = append(view.Documents, entry.GetPath())
+	}
+
+	writeJSON(w, http.StatusOK, view)
+}
+
+// ProjectDocumentsView is the picker's list.
+type ProjectDocumentsView struct {
+	Documents []string `json:"documents"`
+	// Kept says the list came from what is held here rather than from the
+	// publisher, which is the ordinary case and the fast one.
+	Kept  bool   `json:"kept,omitempty"`
+	Live  bool   `json:"live,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // handleProjectVersions is what a document has been (decision AP).

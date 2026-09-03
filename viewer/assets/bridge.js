@@ -178,6 +178,13 @@ export const bridge = {
           commit: (compare || {}).commit,
         }),
     ),
+  // The picker's list, answered from what is held here rather than by walking
+  // the publisher's disk (decision AP).
+  projectDocuments: (fingerprint, projectID) =>
+    call(
+      "GET",
+      "/projects/documents" + where({ peer: fingerprint, project: projectID }),
+    ),
   projectVersions: (fingerprint, projectID, path) =>
     call(
       "GET",

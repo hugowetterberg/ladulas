@@ -705,6 +705,38 @@ func (b *Browser) keptSearch(
 	return listing
 }
 
+// Documents is every document this instance holds of a project, from the cache
+// and without dialling.
+//
+// It is what a file picker wants, and the reason it exists rather than reusing
+// Search: a search asks the publisher, which is right for a question about the
+// project — a directory listing is wider than what is served (§6), so only that
+// machine can answer it — and wrong for a list of things to open. After a sync
+// the cache holds every document the publisher pushes, which is exactly the set
+// a reader can be offered, and asking for it costs a walk of somebody else's
+// disk over a network to be told what is already here.
+//
+// Empty is a real answer and means nothing has been synced yet, which the
+// caller can tell from the length rather than from an error.
+func (b *Browser) Documents(fingerprint, projectID string) []string {
+	cached, err := b.cache.Find(fingerprint, projectID)
+	if err != nil {
+		return nil
+	}
+
+	out := make([]string, 0, len(cached.GetFiles()))
+
+	for _, file := range cached.GetFiles() {
+		out = append(out, file.GetPath())
+	}
+
+	// The cache keeps its pages newest-read first, which is not an order to
+	// show anybody a project in.
+	sort.Strings(out)
+
+	return out
+}
+
 // cachedPage is what is held here, and whether anything is.
 //
 // It is the boolean-returning shape rather than keptPage's error one because
