@@ -155,7 +155,7 @@ function projectCard(project) {
 // renderProject is one project: where you are in it, what is there, and the
 // page being read.
 export async function renderProject(
-  fingerprint, projectID, file, fragment) {
+  fingerprint, projectID, file, fragment, from) {
   const root = el("div", "project");
 
   // The list of documents, which is both what the picker filters and how the
@@ -171,7 +171,6 @@ export async function renderProject(
     answer = await bridge.projectDocuments(fingerprint, projectID);
   } catch (error) {
     append(root,
-      backButton(),
       el("p", "warning", "Could not read the project: " + error.message));
 
     return root;
@@ -184,7 +183,7 @@ export async function renderProject(
   const bar = el("div", "project-bar");
   const reader = el("div", "project-reader");
 
-  append(root, backButton(), bar, reader);
+  append(root, bar, reader);
 
   if (!chosen) {
     reader.append(el("p", "empty",
@@ -194,19 +193,9 @@ export async function renderProject(
   }
 
   await showDocument(
-    reader, bar, files, fingerprint, projectID, chosen, fragment);
+    reader, bar, files, fingerprint, projectID, chosen, fragment, from);
 
   return root;
-}
-
-function backButton() {
-  const back = el("button", "back", "← All documentation");
-
-  back.onclick = () => {
-    location.hash = documentsRoute("", "", { projects: "1" });
-  };
-
-  return back;
 }
 
 // defaultDocument is what opening a project shows before anybody has chosen.
@@ -255,7 +244,7 @@ function segments(path) {
 }
 
 async function showDocument(
-  reader, bar, files, fingerprint, projectID, file, fragment) {
+  reader, bar, files, fingerprint, projectID, file, fragment, from) {
   // The document is redrawn in place when the reader picks a version to compare
   // against, so what changes lives in its own container — and the corner dock
   // goes inside it, which is what keeps it from outliving the screen.
@@ -290,6 +279,7 @@ async function showDocument(
       location.hash = documentsRoute(fingerprint, projectID, {
         file: target,
         frag: anchor,
+        from,
       });
     });
 
@@ -298,7 +288,8 @@ async function showDocument(
 
     append(bar,
       attachPicker(file, async () => files, (picked) => {
-        location.hash = documentsRoute(fingerprint, projectID, { file: picked });
+        location.hash = documentsRoute(
+          fingerprint, projectID, { file: picked, from });
       }),
       attachVersions(page,
         () => bridge.projectVersions(fingerprint, projectID, file),

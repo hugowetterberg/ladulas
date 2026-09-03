@@ -416,7 +416,7 @@ class Shell {
       case "pair":
         return pairScreen(state);
       case "documents":
-        return documentsScreen(this.route);
+        return documentsScreen(this.route, this.instance);
       case "settings":
         return screens.settings(state);
       case "request":
@@ -522,20 +522,23 @@ async function requestScreen(state, id, go) {
 //
 // The browser is still not a screen the poll may redraw — a repaint while
 // somebody is reading would put them back at the front page.
-async function documentsScreen(route) {
+async function documentsScreen(route, instance) {
   const params = documentParams(route);
   const peer = params.get("peer");
   const projectID = params.get("project");
+  const from = params.get("from");
 
   if (peer && projectID) {
     return {
       title: "Documentation",
       wide: true,
+      back: readerBack(from, peer, instance),
       body: [await renderProject(
         peer,
         projectID,
         params.get("file"),
         params.get("frag"),
+        from,
       )],
     };
   }
@@ -544,6 +547,41 @@ async function documentsScreen(route) {
     title: "Documentation",
     body: [renderProjectList(await bridge.projects(peer), peer)],
   };
+}
+
+// readerBack is where leaving a document goes, and the way in is what decides.
+//
+// A document is reached from two places — the Documents section, and the page
+// of the machine that publishes it — and "back" has to mean the one this
+// reader actually used. A single fixed destination is wrong half the time, and
+// wrong in the way that is hardest to recover from: it puts somebody on a
+// screen they were never on and calls it going back.
+//
+// So the way in is written into the route beside the project and travels with
+// every move inside it. Picking another file or following a link must not
+// quietly change what leaving means, which is what carrying it in the route
+// rather than in a variable buys.
+//
+// The publisher is the machine whose page the reader came from — a machine
+// page lists only what that machine publishes — so the fingerprint already in
+// the route is the one to go back to, and only the name has to be looked up.
+// A route with no way in recorded, which is what an external link or a
+// bookmark is, goes to the Documents section: it is the destination that
+// exists whoever is asking.
+function readerBack(from, peer, instance) {
+  if (from === "peer") {
+    const peers = (instance || {}).peers || [];
+    const named = peers.find((candidate) => candidate.fingerprint === peer);
+
+    if (named && named.name) {
+      return {
+        label: named.name,
+        route: "peer/" + encodeURIComponent(peer),
+      };
+    }
+  }
+
+  return { label: "Documents", route: "documents" };
 }
 
 // documentParams is where the doc browser is, from the fragment when the shell

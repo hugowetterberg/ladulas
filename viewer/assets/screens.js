@@ -1143,7 +1143,10 @@ function projectRow(project) {
   return ui.row(project.live ? "project" : "project kept",
     project.projectId
       ? () => {
-          location.hash = documentsRoute(project.fingerprint, project.projectId);
+          // From here, leaving a document goes back to this machine rather
+          // than to the Documents section (readerBack in shell.js).
+          location.hash = documentsRoute(
+            project.fingerprint, project.projectId, { from: "peer" });
         }
       : null,
     ui.icon("book", "kind"),
