@@ -361,7 +361,9 @@ func (c *Cache) read(key string) (*ladulasv1.CachedProject, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNoSuchProject, key)
 	}
 
-	sealed, err := os.ReadFile(filepath.Join(c.dir, key, "record")) //nolint:gosec // a key checked to be one path element
+	var cached ladulasv1.CachedProject
+
+	err := unsealMessage(c.cipher, filepath.Join(c.dir, key, "record"), &cached)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrNoSuchProject, key)
 	}
@@ -370,67 +372,17 @@ func (c *Cache) read(key string) (*ladulasv1.CachedProject, error) {
 		return nil, fmt.Errorf("project: read %s: %w", key, err)
 	}
 
-	body, err := c.cipher.Unseal(sealed)
-	if err != nil {
-		return nil, fmt.Errorf("project: decrypt %s: %w", key, err)
-	}
-
-	var cached ladulasv1.CachedProject
-
-	if err := proto.Unmarshal(body, &cached); err != nil {
-		return nil, fmt.Errorf("project: parse %s: %w", key, err)
-	}
-
 	return &cached, nil
 }
 
 func (c *Cache) writeMessage(path string, msg proto.Message) error {
-	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("project: serialize: %w", err)
-	}
-
-	sealed, err := c.cipher.Seal(body)
-	if err != nil {
-		return fmt.Errorf("project: encrypt: %w", err)
-	}
-
-	if err := os.WriteFile(path, sealed, 0o600); err != nil {
-		return fmt.Errorf("project: write %s: %w", path, err)
-	}
-
-	return nil
+	return sealMessage(c.cipher, path, msg)
 }
 
 func (c *Cache) writeBlob(dir string, digest, content []byte) error {
-	sealed, err := c.cipher.Seal(content)
-	if err != nil {
-		return fmt.Errorf("project: encrypt a page: %w", err)
-	}
-
-	path := blobPath(dir, digest)
-
-	if err := os.WriteFile(path, sealed, 0o600); err != nil {
-		return fmt.Errorf("project: write %s: %w", path, err)
-	}
-
-	return nil
+	return sealBlob(c.cipher, dir, digest, content)
 }
 
 func (c *Cache) readBlob(dir string, digest []byte) ([]byte, error) {
-	sealed, err := os.ReadFile(blobPath(dir, digest)) //nolint:gosec // a path built from a digest
-	if err != nil {
-		return nil, err //nolint:wrapcheck // the caller matches on os.ErrNotExist
-	}
-
-	body, err := c.cipher.Unseal(sealed)
-	if err != nil {
-		return nil, fmt.Errorf("project: decrypt a page: %w", err)
-	}
-
-	return body, nil
-}
-
-func blobPath(dir string, digest []byte) string {
-	return filepath.Join(dir, "blobs", fmt.Sprintf("%x", digest))
+	return unsealBlob(c.cipher, dir, digest)
 }

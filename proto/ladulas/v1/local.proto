@@ -1223,6 +1223,53 @@ message CachedFile {
   string commit = 6;
 }
 
+// TrackedProject is the working-tree history this instance keeps for one
+// project it publishes (decision AP).
+//
+// It is the publisher's side of versions and it exists only for kinds the
+// policy snapshots — markdown, by default. A kind that is served but pulled has
+// its history in git and needs nothing here, which is what keeps this store the
+// size of a doc set rather than the size of a repository.
+//
+// Like the approver's cache it is content-addressed and sealed with the store
+// key, and for the same reason: what is in somebody's working tree before they
+// have committed it is at least as private as what they have.
+message TrackedProject {
+  string project_id = 1;
+  // Where the project is on this machine, as the publication records it. Kept
+  // here so that a store found on disk says which tree it describes without
+  // having to be read against the publications.
+  string path = 2;
+  repeated TrackedDocument documents = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// TrackedDocument is one document's working-tree states since the last commit.
+message TrackedDocument {
+  string path = 1;
+  // Oldest first, so that the newest is the last and a reader asking "what has
+  // changed since I read it" walks forward from where it was.
+  repeated DocumentSnapshot snapshots = 2;
+}
+
+// DocumentSnapshot is one working-tree state of one document.
+message DocumentSnapshot {
+  // SHA-256 of the contents, which is what the blob is stored under.
+  bytes digest = 1;
+  int64 size = 2;
+  google.protobuf.Timestamp taken_at = 3;
+  // The commit HEAD was at when this was taken.
+  //
+  // It is the whole of the garbage collection rule and the whole of the
+  // correctness rule, which are deliberately the same rule: a snapshot
+  // describes a working tree relative to a commit, so once HEAD moves it
+  // describes a tree that no longer exists and is neither served to a peer nor
+  // kept. Recorded per snapshot rather than once per project so that a snapshot
+  // which somehow outlives a sweep is detectably stale rather than silently
+  // adopted by the new HEAD.
+  string head = 4;
+}
+
 message PublishProjectRequest {
   // The directory to publish, as an absolute path. The caller resolves it:
   // the daemon's working directory is its own, not the one somebody typing
