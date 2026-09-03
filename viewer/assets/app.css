@@ -1609,6 +1609,26 @@ table.changed-added {
   box-shadow: none;
 }
 
+/* A code block is the one element in a document that paints a background of its
+ * own, and `.document pre.code` outweighs the wash above — two classes and an
+ * element against one class. The mark was in the cascade and losing, so an
+ * added code block rendered identically to an unchanged one, which is the one
+ * case where the reader most needs the difference: a changed command is the
+ * thing they are about to run.
+ *
+ * So it is restated at a weight that wins rather than by loosening the rule it
+ * lost to. The border is coloured with it, because a wash the same size as the
+ * block's own background is hard to see as a wash. */
+.document pre.code.changed-added {
+  background: var(--added-bg);
+  border-color: var(--added);
+}
+
+.document pre.code.changed-removed {
+  background: var(--removed-bg);
+  border-color: var(--removed);
+}
+
 /* The corner control, above the outline's in the same stack. */
 .changes-toggle {
   width: 48px;
