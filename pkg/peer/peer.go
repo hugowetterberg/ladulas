@@ -103,6 +103,12 @@ type Options struct {
 	// (§6). Optional: an instance that keeps none reads everything afresh, and
 	// reads nothing at all while it is offline.
 	Projects *project.Cache
+	// Serving is what this instance hands over of its own projects: the caps on
+	// one call, and which file kinds it offers, pushes and keeps versions of
+	// (decision AP). Optional, and the zero value is project.DefaultServing —
+	// which is markdown, pushed, with its working-tree versions tracked, and
+	// nothing else served at all.
+	Serving project.Serving
 	// Delegations holds both halves of decision P: the standing permissions
 	// approvers have granted this instance, and the record of the ones it has
 	// granted. Optional; without it a TTL stays where it has always been, on
@@ -161,11 +167,16 @@ const (
 
 // Node is an instance's peer machinery.
 type Node struct {
-	identity     *identity.Identity
-	trust        Store
-	engine       *approval.Engine
-	keys         KeyStore
-	projects     *project.Cache
+	identity *identity.Identity
+	trust    Store
+	engine   *approval.Engine
+	keys     KeyStore
+	projects *project.Cache
+	// serving is what this instance hands over of its own projects (decision
+	// AP). The zero value is not special-cased here because it does not have to
+	// be: project's own calls resolve an unset Serving to the default, so an
+	// instance built without one serves markdown and nothing else.
+	serving      project.Serving
 	delegations  Delegations
 	wakeups      Wakeups
 	handovers    Handovers
@@ -294,6 +305,7 @@ func New(opts Options) (*Node, error) {
 		engine:        opts.Engine,
 		keys:          opts.Keys,
 		projects:      opts.Projects,
+		serving:       opts.Serving,
 		delegations:   opts.Delegations,
 		wakeups:       opts.Wakeups,
 		handovers:     opts.Handovers,

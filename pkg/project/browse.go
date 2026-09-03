@@ -72,9 +72,9 @@ type Entry = ladulasv1.ProjectEntry
 // directory before the filter, which is what lets a browser say how much of it
 // is being shown.
 func ReadDir(
-	root, rel, filter, token string, size int, limits Limits,
+	root, rel, filter, token string, size int, serving Serving,
 ) ([]*Entry, string, int, error) {
-	limits = limits.withDefaults()
+	serving = serving.withDefaults()
 
 	confined, err := os.OpenRoot(root)
 	if err != nil {
@@ -142,7 +142,7 @@ func ReadDir(
 			break
 		}
 
-		out = append(out, entryFor(confined, path.Join(rel, item.Name()), item, limits))
+		out = append(out, entryFor(confined, path.Join(rel, item.Name()), item, serving))
 		seen++
 	}
 
@@ -157,9 +157,9 @@ func ReadDir(
 // open while somebody waited — so it says it stopped early rather than
 // reporting a partial answer as a complete one.
 func Search(
-	root, query, token string, size int, limits Limits,
+	root, query, token string, size int, serving Serving,
 ) ([]*Entry, string, bool, error) {
-	limits = limits.withDefaults()
+	serving = serving.withDefaults()
 
 	wanted := strings.ToLower(strings.TrimSpace(query))
 	if wanted == "" {
@@ -237,7 +237,7 @@ func Search(
 			return fs.SkipAll
 		}
 
-		out = append(out, entryFor(confined, name, d, limits))
+		out = append(out, entryFor(confined, name, d, serving))
 
 		return nil
 	})
@@ -249,8 +249,8 @@ func Search(
 }
 
 // ReadFile serves one file, having checked that it is one this instance offers.
-func ReadFile(root, rel string, limits Limits) ([]byte, *Entry, error) {
-	limits = limits.withDefaults()
+func ReadFile(root, rel string, serving Serving) ([]byte, *Entry, error) {
+	serving = serving.withDefaults()
 
 	if err := CheckPath(rel); err != nil {
 		return nil, nil, err
@@ -288,7 +288,7 @@ func ReadFile(root, rel string, limits Limits) ([]byte, *Entry, error) {
 		Modified: timestamppb.New(info.ModTime()),
 	}
 
-	entry.Readable, entry.Reason = servable(rel, info.Size(), limits)
+	entry.Readable, entry.Reason = servable(rel, info.Size(), serving)
 
 	if !entry.GetReadable() {
 		return nil, entry, fmt.Errorf("%s is not offered: %s", rel, entry.GetReason())
@@ -312,7 +312,7 @@ func where(rel string) string {
 	return rel
 }
 
-func entryFor(confined *os.Root, rel string, d fs.DirEntry, limits Limits) *Entry {
+func entryFor(confined *os.Root, rel string, d fs.DirEntry, serving Serving) *Entry {
 	entry := &Entry{
 		Name:      d.Name(),
 		Path:      rel,
@@ -334,12 +334,12 @@ func entryFor(confined *os.Root, rel string, d fs.DirEntry, limits Limits) *Entr
 	}
 
 	if d.IsDir() {
-		entry.NothingReadable = nothingReadable(confined, rel, limits)
+		entry.NothingReadable = nothingReadable(confined, rel, serving)
 
 		return entry
 	}
 
-	entry.Readable, entry.Reason = servable(rel, entry.GetSize(), limits)
+	entry.Readable, entry.Reason = servable(rel, entry.GetSize(), serving)
 
 	return entry
 }
@@ -356,7 +356,7 @@ func entryFor(confined *os.Root, rel string, d fs.DirEntry, limits Limits) *Entr
 // folder be shown": a walk that fails, a walk that hits the cap, a symlink that
 // might be a document. Hiding something that is there is the one outcome worth
 // avoiding, and the cost of showing an empty folder is one tap.
-func nothingReadable(confined *os.Root, rel string, limits Limits) bool {
+func nothingReadable(confined *os.Root, rel string, serving Serving) bool {
 	var (
 		walked int
 		found  bool
@@ -402,7 +402,7 @@ func nothingReadable(confined *os.Root, rel string, limits Limits) bool {
 			size = info.Size()
 		}
 
-		if ok, _ := servable(name, size, limits); ok {
+		if ok, _ := servable(name, size, serving); ok {
 			found = true
 
 			return fs.SkipAll
@@ -420,18 +420,24 @@ func nothingReadable(confined *os.Root, rel string, limits Limits) bool {
 // servable decides whether this instance will hand a file over, and says why
 // not when it will not.
 //
-// The set is markdown today, because markdown is what the viewer renders. It is
-// deliberately a separate question from what gets listed: a project full of Go
-// files is a project whose listing should show Go files, and the answer to "may
-// I read one" is expected to change without the protocol doing so.
-func servable(rel string, size int64, limits Limits) (bool, string) {
-	if !IsMarkdown(rel) {
+// The set is the policy's, which is markdown by default because markdown is
+// what the viewer renders (decision AP). It is deliberately a separate question
+// from what gets listed: a project full of Go files is a project whose listing
+// should show Go files, and the answer to "may I read one" changes with the
+// policy rather than with the protocol.
+//
+// The reason names the kind when there is one, because "not a kind this
+// instance offers" is a sentence somebody reads while looking at a file they
+// can see — and a policy that could have been changed to include it is worth
+// pointing at.
+func servable(rel string, size int64, serving Serving) (bool, string) {
+	if !serving.Policy.Serves(rel) {
 		return false, "not a kind this instance offers to read"
 	}
 
-	if size > limits.FileBytes {
+	if size > serving.Limits.FileBytes {
 		return false, fmt.Sprintf("larger than the %s this instance sends",
-			byteSize(limits.FileBytes))
+			byteSize(serving.Limits.FileBytes))
 	}
 
 	return true, ""

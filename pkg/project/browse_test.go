@@ -45,7 +45,7 @@ func TestReadDirListsDirectoriesFirst(t *testing.T) {
 	root := browsable(t)
 
 	entries, next, total, err := project.ReadDir(
-		root, "", "", "", 0, project.DefaultLimits)
+		root, "", "", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the root: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestReadDirListsDirectoriesFirst(t *testing.T) {
 func TestReadDirSaysWhatItWillNotServe(t *testing.T) {
 	root := browsable(t)
 
-	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultLimits)
+	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the root: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestReadDirSaysWhatItWillNotServe(t *testing.T) {
 func TestReadDirSaysWhichFoldersLeadNowhere(t *testing.T) {
 	root := browsable(t)
 
-	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultLimits)
+	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the root: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestReadDirSaysWhichFoldersLeadNowhere(t *testing.T) {
 	// One level down, where the answer is the other way: a folder of images has
 	// nothing this instance would hand over, at any depth.
 	entries, _, _, err = project.ReadDir(
-		root, "docs", "", "", 0, project.DefaultLimits)
+		root, "docs", "", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read docs: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestReadDirPagesAndFilters(t *testing.T) {
 	root := browsable(t)
 
 	first, next, total, err := project.ReadDir(
-		root, "docs", "", "", 1, project.DefaultLimits)
+		root, "docs", "", "", 1, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read docs: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestReadDirPagesAndFilters(t *testing.T) {
 	}
 
 	second, _, _, err := project.ReadDir(
-		root, "docs", "", next, 10, project.DefaultLimits)
+		root, "docs", "", next, 10, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the second page: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestReadDirPagesAndFilters(t *testing.T) {
 	// The filter runs on the publisher, so a directory of ten thousand files
 	// costs one page either way. Total still counts what is there.
 	filtered, _, total, err := project.ReadDir(
-		root, "docs", "deploy", "", 0, project.DefaultLimits)
+		root, "docs", "deploy", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("filter docs: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestBrowsingCannotLeaveTheProject(t *testing.T) {
 
 	for _, name := range []string{"..", "../..", "/etc", "docs/../.."} {
 		if _, _, _, err := project.ReadDir(
-			root, name, "", "", 0, project.DefaultLimits,
+			root, name, "", "", 0, project.DefaultServing,
 		); err == nil {
 			t.Errorf("listing %q was allowed", name)
 		}
@@ -235,7 +235,7 @@ func TestBrowsingCannotLeaveTheProject(t *testing.T) {
 
 	for _, name := range []string{"../secrets.md", "/etc/passwd", "escape.md"} {
 		if _, _, err := project.ReadFile(
-			root, name, project.DefaultLimits,
+			root, name, project.DefaultServing,
 		); err == nil {
 			t.Errorf("reading %q was allowed", name)
 		}
@@ -243,7 +243,7 @@ func TestBrowsingCannotLeaveTheProject(t *testing.T) {
 
 	// The symlink is listed, because pretending it is not there would be
 	// lying about the directory — and it says it will not be followed.
-	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultLimits)
+	entries, _, _, err := project.ReadDir(root, "", "", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the root: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestSearchMatchesTheWholePath(t *testing.T) {
 	root := browsable(t)
 
 	entries, _, truncated, err := project.Search(
-		root, "docs/dep", "", 0, project.DefaultLimits)
+		root, "docs/dep", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestSearchMatchesTheWholePath(t *testing.T) {
 
 	// Nothing from the directories a documentation browser skips, however well
 	// the name matches.
-	hits, _, _, err := project.Search(root, "readme", "", 0, project.DefaultLimits)
+	hits, _, _, err := project.Search(root, "readme", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("search again: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestSearchMatchesTheWholePath(t *testing.T) {
 func TestSearchPages(t *testing.T) {
 	root := browsable(t)
 
-	first, next, _, err := project.Search(root, ".md", "", 1, project.DefaultLimits)
+	first, next, _, err := project.Search(root, ".md", "", 1, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestSearchPages(t *testing.T) {
 		t.Fatal("there are more matches and no way to carry on")
 	}
 
-	second, _, _, err := project.Search(root, ".md", next, 10, project.DefaultLimits)
+	second, _, _, err := project.Search(root, ".md", next, 10, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("search the second page: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestSearchPages(t *testing.T) {
 func TestReadFileServesOnlyWhatIsOffered(t *testing.T) {
 	root := browsable(t)
 
-	body, entry, err := project.ReadFile(root, "docs/deployment.md", project.DefaultLimits)
+	body, entry, err := project.ReadFile(root, "docs/deployment.md", project.DefaultServing)
 	if err != nil {
 		t.Fatalf("read the deployment doc: %v", err)
 	}
@@ -346,11 +346,11 @@ func TestReadFileServesOnlyWhatIsOffered(t *testing.T) {
 		t.Error("a file that was served says it is not readable")
 	}
 
-	if _, _, err := project.ReadFile(root, "main.go", project.DefaultLimits); err == nil {
+	if _, _, err := project.ReadFile(root, "main.go", project.DefaultServing); err == nil {
 		t.Error("a Go file was served")
 	}
 
-	if _, _, err := project.ReadFile(root, ".env", project.DefaultLimits); err == nil {
+	if _, _, err := project.ReadFile(root, ".env", project.DefaultServing); err == nil {
 		t.Error("a dotfile was served")
 	}
 }
@@ -383,19 +383,19 @@ func TestBrowsingIsConfinedByTheKernel(t *testing.T) {
 	}
 
 	if _, _, _, err := project.ReadDir(
-		root, "docs/elsewhere", "", "", 0, project.DefaultLimits,
+		root, "docs/elsewhere", "", "", 0, project.DefaultServing,
 	); err == nil {
 		t.Error("a directory outside the project was listed through a symlink")
 	}
 
 	if _, _, err := project.ReadFile(
-		root, "docs/elsewhere/secret.md", project.DefaultLimits,
+		root, "docs/elsewhere/secret.md", project.DefaultServing,
 	); err == nil {
 		t.Error("a file outside the project was read through a symlink")
 	}
 
 	// And a search does not wander out through it either.
-	entries, _, _, err := project.Search(root, "secret", "", 0, project.DefaultLimits)
+	entries, _, _, err := project.Search(root, "secret", "", 0, project.DefaultServing)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

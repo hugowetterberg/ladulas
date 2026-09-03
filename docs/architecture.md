@@ -411,11 +411,34 @@ an approver can browse that project's documentation — from the peer it
 belongs to, or from the card asking it to sign something in it.
 
 Publishing is a **state, not an action** (decision Q, §19): marking a
-project published sends nothing. An approver that wants to read one lists
-the directories a page at a time, searches them by filename, and fetches
-the files it opens — keeping those, so what has been read once stays
-readable with no signal. A project nobody has opened is not readable
-offline, which is the price of never shipping a tree.
+project published sends nothing, and an approver that wants to read one
+lists the directories a page at a time, searches them by filename, and
+fetches the files it opens — keeping those, so what has been read once
+stays readable with no signal.
+
+**What that applies to is decided per file kind** (decision AP). A kind
+carries three separate answers, and keeping them separate is the whole of
+it: whether its contents may be **served** at all, how they are
+**distributed** — pulled when somebody opens one, or pushed ahead of
+anybody asking — and what **versions** are kept, none, the commits that
+touched the file, or those plus the working-tree states since the last
+commit. The default is markdown: served, pushed, snapshotted. Nothing else
+is served at all, and a kind turned on later arrives pull-only.
+
+So the price of never shipping a tree is now paid by the tree and not by
+the documentation. A doc set is small and is what an approver actually
+reads, so it is sent ahead and opening it is a read from local disk; a
+project's source is not, and a project nobody has opened is still not
+readable offline beyond its docs. **What must not be reintroduced is a
+policy that pushes a source kind, or a default that pushes whatever it
+finds** — that is decision F, which decision Q removed because it paid for
+offline browsing by shipping every doc set to every approver whether or
+not anybody would ever open one.
+
+Only a snapshotted kind costs a filesystem watch, which is what makes the
+watcher affordable: inotify is not recursive, so a watch over the pushed
+kinds is a watch over a doc set, while a watch over the tree is a watch
+over somebody's `node_modules`.
 
 Published per project:
 
@@ -509,6 +532,13 @@ it paid for offline browsing by shipping every doc set to every approver
 whether or not anybody would ever open one. Q keeps what an approver has
 actually read, which is the same offline property for the pages that
 have a reader.
+
+**Decision AP then gave part of the snapshot back, per file kind.** F3's
+argument was right about documentation and wrong about everything else,
+and the two were never separated: markdown is pushed and versioned now,
+source is not served at all, and a kind turned on later is pull-only. The
+sentence above is still the test any future widening has to pass — a
+policy that pushes whatever it finds is F3 again, and fails it.
 
 Safety rails, independent of model: the doc server side canonicalizes
 paths against the project root (symlinks resolved, `..` and absolute paths
@@ -3373,6 +3403,12 @@ Added 2026-09-01:
 | AM | What an answer on the control socket names | **the prompt, not the request.** Two front ends attached at once are two approvers and both are asked (decision Z), so one request id names two cards on two screens. `AnswerApproval` carried only the id, so the daemon delivered the answer to every prompt waiting under it: both approvers' `Decide` returned with it, neither reached the branch that sends `WITHDRAWN`, and the desktop's popup went on asking after the terminal had answered and the commit had been signed. **The withdrawal machinery was never broken** — the engine cancels the losers on the first decision and a cancelled approver takes its own card down — it just never ran, because nobody lost. So the daemon mints a token per card, sends it on the `ApprovalPrompt`, and the front end echoes it back; the answer settles that one prompt and the rest are cancelled and withdrawn as they always were. Rejected: matching on the approver id, which two terminals share by default and which would have made the fix work on a desktop-plus-terminal pair and not on two terminals; and broadcasting `WITHDRAWN` to every prompt after an answer, which fixes the symptom by sending the answering front end a withdrawal it is expected to ignore because its card happens to be gone already — correct only by an accident of ordering. A front end that sends no token is answered the old way, which is right when it is the only one attached and cannot be got right when it is not, so it says so in the log. Not found by a test for a year because one attached front end is the case every test had; the reproduction attaches two that share a name. Rationale in §9 |
 
 | AN | How a change is read in the terminal, and what `enter` means | **three screens, and `enter` is the answer on one of them.** The card is the facts and a list of the files it touches; `f` opens that list, where every printable key narrows it and `esc` is the only way out; and one file's hunks are a screen of their own, left with `enter`. The window folds the hunks into the card behind disclosures and this deliberately does not, for two reasons that only appear in a terminal. A card whose length follows the shape of the change pushes the four facts a decision rests on (decision W) off the screen on any commit worth reading, which is the same failure the pinned answer line exists to prevent — here the card is the same length whether the commit touched one file or thirty. And a screen somebody is *in* is what makes `enter` safe as the answer given most often: on the card it approves, in a change it closes the change. The letters keep answering from inside a change, being deliberate rather than reflexive; having to come back to the card to refuse something you have just read would be its own small insult. **It went the other way first, and the way it failed is the argument.** The hunks were disclosures in the card with a cursor beside the files and `enter` toggling the one under it. The cursor moved on `n` and `p`, which were in the help table and nowhere else, while the arrows scrolled and `left`/`right` moved between waiting requests — so with one request waiting, which is the ordinary case, every arrow key appeared dead and the second file of a change was unreachable. The first `enter` was spent placing the cursor instead of opening anything, producing a marker beside a file that stayed shut. Widening the cursor's keys to the arrows fixed the reachability and left the real problem: one set of keys that sometimes scrolls and sometimes walks a cursor is two programs sharing a keyboard. Rejected, therefore: tuning the cursor's key bindings, which is what the first repair was. Also rejected: `enter` approving on every screen, which is a one-keystroke approval under the thumb of somebody scrolling through code they are still reading. Extends decision AK. Rationale in §12 |
+
+Added 2026-09-03:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AP | How documentation reaches an approver, and what "published" costs the machine that published it | **per file kind, and markdown is the one that is pushed.** Decision Q made publishing a state rather than an action, and an approver reads what it opens: a project nobody has opened is not readable offline at all. That is still the right rule for most of a repository, and this does not overturn it — it narrows the set it applies to. A doc set is small, it is what an approver actually reads, and fetching it a page at a time down a link to somebody's laptop is why browsing is slow enough to be worth avoiding. So a kind now carries three separate answers rather than one: whether its contents may be **served** at all, which is the question `servable` used to answer alone; how they are **distributed**, pull or push; and what **versions** are kept of them, none, the commits that touched the file, or those plus the working-tree states since the last commit. The default policy is markdown — served, pushed, snapshotted — and nothing else served, which is exactly what this instance did before. **The objection decision Q raised is answered rather than overruled, and the difference matters.** Q superseded decision F because F paid for offline browsing by shipping every doc set to every approver whether or not anybody would ever open one; `pkg/project/cache.go` states the rule as "nothing is here because somebody might want it". What is pushed here is the documentation kinds, bounded by the approver's cache budget; a repository full of Go files does not become a repository that mirrors itself onto every phone that approves for it, and **that is what must not be reintroduced** — a policy that pushes a source kind, or a default that pushes whatever it finds, is decision F again with a new spelling. The rail is that turning a kind on is one act and pushing it is a second, and a kind arrives pull-only. **The version half is why the watcher is affordable.** Only a snapshotted kind needs a filesystem watch, and inotify is not recursive: a watch over the pushed kinds is a watch over a doc set, while a watch over the tree is a watch over somebody's `node_modules`. A served kind that is not snapshotted costs nothing until it is asked for, which is the normal case. Rejected: **a single global switch** for eager publishing, which is decision F with a flag in front of it and no way to say that documentation and source are different things. Rejected: **bounding the push by bytes alone** rather than by kind, which is a ceiling and not a principle — it makes the answer to "why is my phone full" depend on what somebody committed this week, and it still ships whatever fits. Rejected: **per-project opt-in**, which puts the reader in charge of a decision the publisher's file kinds already answer, and leaves an unfollowed project as slow as it was. Supersedes the part of decision Q that made *every* kind pull-only; the rest of Q stands, including that a listing is wider than what is served (§6) and that provenance travels with an answer. Rationale in §6 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

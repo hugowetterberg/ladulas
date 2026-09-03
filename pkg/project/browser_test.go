@@ -56,7 +56,7 @@ func (p *publisher) ListDirectory(
 ) (*connect.Response[ladulasv1.ListDirectoryResponse], error) {
 	entries, next, total, err := project.ReadDir(
 		p.root, req.Msg.GetPath(), req.Msg.GetFilter(), req.Msg.GetPageToken(),
-		int(req.Msg.GetPageSize()), project.DefaultLimits)
+		int(req.Msg.GetPageSize()), project.DefaultServing)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (p *publisher) SearchProjectFiles(
 ) (*connect.Response[ladulasv1.SearchProjectFilesResponse], error) {
 	entries, next, truncated, err := project.Search(
 		p.root, req.Msg.GetQuery(), req.Msg.GetPageToken(),
-		int(req.Msg.GetPageSize()), project.DefaultLimits)
+		int(req.Msg.GetPageSize()), project.DefaultServing)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (p *publisher) FetchProjectFile(
 	_ context.Context, req *connect.Request[ladulasv1.FetchProjectFileRequest],
 ) (*connect.Response[ladulasv1.FetchProjectFileResponse], error) {
 	body, entry, err := project.ReadFile(
-		p.root, req.Msg.GetPath(), project.DefaultLimits)
+		p.root, req.Msg.GetPath(), project.DefaultServing)
 	if err != nil {
 		return nil, err
 	}

@@ -86,7 +86,7 @@ func (s *peerService) ListDirectory(
 	entries, next, total, err := project.ReadDir(
 		root, req.Msg.GetPath(), req.Msg.GetFilter(),
 		req.Msg.GetPageToken(), int(req.Msg.GetPageSize()),
-		project.DefaultLimits)
+		s.node.serving)
 	if err != nil {
 		return nil, browseError(err)
 	}
@@ -110,7 +110,7 @@ func (s *peerService) SearchProjectFiles(
 
 	entries, next, truncated, err := project.Search(
 		root, req.Msg.GetQuery(), req.Msg.GetPageToken(),
-		int(req.Msg.GetPageSize()), project.DefaultLimits)
+		int(req.Msg.GetPageSize()), s.node.serving)
 	if err != nil {
 		return nil, browseError(err)
 	}
@@ -137,7 +137,7 @@ func (s *peerService) FetchProjectFile(
 	}
 
 	body, entry, err := project.ReadFile(
-		root, req.Msg.GetPath(), project.DefaultLimits)
+		root, req.Msg.GetPath(), s.node.serving)
 	if err != nil {
 		return nil, browseError(err)
 	}

@@ -25,9 +25,9 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/gitctx"
 )
 
-// Markdown is what an approver may read today. The listing is deliberately
-// wider — a project full of Go files lists Go files (§6) — and this is the
-// narrower question of what gets handed over, which is expected to grow.
+// Markdown is the extensions the markdown kind matches. What is done with that
+// kind — whether it is served, pushed, and versioned — is the policy's to say
+// (decision AP), and the default policy is built out of this list.
 var Markdown = []string{".md", ".markdown"}
 
 // Limits bound browsing, on both sides of it.
@@ -123,7 +123,14 @@ func CheckPath(name string) error {
 	return nil
 }
 
-// IsMarkdown reports whether a file name is one of the ones that are served.
+// IsMarkdown reports whether a file name is markdown.
+//
+// It is not the question "may this be read", which is the policy's and is asked
+// through Policy.Serves. This one is asked by the parser, about a link: a link
+// to another markdown file in the same project is one the viewer can navigate
+// with, and anything else becomes text (see markdown.go). A policy that served
+// more kinds would not make a link to one of them navigable, because the viewer
+// renders markdown and nothing else.
 func IsMarkdown(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 
