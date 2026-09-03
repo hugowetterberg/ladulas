@@ -67,6 +67,7 @@ func (s *peerService) ListProjects(
 
 	return connect.NewResponse(&ladulasv1.ListProjectsResponse{
 		Projects: s.node.currentProjects(ctx),
+		Kinds:    kindPolicies(s.node.serving),
 	}), nil
 }
 

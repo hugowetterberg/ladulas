@@ -205,6 +205,12 @@ type Serving struct {
 // policy.
 var DefaultServing = Serving{Limits: DefaultLimits, Policy: DefaultPolicy}
 
+// Kinds is the resolved policy, for a publisher that has to describe itself to
+// an approver. It resolves the zero value, so a caller never has to.
+func (s Serving) Kinds() []Kind {
+	return s.withDefaults().Policy.Kinds
+}
+
 func (s Serving) withDefaults() Serving {
 	s.Limits = s.Limits.withDefaults()
 	s.Policy = s.Policy.withDefaults()

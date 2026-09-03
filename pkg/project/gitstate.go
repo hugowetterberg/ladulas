@@ -152,6 +152,17 @@ func (r *Repository) Busy() (string, bool) {
 	return "", false
 }
 
+// How far back a version list walks. They are the browse caps' shape: a
+// default for a caller that does not care, and a maximum whatever it asks for.
+const (
+	// DefaultCommitLimit is what a caller that names no limit gets. Far enough
+	// back to cover "when did this paragraph appear", not far enough to walk a
+	// long-lived repository while somebody waits.
+	DefaultCommitLimit = 50
+	// MaxCommitLimit is the most any caller gets.
+	MaxCommitLimit = 200
+)
+
 // Commit is one commit that touched a document.
 type Commit struct {
 	Hash    string

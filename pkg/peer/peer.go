@@ -109,6 +109,11 @@ type Options struct {
 	// which is markdown, pushed, with its working-tree versions tracked, and
 	// nothing else served at all.
 	Serving project.Serving
+	// Versions holds the working-tree states of this instance's own published
+	// documents (decision AP). Optional: an instance without one answers a
+	// version list with the commits alone, which is what a project that is not
+	// being edited on this machine has anyway.
+	Versions *project.VersionStore
 	// Delegations holds both halves of decision P: the standing permissions
 	// approvers have granted this instance, and the record of the ones it has
 	// granted. Optional; without it a TTL stays where it has always been, on
@@ -177,6 +182,7 @@ type Node struct {
 	// be: project's own calls resolve an unset Serving to the default, so an
 	// instance built without one serves markdown and nothing else.
 	serving      project.Serving
+	versions     *project.VersionStore
 	delegations  Delegations
 	wakeups      Wakeups
 	handovers    Handovers
@@ -306,6 +312,7 @@ func New(opts Options) (*Node, error) {
 		keys:          opts.Keys,
 		projects:      opts.Projects,
 		serving:       opts.Serving,
+		versions:      opts.Versions,
 		delegations:   opts.Delegations,
 		wakeups:       opts.Wakeups,
 		handovers:     opts.Handovers,
