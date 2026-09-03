@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Markdown is parsed here rather than in the viewer, for the reason the diff is
@@ -622,7 +623,8 @@ func (p *markdownParser) inline(text string) []Span {
 		case text[i] == '*' || text[i] == '_':
 			mark := string(text[i])
 
-			if body, width, ok := delimited(text[i:], mark); ok && body != "" {
+			body, width, ok := delimited(text[i:], mark)
+			if ok && body != "" && !intraword(text, i, width, mark) {
 				flush()
 
 				out = append(out, Span{Kind: SpanEmphasis, Text: stripMarks(body)})
@@ -876,6 +878,40 @@ func imageNote(label, target string) string {
 }
 
 // delimited reads a run bounded by the same marker at both ends.
+// intraword reports whether an underscore delimiter sits inside a word, where
+// it is not emphasis at all.
+//
+// This is the one place CommonMark treats `_` and `*` differently, and it exists
+// for exactly the text these documents are full of: SSH_AUTH_SOCK,
+// XDG_RUNTIME_DIR, MARKETING_VERSION. Without the rule the parser reads the
+// first underscore as an opener and the second as a closer, and the identifier
+// comes out as SSH, an italic AUTH, and SOCK — a name the reader cannot copy,
+// in the kind of document where names are the content.
+//
+// Both ends are tested, because a delimiter only has to be welded to a word on
+// one side to be part of it. `*` keeps the old behaviour: intraword emphasis
+// with asterisks is legal, and somebody writing it meant it.
+func intraword(text string, start, width int, mark string) bool {
+	if mark != "_" {
+		return false
+	}
+
+	if before, _ := utf8.DecodeLastRuneInString(text[:start]); wordRune(before) {
+		return true
+	}
+
+	after, _ := utf8.DecodeRuneInString(text[start+width:])
+
+	return wordRune(after)
+}
+
+// wordRune is what counts as being inside a word. RuneError covers both ends of
+// the string, where DecodeRune has nothing to read and emphasis is welded to
+// nothing.
+func wordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
 func delimited(text, marker string) (string, int, bool) {
 	rest := text[len(marker):]
 

@@ -472,3 +472,46 @@ func TestFragmentsInsideTablesAreSettled(t *testing.T) {
 		t.Errorf("the cells came back as %v, want %v", kinds, want)
 	}
 }
+
+// An underscore inside a word is not an emphasis delimiter. It is the one place
+// CommonMark treats `_` and `*` differently, and it matters here because these
+// documents are largely made of the names it protects.
+func TestSnakeCaseSurvives(t *testing.T) {
+	doc := parse(t,
+		"Set SSH_AUTH_SOCK and XDG_RUNTIME_DIR before the agent starts.\n")
+
+	paragraph := blockOfKind(t, doc, "paragraph")
+
+	const want = "Set SSH_AUTH_SOCK and XDG_RUNTIME_DIR before the agent starts."
+
+	if got := spansText(paragraph.Spans); got != want {
+		t.Errorf("the identifiers came back as %q", got)
+	}
+
+	for _, span := range paragraph.Spans {
+		if span.Kind == "emphasis" {
+			t.Errorf("an underscore inside a word opened emphasis: %q", span.Text)
+		}
+	}
+}
+
+// The rule is about the delimiter's neighbours and nothing else, so emphasis
+// between words still works and asterisks are untouched.
+func TestUnderscoreEmphasisBetweenWords(t *testing.T) {
+	doc := parse(t, "A _stressed_ word, and an *asterisked* one.\n")
+
+	paragraph := blockOfKind(t, doc, "paragraph")
+
+	var emphasised []string
+
+	for _, span := range paragraph.Spans {
+		if span.Kind == "emphasis" {
+			emphasised = append(emphasised, span.Text)
+		}
+	}
+
+	if len(emphasised) != 2 ||
+		emphasised[0] != "stressed" || emphasised[1] != "asterisked" {
+		t.Errorf("the emphasised runs came back as %v", emphasised)
+	}
+}
