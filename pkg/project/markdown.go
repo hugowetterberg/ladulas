@@ -952,10 +952,52 @@ func link(text string) (string, string, int, bool) {
 
 // stripMarks removes the inline markers from text that has already been decided
 // to be one span, since spans do not nest.
+//
+// Underscores are the exception, for the same reason the scanner has one. A
+// blanket strip is what turned **`SSH_AUTH_SOCK` is contended** into
+// SSHAUTHSOCK: the scanner never saw those underscores, because the text was
+// already inside a strong span by the time it got here, and this ran over it
+// with a replacer that could not tell a marker from a name.
+//
+// An underscore with a word character on both sides is part of a name. It could
+// not have opened or closed emphasis where it stands, so there is nothing to
+// remove, and removing it silently rewrites the one kind of word a reader needs
+// to be able to copy.
 func stripMarks(text string) string {
-	replacer := strings.NewReplacer("**", "", "`", "", "*", "", "_", "")
+	var out strings.Builder
 
-	return replacer.Replace(text)
+	for i := 0; i < len(text); {
+		switch {
+		case strings.HasPrefix(text[i:], "**"):
+			i += 2
+		case text[i] == '`' || text[i] == '*':
+			i++
+		case text[i] == '_':
+			if insideWord(text, i) {
+				out.WriteByte('_')
+			}
+
+			i++
+		default:
+			out.WriteByte(text[i])
+			i++
+		}
+	}
+
+	return out.String()
+}
+
+// insideWord reports whether the byte at i has a word character on either side
+// of it, which is where an underscore is part of a name rather than a marker.
+//
+// Both sides, because a delimiter only has to be free on one of them to be a
+// delimiter: the opening underscore of _a word_ has a letter after it and is
+// still a marker.
+func insideWord(text string, i int) bool {
+	before, _ := utf8.DecodeLastRuneInString(text[:i])
+	after, _ := utf8.DecodeRuneInString(text[i+1:])
+
+	return wordRune(before) && wordRune(after)
 }
 
 func spansText(spans []Span) string {

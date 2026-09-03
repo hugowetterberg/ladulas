@@ -515,3 +515,31 @@ func TestUnderscoreEmphasisBetweenWords(t *testing.T) {
 		t.Errorf("the emphasised runs came back as %v", emphasised)
 	}
 }
+
+// The scanner is not the only way text reaches a span. Anything inside emphasis
+// is collapsed to one span by stripMarks, which used to run a blanket replacer
+// over it — so the rule has to hold on that path too, and this is the exact
+// sentence from README.md that showed it did not.
+func TestSnakeCaseSurvivesInsideEmphasis(t *testing.T) {
+	doc := parse(t,
+		"**`SSH_AUTH_SOCK` is contended**, and the failure is not that it is "+
+			"unset.\n")
+
+	paragraph := blockOfKind(t, doc, "paragraph")
+
+	if got := spansText(paragraph.Spans); !strings.Contains(got, "SSH_AUTH_SOCK") {
+		t.Errorf("the identifier came back as %q", got)
+	}
+}
+
+// The underscores that really were markers still go, or emphasis inside
+// emphasis would come out spelled with its own syntax.
+func TestEmphasisMarkersInsideEmphasisAreRemoved(t *testing.T) {
+	doc := parse(t, "**a _stressed_ word**\n")
+
+	paragraph := blockOfKind(t, doc, "paragraph")
+
+	if got := spansText(paragraph.Spans); got != "a stressed word" {
+		t.Errorf("the strong run came back as %q", got)
+	}
+}
