@@ -71,6 +71,25 @@ const (
 	DefaultCeiling = 20 * time.Second
 )
 
+// WatchEvent is something the watcher noticed, for whoever wants to tell a peer
+// about it.
+//
+// It carries no content, and that is the contract rather than an omission: a
+// peer hearing about a change may not have the project open, may not have that
+// kind pushed to it, and may be about to lose its connection. An event is a
+// reason to reconcile, and reconciling is what actually moves bytes.
+type WatchEvent struct {
+	ProjectID string
+	// Path is empty on Moved.
+	Path string
+	Head string
+	// Removed says the document is gone — deleted or renamed away.
+	Removed bool
+	// Moved says the project is on another commit now, which retires every
+	// snapshot handle a peer was holding for it.
+	Moved bool
+}
+
 // WatchOptions configures a Watcher. Versions is required; the rest default.
 type WatchOptions struct {
 	Versions *VersionStore
@@ -78,6 +97,11 @@ type WatchOptions struct {
 	Logger   *slog.Logger
 	Debounce time.Duration
 	Ceiling  time.Duration
+	// Notify is called for each thing the watcher notices. Optional, and it
+	// must not block: it is called from the watcher's own goroutines, and
+	// whoever wants to put an event on a network is responsible for not making
+	// a filesystem watch wait for one.
+	Notify func(WatchEvent)
 }
 
 // Watcher keeps the version store up to date with what is being edited.
@@ -87,6 +111,7 @@ type Watcher struct {
 	log      *slog.Logger
 	debounce time.Duration
 	ceiling  time.Duration
+	notify   func(WatchEvent)
 
 	fs *fsnotify.Watcher
 
@@ -145,6 +170,7 @@ func NewWatcher(opts WatchOptions) (*Watcher, error) {
 		log:      opts.Logger,
 		debounce: opts.Debounce,
 		ceiling:  opts.Ceiling,
+		notify:   opts.Notify,
 		fs:       notifier,
 		projects: make(map[string]*watched),
 		byDir:    make(map[string]*watched),
@@ -551,7 +577,9 @@ func (w *Watcher) fire(entry *watched, rel string) {
 			"project", entry.id, "from", previous, "to", head,
 			"versions_dropped", dropped)
 
-		w.notify(entry.id, rel, false)
+		w.announce(WatchEvent{ProjectID: entry.id, Head: head, Moved: true})
+
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -561,7 +589,7 @@ func (w *Watcher) fire(entry *watched, rel string) {
 	w.mu.Unlock()
 
 	if rel == "" || head == "" {
-		w.notify(entry.id, rel, false)
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -576,9 +604,12 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	info, err := os.Lstat(full)
 	if err != nil {
 		// Gone, or renamed away. There is nothing to snapshot and the last
-		// state of it is already in the store; what a reader is told about a
-		// document that has been removed is the event's business, not this.
-		w.notify(entry.id, rel, false)
+		// state of it is already in the store, so what is left to do is say so.
+		w.announce(WatchEvent{
+			ProjectID: entry.id, Path: rel, Head: head, Removed: true,
+		})
+
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -587,7 +618,7 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	// either — the rules have to be the same or a reader could be handed a
 	// history of something the browser refuses to show them.
 	if info.Mode()&fs.ModeSymlink != 0 || info.IsDir() {
-		w.notify(entry.id, rel, false)
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -597,7 +628,7 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 		w.log.Debug("a document could not be read for versioning",
 			"project", entry.id, "path", rel, "error", err.Error())
 
-		w.notify(entry.id, rel, false)
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -618,7 +649,7 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	// recorded, which is right: a new file is a real edit.
 	if committed, err := entry.repo.ContentAt(head, rel); err == nil &&
 		string(committed) == string(body) {
-		w.notify(entry.id, rel, false)
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -628,7 +659,7 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 		w.log.Warn("a version could not be recorded",
 			"project", entry.id, "path", rel, "error", err.Error())
 
-		w.notify(entry.id, rel, false)
+		w.signalSettled(entry.id, rel, false)
 
 		return
 	}
@@ -636,12 +667,25 @@ func (w *Watcher) record(entry *watched, rel, head string) {
 	if recorded {
 		w.log.Debug("a version was recorded",
 			"project", entry.id, "path", rel, "head", head)
+
+		w.announce(WatchEvent{ProjectID: entry.id, Path: rel, Head: head})
 	}
 
-	w.notify(entry.id, rel, recorded)
+	w.signalSettled(entry.id, rel, recorded)
 }
 
-func (w *Watcher) notify(projectID, rel string, recorded bool) {
+// announce hands an event to whoever asked for them, if anybody did.
+func (w *Watcher) announce(event WatchEvent) {
+	w.mu.Lock()
+	notify := w.notify
+	w.mu.Unlock()
+
+	if notify != nil {
+		notify(event)
+	}
+}
+
+func (w *Watcher) signalSettled(projectID, rel string, recorded bool) {
 	w.mu.Lock()
 	settled := w.settled
 	w.mu.Unlock()

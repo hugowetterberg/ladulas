@@ -205,6 +205,11 @@ type Node struct {
 	// across a network call.
 	pairingMu sync.Mutex
 
+	// eventState is the doc-event fan-out (decision AP). It carries its own
+	// mutex rather than sharing mu, so that announcing an event never contends
+	// with a link coming up or a pairing settling.
+	eventState
+
 	mu    sync.Mutex
 	links map[string]*link
 	// reached is what dialling a peer without keeping a link found, by
@@ -444,6 +449,7 @@ func (n *Node) handler() http.Handler {
 	options := connect.WithReadMaxBytes(maxRequestBytes)
 
 	mux.Handle(ladulasv1connect.NewApprovalServiceHandler(service, options))
+	mux.Handle(ladulasv1connect.NewEventServiceHandler(service, options))
 	mux.Handle(ladulasv1connect.NewInboxServiceHandler(service, options))
 	mux.Handle(ladulasv1connect.NewKeyServiceHandler(service, options))
 	mux.Handle(ladulasv1connect.NewPairingServiceHandler(service, options))

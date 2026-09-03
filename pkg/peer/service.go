@@ -17,6 +17,7 @@ import (
 // peerService is what a paired instance can reach over the channel.
 type peerService struct {
 	ladulasv1connect.UnimplementedApprovalServiceHandler
+	ladulasv1connect.UnimplementedEventServiceHandler
 	ladulasv1connect.UnimplementedKeyServiceHandler
 	ladulasv1connect.UnimplementedPairingServiceHandler
 	ladulasv1connect.UnimplementedPresenceServiceHandler
@@ -28,6 +29,7 @@ type peerService struct {
 
 var (
 	_ ladulasv1connect.ApprovalServiceHandler = (*peerService)(nil)
+	_ ladulasv1connect.EventServiceHandler    = (*peerService)(nil)
 	_ ladulasv1connect.KeyServiceHandler      = (*peerService)(nil)
 	_ ladulasv1connect.PairingServiceHandler  = (*peerService)(nil)
 	_ ladulasv1connect.PresenceServiceHandler = (*peerService)(nil)
