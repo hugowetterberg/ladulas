@@ -141,7 +141,59 @@ func (s *controlService) ReadPeerPage(
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 
-	return connect.NewResponse(&ladulasv1.ReadPeerPageResponse{
-		Page: project.PageWire(page),
+	out := &ladulasv1.ReadPeerPageResponse{Page: project.PageWire(page)}
+
+	digest := req.Msg.GetCompareDigest()
+	commit := req.Msg.GetCompareCommit()
+
+	if len(digest) == 0 && commit == "" {
+		return connect.NewResponse(out), nil
+	}
+
+	// The version to compare against is fetched here rather than by the front
+	// end, because reaching a publisher needs the identity key and that is this
+	// process's (decision Z). What the front end gets is two documents and the
+	// job of putting them together.
+	before, err := browser.FileAt(ctx, req.Msg.GetFingerprint(),
+		req.Msg.GetProjectId(), req.Msg.GetPath(), digest, commit)
+	if err != nil {
+		// A snapshot that expired between the list and this call is the
+		// ordinary way one ends. The page above is still the page, so the
+		// document is answered and the comparison is not.
+		out.CompareError = err.Error()
+
+		return connect.NewResponse(out), nil //nolint:nilerr // the document is still the answer
+	}
+
+	out.ComparedTo = project.PageWire(before)
+	out.Version = &ladulasv1.DocumentVersion{Digest: digest, Commit: commit}
+
+	return connect.NewResponse(out), nil
+}
+
+// PeerDocumentVersions is what one document has been (decision AP).
+func (s *controlService) PeerDocumentVersions(
+	ctx context.Context,
+	req *connect.Request[ladulasv1.PeerDocumentVersionsRequest],
+) (*connect.Response[ladulasv1.PeerDocumentVersionsResponse], error) {
+	browser, err := s.browser()
+	if err != nil {
+		return nil, err
+	}
+
+	list, err := browser.Versions(ctx, req.Msg.GetFingerprint(),
+		req.Msg.GetProjectId(), req.Msg.GetPath(),
+		int(req.Msg.GetCommitLimit()))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.PeerDocumentVersionsResponse{
+		Versions:      list.Versions,
+		Head:          list.Head,
+		CurrentDigest: list.CurrentDigest,
+		Truncated:     list.Truncated,
+		Live:          list.Live,
+		Error:         list.Err,
 	}), nil
 }

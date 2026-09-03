@@ -373,6 +373,15 @@ service ControlService {
 
   rpc ReadPeerPage(ReadPeerPageRequest) returns (ReadPeerPageResponse);
 
+  // PeerDocumentVersions is what one document has been: the publisher's
+  // working-tree states since its last commit, then the commits that touched
+  // it (decision AP).
+  //
+  // It goes through the daemon like every other browsing call, because the
+  // answer is the publisher's and reaching a publisher needs the identity key.
+  rpc PeerDocumentVersions(PeerDocumentVersionsRequest)
+      returns (PeerDocumentVersionsResponse);
+
   // Reload re-reads the store and the policy from disk, which is the same thing
   // SIGHUP does to the daemon. It is here because the front end offers it in a
   // menu and a menu item may not depend on being able to signal a process.
@@ -1600,10 +1609,42 @@ message ReadPeerPageRequest {
   string fingerprint = 1;
   string project_id = 2;
   string path = 3;
+  // A version to also fetch, so that the front end can mark what changed since
+  // it (decision AP). Named the way the version list named it: a snapshot by
+  // its digest, a commit by its hash, and neither for the ordinary read.
+  bytes compare_digest = 4;
+  string compare_commit = 5;
 }
 
 message ReadPeerPageResponse {
   PeerPage page = 1;
+  // The version asked for, when one was and it was still there. A snapshot can
+  // expire between the list and this call — the project moved to another commit
+  // — and that is not a reason to refuse the document: the page above is still
+  // the page, and compare_error says why there is nothing to compare it with.
+  PeerPage compared_to = 2;
+  DocumentVersion version = 3;
+  string compare_error = 4;
+}
+
+message PeerDocumentVersionsRequest {
+  string fingerprint = 1;
+  string project_id = 2;
+  string path = 3;
+  // How far back through the commits to walk. Zero is the publisher's default.
+  int32 commit_limit = 4;
+}
+
+message PeerDocumentVersionsResponse {
+  repeated DocumentVersion versions = 1;
+  string head = 2;
+  bytes current_digest = 3;
+  bool truncated = 4;
+  // Whether the publisher answered. A version history has no offline half —
+  // the versions are the publisher's and always were — so this being false
+  // means there is nothing to show and error says why.
+  bool live = 5;
+  string error = 6;
 }
 
 message ReloadRequest {}

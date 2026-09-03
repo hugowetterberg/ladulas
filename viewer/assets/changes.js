@@ -1,65 +1,59 @@
-// Getting around the changes in a document that has been refreshed
+// Choosing what you are reading, and what you are reading it against
 // (decision AP).
 //
-// A reader who has just been told their documentation moved on wants two
-// things, and scrolling gives them neither: to know how much changed, and to
-// see the changed parts without reading the whole file again. So the reader gets
-// a second control in the corner a thumb reaches, above the outline's, and it
-// lists every change grouped by the heading it happened under.
+// The control is always in the corner, whether or not anything has changed,
+// because the question it answers is not "did something change" but "which
+// version am I looking at". A reader opens a document at the latest version by
+// default; from here they can pick an earlier one — a working-tree state the
+// publisher kept between commits, or a commit — and the document redraws with
+// what changed since it marked in place.
 //
-// **The groups are read out of the drawn document rather than computed again.**
-// Go's Compare already decided what changed and the renderer has already put
-// the marks in the page, so walking the page in document order is both the
-// cheapest way to group them and the only way that cannot disagree with what
-// the reader is looking at. A second pass over the block list could drift from
-// what was drawn; this cannot.
+// It went the other way first, and the way that failed is the argument. The
+// button appeared only when a document happened to carry changes, which made
+// it a thing that turned up unbidden and could not be reached on purpose: there
+// was no way to ask "what changed since Tuesday" about a document that looked
+// current, and no way to turn the marks off once they were there. A control the
+// reader cannot summon is not a control.
 //
 // Everything is built with textContent, like the rest of the bundle. A heading
-// is the document's own text and the document was written by the machine we
-// distrust most (§6), so it is never markup — not in the page, and not in this
-// panel either.
+// and a commit subject are both the document's own text, written by the machine
+// we distrust most (§6), so neither is ever markup.
 
 import { el, append } from "./dom.js";
 import { jumpTo } from "./outline.js";
 
 // maxLineLength clips a change to one line. The panel is a way to reach a
-// change, not a way to read it: the document itself is one tap away and is
-// where the change is legible.
+// change, not a way to read it: the document is one tap away and is where the
+// change is legible.
 const maxLineLength = 90;
 
 const headingTags = new Set(["H1", "H2", "H3", "H4", "H5", "H6"]);
 
-// attachChanges builds the control for one rendered document, or returns null
-// when nothing changed — in which case there is no button, because a control
-// that opens an empty panel is a control that has told the reader nothing.
-export function attachChanges(article) {
-  const groups = collect(article);
-
-  if (!groups.length) {
-    return null;
-  }
-
+// attachChanges builds the corner control for one drawn document.
+//
+// article is what was rendered; page is what the bridge answered, which says
+// whether it is a comparison and against what; onCompare is called with a
+// version to compare against, or null for the latest on its own.
+export function attachChanges(article, page, source, onCompare) {
   const panel = el("div", "changes-panel");
   const list = el("div", "changes-list");
 
-  const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
-
-  append(panel, summaryLine(total, groups.length), list);
-
-  for (const group of groups) {
-    list.append(renderGroup(group));
-  }
-
   const toggle = el("button", "changes-toggle");
   toggle.type = "button";
-  toggle.setAttribute("aria-label", "Changes in this document");
+  toggle.setAttribute("aria-label", "Versions and changes");
 
-  // A plus and a minus, as elements rather than as characters: a glyph would
-  // depend on a font the platform may not have, and these two carry the whole
-  // meaning of the button.
-  append(toggle,
-    el("span", "changes-plus"),
-    el("span", "changes-minus"));
+  // A plus and a minus drawn from elements, for the reason the outline's three
+  // bars are: a glyph would depend on a font the platform may not have.
+  append(toggle, el("span", "changes-plus"), el("span", "changes-minus"));
+
+  // Comparing is a state worth seeing from outside the panel — a reader who
+  // left the marks on and scrolled away should be able to tell why the document
+  // is striped.
+  if (page.compared) {
+    toggle.classList.add("comparing");
+  }
+
+  append(panel, list);
 
   let open = false;
 
@@ -71,21 +65,191 @@ export function attachChanges(article) {
 
   setOpen(false);
 
-  toggle.onclick = () => setOpen(!open);
+  toggle.onclick = () => {
+    setOpen(!open);
 
-  // Choosing a change closes the panel. The reader asked to be taken
-  // somewhere, and leaving the list over the place they were taken to would
-  // mean a second tap to see it.
-  panel.addEventListener("changes:chosen", () => setOpen(false));
+    if (open) {
+      fill(list, article, page, source, onCompare, () => setOpen(false));
+    }
+  };
 
   return { panel, toggle };
 }
 
-function summaryLine(total, groups) {
-  const changes = total === 1 ? "1 change" : total + " changes";
-  const where = groups === 1 ? "1 section" : groups + " sections";
+// fill draws the panel's contents, and asks for the version list the first time
+// it is opened.
+//
+// Asking on open rather than on load is the whole reason the control is
+// affordable: a version list is a call to the publishing machine, and drawing a
+// document must not cost one for a question nobody asked.
+async function fill(list, article, page, source, onCompare, close) {
+  list.replaceChildren();
 
-  return el("p", "changes-count", changes + " in " + where);
+  append(list,
+    versionRow({
+      label: "Latest",
+      detail: "the document as it is now",
+      selected: !page.compared,
+      onChoose: () => {
+        close();
+        onCompare(null);
+      },
+    }));
+
+  if (page.compareError) {
+    list.append(el("p", "changes-note",
+      "The version you were comparing against is gone: " + page.compareError));
+  }
+
+  const loading = el("p", "changes-note", "Reading the versions…");
+  list.append(loading);
+
+  let versions;
+
+  try {
+    versions = await source();
+  } catch (error) {
+    loading.textContent = "Could not read the versions: " + error.message;
+
+    return;
+  }
+
+  loading.remove();
+
+  if (!versions.live) {
+    list.append(el("p", "changes-note",
+      versions.error
+        ? "The machine that publishes this could not be reached: " +
+          versions.error
+        : "The machine that publishes this could not be reached."));
+  }
+
+  for (const version of versions.versions || []) {
+    list.append(versionRow({
+      label: versionLabel(version),
+      detail: versionDetail(version),
+      selected: isSelected(page, version),
+      onChoose: () => {
+        close();
+        onCompare(version);
+      },
+    }));
+  }
+
+  if (versions.truncated) {
+    list.append(el("p", "changes-note",
+      "Older commits are not listed."));
+  }
+
+  // The changes themselves, under the versions, and only when there are some
+  // to reach.
+  const groups = collect(article);
+
+  if (groups.length) {
+    list.append(changesSection(groups, close));
+  }
+}
+
+// versionLabel is what a version is called in the list. A commit is its
+// subject; a snapshot has none, because nobody writes a message about saving a
+// file, so it is named by when it was taken.
+function versionLabel(version) {
+  if (version.kind === "commit") {
+    return version.subject || shortCommit(version.commit);
+  }
+
+  return when(version.at) || "A saved version";
+}
+
+// versionDetail is the line under it, and says which sort it is — because one
+// of them will still be there tomorrow and the other will not.
+function versionDetail(version) {
+  if (version.kind === "commit") {
+    const parts = [shortCommit(version.commit)];
+
+    if (version.author) {
+      parts.push(version.author);
+    }
+
+    if (version.at) {
+      parts.push(when(version.at));
+    }
+
+    return parts.join(" · ");
+  }
+
+  return "unsaved work, kept until the next commit";
+}
+
+function shortCommit(commit) {
+  return (commit || "").slice(0, 10);
+}
+
+function when(value) {
+  if (!value) {
+    return "";
+  }
+
+  const at = new Date(value);
+
+  if (Number.isNaN(at.getTime())) {
+    return "";
+  }
+
+  return at.toLocaleString();
+}
+
+function isSelected(page, version) {
+  const against = page.comparedTo;
+
+  if (!page.compared || !against) {
+    return false;
+  }
+
+  if (version.kind === "commit") {
+    return Boolean(version.commit) && version.commit === against.commit;
+  }
+
+  return Boolean(version.digest) && version.digest === against.digest;
+}
+
+function versionRow({ label, detail, selected, onChoose }) {
+  const row = el("button", "changes-version");
+  row.type = "button";
+
+  if (selected) {
+    row.classList.add("selected");
+    row.setAttribute("aria-current", "true");
+  }
+
+  const text = el("span", "changes-version-text");
+  append(text,
+    el("span", "changes-version-label", label),
+    detail ? el("span", "changes-version-detail", detail) : null);
+
+  row.append(text);
+
+  row.onclick = onChoose;
+
+  return row;
+}
+
+// changesSection is the list of what changed, grouped by the heading it
+// happened under, for a document that is being compared.
+function changesSection(groups, close) {
+  const section = el("div", "changes-section");
+
+  const total = groups.reduce((sum, group) => sum + group.lines.length, 0);
+  const changes = total === 1 ? "1 change" : total + " changes";
+  const where = groups.length === 1 ? "1 section" : groups.length + " sections";
+
+  section.append(el("p", "changes-count", changes + " in " + where));
+
+  for (const group of groups) {
+    section.append(renderGroup(group, close));
+  }
+
+  return section;
 }
 
 // collect walks the drawn document and groups the marks by the heading they
@@ -109,17 +273,14 @@ function collect(article) {
       continue;
     }
 
-    // A mark inside another mark is the same change said twice: Go puts the
-    // block's mark on its spans as well, so a removed paragraph's spans are all
-    // removed too. Only the outermost is a change a reader can be taken to.
+    // A mark inside another mark is the same change said twice: Go puts a
+    // block's mark on its spans as well. Only the outermost is somewhere to go.
     if (node.parentElement && node.parentElement.closest(
       ".changed-added, .changed-removed")) {
       continue;
     }
 
     if (!current) {
-      // Changes before the first heading. Every document has somewhere above
-      // its first heading, and a preamble that changed is still a change.
       current = { heading: null, label: null, lines: [] };
       groups.push(current);
     }
@@ -127,9 +288,6 @@ function collect(article) {
     current.lines.push({ node, kind: kindOf(node) });
   }
 
-  // A group whose heading did not change and whose body did not either is not
-  // a change. It is left in the walk above because a heading has to be seen to
-  // become the current one.
   return groups.filter((group) => group.lines.length || group.changed);
 }
 
@@ -178,8 +336,8 @@ function groupForHeading(node, groups) {
 //
 // Its own child nodes are cloned rather than its text taken, so that a heading
 // whose wording changed shows the old words struck through beside the new ones
-// in the panel exactly as it does in the page. Cloning carries no markup: these
-// are nodes this bundle built, out of textContent.
+// exactly as the page does. Cloning carries no markup: these are nodes this
+// bundle built out of textContent.
 function headingLabel(node) {
   const label = el("span", "changes-heading");
 
@@ -190,8 +348,6 @@ function headingLabel(node) {
   return label;
 }
 
-// renameLabel is the label for the pair Go could not refine: the old heading
-// struck through, then the new one marked.
 function renameLabel(before, after) {
   const label = el("span", "changes-heading");
 
@@ -203,7 +359,7 @@ function renameLabel(before, after) {
   return label;
 }
 
-function renderGroup(group) {
+function renderGroup(group, close) {
   const node = el("div", "changes-group");
 
   const header = el("button", "changes-group-heading");
@@ -219,20 +375,21 @@ function renderGroup(group) {
     header.classList.add("changes-" + group.kind);
   }
 
-  // The heading itself is somewhere to go, which matters most in the case where
-  // the heading is the only thing that changed.
-  header.onclick = () => choose(node, group.heading);
+  header.onclick = () => {
+    close();
+    jumpTo(group.heading);
+  };
 
   node.append(header);
 
   for (const line of group.lines) {
-    node.append(renderLine(line));
+    node.append(renderLine(line, close));
   }
 
   return node;
 }
 
-function renderLine(line) {
+function renderLine(line, close) {
   const node = el("button", "changes-line");
   node.type = "button";
 
@@ -243,18 +400,12 @@ function renderLine(line) {
   node.append(el("span", "changes-mark", line.kind === "removed" ? "−" : "+"));
   node.append(el("span", "changes-text", clip(text(line.node))));
 
-  node.onclick = () => choose(node, line.node);
+  node.onclick = () => {
+    close();
+    jumpTo(line.node);
+  };
 
   return node;
-}
-
-// choose takes the reader to a change and tells the panel to close.
-function choose(from, target) {
-  if (target) {
-    jumpTo(target);
-  }
-
-  from.dispatchEvent(new CustomEvent("changes:chosen", { bubbles: true }));
 }
 
 function kindOf(node) {

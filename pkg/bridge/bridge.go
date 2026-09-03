@@ -880,6 +880,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/projects/directory", s.handleProjectDirectory)
 	mux.HandleFunc("GET /api/v1/projects/search", s.handleProjectSearch)
 	mux.HandleFunc("GET /api/v1/projects/file", s.handleProjectFile)
+	mux.HandleFunc("GET /api/v1/projects/versions", s.handleProjectVersions)
 
 	// Anything that is not the API is the bundle, including the paths the
 	// viewer's own routing uses.

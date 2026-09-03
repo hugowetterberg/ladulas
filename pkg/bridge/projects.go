@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -50,6 +51,17 @@ type Projects interface {
 	// Cached is what has been read of a project, without asking anybody. It is
 	// what a prompt uses: a card is drawn while somebody waits.
 	Cached(fingerprint, projectID string) (*project.Overview, bool)
+	// Versions is what a document has been: the publisher's working-tree states
+	// since its last commit, then the commits that touched it (decision AP).
+	Versions(
+		ctx context.Context, fingerprint, projectID, path string, limit int,
+	) (*project.VersionList, error)
+	// Read is one document ready to draw, with what changed since a named
+	// version marked in it when one is named.
+	Read(
+		ctx context.Context, fingerprint, projectID, path string,
+		digest []byte, commit string,
+	) (*project.DocumentAt, error)
 }
 
 // ProjectView is one project in a listing.
@@ -122,6 +134,14 @@ type ProjectPageView struct {
 	Note  string `json:"note,omitempty"`
 	Live  bool   `json:"live"`
 	Error string `json:"error,omitempty"`
+	// Compared says the blocks carry change marks, because a version was named
+	// to compare against (decision AP). ComparedTo is which one.
+	Compared   bool                `json:"compared,omitempty"`
+	ComparedTo *ProjectVersionView `json:"comparedTo,omitempty"`
+	// CompareError is why the comparison did not happen, when a version was
+	// asked for and has since gone. The document is still here and still
+	// readable; only the comparison is missing.
+	CompareError string `json:"compareError,omitempty"`
 }
 
 // RequestProjectView ties a signing request to the documentation behind it, and
@@ -372,23 +392,151 @@ func (s *Session) handleProjectFile(w http.ResponseWriter, r *http.Request) {
 	fingerprint, id := where(r)
 	name := r.URL.Query().Get("path")
 
-	page, err := s.opts.Projects.File(r.Context(), fingerprint, id, name)
+	// A version to compare against, named the way the version list named it.
+	// Neither is a reader asking for the document plain, which is the ordinary
+	// case and the one that must stay cheap.
+	digest, digestErr := versionDigest(r.URL.Query().Get("digest"))
+	if digestErr != nil {
+		writeError(w, http.StatusBadRequest, digestErr.Error())
+
+		return
+	}
+
+	commit := r.URL.Query().Get("commit")
+
+	read, err := s.opts.Projects.Read(
+		r.Context(), fingerprint, id, name, digest, commit)
+	if err != nil && read == nil {
+		writeError(w, http.StatusNotFound, err.Error())
+
+		return
+	}
+
+	view := ProjectPageView{
+		Path:     read.Page.Path,
+		Title:    s.documentTitle(read.Document, fingerprint, id, name),
+		Blocks:   read.Document.Blocks,
+		Note:     pageNote(read.Page),
+		Live:     read.Page.Live,
+		Error:    read.Page.Err,
+		Compared: read.Compared,
+	}
+
+	// A version that has gone since the list was read is not a reason to refuse
+	// the document: the reader gets what they asked to read, and a line saying
+	// the version they picked to compare against is no longer there.
+	if err != nil {
+		view.CompareError = err.Error()
+	}
+
+	if read.Against != nil {
+		against := versionView(read.Against)
+		view.ComparedTo = &against
+	}
+
+	writeJSON(w, http.StatusOK, view)
+}
+
+// versionDigest decodes a snapshot handle. It is hex on the wire because that
+// is what a digest is everywhere else in this system, and an unparseable one is
+// a request to refuse rather than a comparison to skip silently.
+func versionDigest(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+
+	out, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("the version digest is not hexadecimal: %w", err)
+	}
+
+	return out, nil
+}
+
+// handleProjectVersions is what a document has been (decision AP).
+func (s *Session) handleProjectVersions(w http.ResponseWriter, r *http.Request) {
+	if !s.browsable(w) {
+		return
+	}
+
+	fingerprint, id := where(r)
+	name := r.URL.Query().Get("path")
+
+	list, err := s.opts.Projects.Versions(r.Context(), fingerprint, id, name, 0)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 
 		return
 	}
 
-	document := project.ParseMarkdown(string(page.Content), name)
+	view := ProjectVersionsView{
+		Head:      list.Head,
+		Truncated: list.Truncated,
+		Live:      list.Live,
+		Error:     list.Err,
+	}
 
-	writeJSON(w, http.StatusOK, ProjectPageView{
-		Path:   page.Path,
-		Title:  s.documentTitle(document, fingerprint, id, name),
-		Blocks: document.Blocks,
-		Note:   pageNote(page),
-		Live:   page.Live,
-		Error:  page.Err,
-	})
+	for _, version := range list.Versions {
+		view.Versions = append(view.Versions, versionView(version))
+	}
+
+	writeJSON(w, http.StatusOK, view)
+}
+
+// ProjectVersionsView is the version list as a browser draws it.
+type ProjectVersionsView struct {
+	Versions  []ProjectVersionView `json:"versions"`
+	Head      string               `json:"head,omitempty"`
+	Truncated bool                 `json:"truncated,omitempty"`
+	Live      bool                 `json:"live"`
+	Error     string               `json:"error,omitempty"`
+}
+
+// ProjectVersionView is one version, with the handle to ask for it by.
+type ProjectVersionView struct {
+	// Kind is "snapshot" or "commit", which is the difference a reader has to
+	// see: one of them will still be there tomorrow and the other will not.
+	Kind string `json:"kind"`
+	// Digest names a snapshot, hex; Commit names a commit.
+	Digest string `json:"digest,omitempty"`
+	Commit string `json:"commit,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	At     string `json:"at,omitempty"`
+	// Subject and Author are a commit's, and empty on a snapshot: nobody writes
+	// a message about saving a file.
+	Subject string `json:"subject,omitempty"`
+	Author  string `json:"author,omitempty"`
+}
+
+func versionView(version *ladulasv1.DocumentVersion) ProjectVersionView {
+	out := ProjectVersionView{
+		Digest:  fmt.Sprintf("%x", version.GetDigest()),
+		Commit:  version.GetCommit(),
+		Size:    version.GetSize(),
+		Subject: version.GetSubject(),
+		Author:  version.GetAuthor(),
+	}
+
+	if version.GetDigest() == nil {
+		out.Digest = ""
+	}
+
+	switch version.GetKind() {
+	case ladulasv1.DocumentVersionKind_DOCUMENT_VERSION_KIND_SNAPSHOT:
+		out.Kind = "snapshot"
+	case ladulasv1.DocumentVersionKind_DOCUMENT_VERSION_KIND_COMMIT:
+		out.Kind = "commit"
+	case ladulasv1.DocumentVersionKind_DOCUMENT_VERSION_KIND_UNSPECIFIED:
+		// A version this side does not recognise is still one the publisher
+		// offered, and naming it by its handle is better than dropping it.
+		out.Kind = ""
+	}
+
+	if at := version.GetAt(); at != nil {
+		out.At = at.AsTime().Format(time.RFC3339)
+	}
+
+	return out
 }
 
 // writeListing puts the project's own facts on a listing, so that a browser

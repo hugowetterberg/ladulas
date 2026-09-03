@@ -676,6 +676,71 @@ func (p *projects) File(
 	return project.PageFromWire(resp.Msg.GetPage()), nil
 }
 
+// Versions is what one document has been (decision AP). The daemon does the
+// reaching; this is a socket round trip.
+func (p *projects) Versions(
+	ctx context.Context, fingerprint, projectID, path string, limit int,
+) (*project.VersionList, error) {
+	resp, err := p.front.client.PeerDocumentVersions(ctx, connect.NewRequest(
+		&ladulasv1.PeerDocumentVersionsRequest{
+			Fingerprint: fingerprint,
+			ProjectId:   projectID,
+			Path:        path,
+			CommitLimit: int32(limit), //nolint:gosec // a caller's page size
+		}))
+	if err != nil {
+		return nil, fmt.Errorf("read the versions: %w", err)
+	}
+
+	return &project.VersionList{
+		Versions:      resp.Msg.GetVersions(),
+		Head:          resp.Msg.GetHead(),
+		CurrentDigest: resp.Msg.GetCurrentDigest(),
+		Truncated:     resp.Msg.GetTruncated(),
+		Live:          resp.Msg.GetLive(),
+		Err:           resp.Msg.GetError(),
+	}, nil
+}
+
+// Read is one document, with what changed since a named version marked in it.
+//
+// The daemon fetches both pages, because reaching a publisher needs the
+// identity key it holds (decision Z); the parsing and the comparison happen
+// here, through the same Composed the in-process browser uses.
+func (p *projects) Read(
+	ctx context.Context, fingerprint, projectID, path string,
+	digest []byte, commit string,
+) (*project.DocumentAt, error) {
+	resp, err := p.front.client.ReadPeerPage(ctx, connect.NewRequest(
+		&ladulasv1.ReadPeerPageRequest{
+			Fingerprint:   fingerprint,
+			ProjectId:     projectID,
+			Path:          path,
+			CompareDigest: digest,
+			CompareCommit: commit,
+		}))
+	if err != nil {
+		return nil, fmt.Errorf("read the page: %w", err)
+	}
+
+	page := project.PageFromWire(resp.Msg.GetPage())
+
+	var before *project.Page
+
+	if wire := resp.Msg.GetComparedTo(); wire != nil {
+		before = project.PageFromWire(wire)
+	}
+
+	out := project.Composed(path, page, before)
+	out.Against = resp.Msg.GetVersion()
+
+	if detail := resp.Msg.GetCompareError(); detail != "" {
+		return out, errors.New(detail)
+	}
+
+	return out, nil
+}
+
 // Cached is what a card asks: somebody is waiting in front of it, so it is
 // answered from what has been read here and nobody is dialled (decision Q).
 //

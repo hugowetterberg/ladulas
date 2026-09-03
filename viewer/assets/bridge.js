@@ -163,10 +163,25 @@ export const bridge = {
       "/projects/search" +
         where({ peer: fingerprint, project: projectID, q: query, token }),
     ),
-  projectFile: (fingerprint, projectID, path) =>
+  // compare names a version to mark the changes since, as {digest} or
+  // {commit}; without one the document comes back plain, which is the ordinary
+  // read and the one that has to stay cheap (decision AP).
+  projectFile: (fingerprint, projectID, path, compare) =>
     call(
       "GET",
       "/projects/file" +
+        where({
+          peer: fingerprint,
+          project: projectID,
+          path,
+          digest: (compare || {}).digest,
+          commit: (compare || {}).commit,
+        }),
+    ),
+  projectVersions: (fingerprint, projectID, path) =>
+    call(
+      "GET",
+      "/projects/versions" +
         where({ peer: fingerprint, project: projectID, path }),
     ),
 };

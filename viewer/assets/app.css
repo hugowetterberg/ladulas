@@ -1677,6 +1677,74 @@ table.changed-added {
   color: var(--text-dim);
 }
 
+/* A note in the panel: what could not be read, what is not listed. */
+.changes-note {
+  margin: 4px 8px 8px;
+  font-size: 0.85em;
+  color: var(--text-dim);
+}
+
+/* The version rows. The one being read against is marked rather than merely
+ * highlighted on hover, because "which of these am I looking at" is the
+ * question the panel exists to answer. */
+.changes-version {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.changes-version:hover {
+  background: var(--bg-sunken);
+}
+
+.changes-version.selected {
+  background: var(--bg-sunken);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.changes-version-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.changes-version-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changes-version-detail {
+  font-size: 0.8em;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The changes, below the versions and separated from them, because they are
+ * two different questions: which version, and then what moved in it. */
+.changes-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* The button says, without being opened, that the document on screen is a
+ * comparison. A reader who left the marks on and scrolled away should be able
+ * to tell why the page is striped. */
+.changes-toggle.comparing {
+  border-color: var(--added);
+}
+
 .changes-list {
   overflow-y: auto;
   display: flex;

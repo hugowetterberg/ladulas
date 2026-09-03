@@ -893,3 +893,37 @@ func TestTheRestOfADiffCanBeFetched(t *testing.T) {
 		t.Errorf("a settled request answered a diff fetch with %d", status)
 	}
 }
+
+// The two calls decision AP added. Both fakes get them so that the existing
+// tests keep compiling; the version list and the comparison have their own
+// tests over the real browser, where there is a publisher to ask.
+
+func (b *browsedProjects) Versions(
+	_ context.Context, _, _, _ string, _ int,
+) (*project.VersionList, error) {
+	return &project.VersionList{}, nil
+}
+
+func (b *browsedProjects) Read(
+	ctx context.Context, fingerprint, projectID, name string,
+	_ []byte, _ string,
+) (*project.DocumentAt, error) {
+	page, err := b.File(ctx, fingerprint, projectID, name)
+	if err != nil {
+		return nil, err
+	}
+
+	return project.Composed(name, page, nil), nil
+}
+
+func (p *pagedProjects) Versions(
+	_ context.Context, _, _, _ string, _ int,
+) (*project.VersionList, error) {
+	return &project.VersionList{}, nil
+}
+
+func (p *pagedProjects) Read(
+	_ context.Context, _, _, _ string, _ []byte, _ string,
+) (*project.DocumentAt, error) {
+	return nil, project.ErrNoSuchFile
+}

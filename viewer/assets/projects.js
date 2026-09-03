@@ -26,12 +26,10 @@ import { attachChanges } from "./changes.js";
 // outline's button stays where a thumb has learned to find it, and the new one
 // sits above it. It returns the dock either way, so a document nobody has
 // refreshed is exactly what it was.
-function withChanges(dock, article) {
-  const changes = attachChanges(article);
+function withChanges(dock, article, page, source, onCompare) {
+  const changes = attachChanges(article, page, source, onCompare);
 
-  if (changes) {
-    dock.prepend(changes.panel, changes.toggle);
-  }
+  dock.prepend(changes.panel, changes.toggle);
 
   return dock;
 }
@@ -380,42 +378,103 @@ function entryItem(entry, listing, fingerprint, projectID, current, query) {
 
 async function showDocument(
   reader, fingerprint, projectID, file, path, query, fragment) {
-  let page;
+  // The document is redrawn in place when the reader picks a version to compare
+  // against, so the parts that change live in their own container and the dock
+  // is tracked well enough to be replaced (decision AP).
+  const body = el("div", "reader-body");
+  reader.append(body);
 
-  try {
-    page = await bridge.projectFile(fingerprint, projectID, file);
-  } catch (error) {
-    reader.append(
-      el("p", "warning", "Could not read " + file + ": " + error.message),
+  let dock = null;
+
+  async function draw(compare) {
+    let page;
+
+    try {
+      page = await bridge.projectFile(fingerprint, projectID, file, compare);
+    } catch (error) {
+      body.replaceChildren(
+        el("p", "warning", "Could not read " + file + ": " + error.message));
+
+      return;
+    }
+
+    // A link inside a document keeps the reader where they were in the project,
+    // because following one is reading on rather than starting again.
+    const article = renderDocument(page, (target, anchor) => {
+      location.href = projectURL(fingerprint, projectID, {
+        path,
+        file: target,
+        q: query,
+        frag: anchor,
+      });
+    });
+
+    body.replaceChildren();
+
+    append(
+      body,
+      el("p", "path mono", page.path),
+      page.note ? el("p", "note-line kept", page.note) : null,
+      comparedNote(page),
+      article,
     );
 
-    return;
+    if (dock) {
+      dock.remove();
+    }
+
+    // The way around a long file, in the corner a thumb reaches: the headings
+    // and a search over the whole of it, with the versions above them.
+    dock = withChanges(
+      attachOutline(article), article, page,
+      () => bridge.projectVersions(fingerprint, projectID, file),
+      (version) => draw(compareOf(version)));
+
+    document.body.append(dock);
+
+    land(article, fragment);
   }
 
-  // A link inside a document keeps the reader where they were in the project,
-  // because following one is reading on rather than starting again.
-  const article = renderDocument(page, (target, anchor) => {
-    location.href = projectURL(fingerprint, projectID, {
-      path,
-      file: target,
-      q: query,
-      frag: anchor,
-    });
-  });
+  await draw(null);
+}
 
-  append(
-    reader,
-    el("p", "path mono", page.path),
-    page.note ? el("p", "note-line kept", page.note) : null,
-    article,
-  );
+// compareOf turns a chosen version into what the file call takes, and null into
+// null — which is the reader asking for the latest on its own.
+function compareOf(version) {
+  if (!version) {
+    return null;
+  }
 
-  // The way around a long file, in the corner a thumb reaches: the headings,
-  // and a search over the whole of it — with the changes above them when there
-  // are any (decision AP).
-  document.body.append(withChanges(attachOutline(article), article));
+  if (version.kind === "commit") {
+    return { commit: version.commit };
+  }
 
-  land(article, fragment);
+  return { digest: version.digest };
+}
+
+// comparedNote says what the marks in a document are against, above the
+// document rather than only inside the panel: a reader who scrolled away from
+// the corner should still be able to tell why the page is striped.
+function comparedNote(page) {
+  if (page.compareError) {
+    return el("p", "note-line",
+      "Showing the latest version: the one you asked to compare against is no "
+      + "longer there.");
+  }
+
+  if (!page.compared) {
+    return null;
+  }
+
+  const against = page.comparedTo || {};
+
+  if (against.commit) {
+    return el("p", "note-line",
+      "Marked against the commit " + against.commit.slice(0, 10) + ".");
+  }
+
+  return el("p", "note-line",
+    "Marked against an earlier saved version.");
 }
 
 // land scrolls a document that was arrived at through a link to a place in it.
@@ -443,25 +502,49 @@ function land(article, fragment) {
 // leaves is the chrome around it.
 export async function renderReader(fingerprint, projectID, file, fragment) {
   const root = el("div", "reader");
-  const page = await bridge.projectFile(fingerprint, projectID, file);
+  const body = el("div", "reader-body");
+  root.append(body);
 
-  // A link inside the document is a file of the same project, so it opens the
-  // same way this page did. The host may take it over — iOS cancels the
-  // navigation and pushes a screen of its own — and where it does not, the
-  // webview follows it and its back gesture is the way out.
-  const article = renderDocument(page, (target, anchor) => {
-    location.href = projectURL(fingerprint, projectID, {
-      file: target,
-      read: "1",
-      frag: anchor,
+  let dock = null;
+
+  async function draw(compare) {
+    const page = await bridge.projectFile(
+      fingerprint, projectID, file, compare);
+
+    // A link inside the document is a file of the same project, so it opens the
+    // same way this page did. The host may take it over — iOS cancels the
+    // navigation and pushes a screen of its own — and where it does not, the
+    // webview follows it and its back gesture is the way out.
+    const article = renderDocument(page, (target, anchor) => {
+      location.href = projectURL(fingerprint, projectID, {
+        file: target,
+        read: "1",
+        frag: anchor,
+      });
     });
-  });
 
-  append(root, page.note ? el("p", "note-line kept", page.note) : null, article);
+    body.replaceChildren();
 
-  document.body.append(withChanges(attachOutline(article), article));
+    append(body,
+      page.note ? el("p", "note-line kept", page.note) : null,
+      comparedNote(page),
+      article);
 
-  land(article, fragment);
+    if (dock) {
+      dock.remove();
+    }
+
+    dock = withChanges(
+      attachOutline(article), article, page,
+      () => bridge.projectVersions(fingerprint, projectID, file),
+      (version) => draw(compareOf(version)));
+
+    document.body.append(dock);
+
+    land(article, fragment);
+  }
+
+  await draw(null);
 
   return root;
 }

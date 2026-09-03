@@ -177,6 +177,9 @@ const (
 	// ControlServiceReadPeerPageProcedure is the fully-qualified name of the ControlService's
 	// ReadPeerPage RPC.
 	ControlServiceReadPeerPageProcedure = "/ladulas.v1.ControlService/ReadPeerPage"
+	// ControlServicePeerDocumentVersionsProcedure is the fully-qualified name of the ControlService's
+	// PeerDocumentVersions RPC.
+	ControlServicePeerDocumentVersionsProcedure = "/ladulas.v1.ControlService/PeerDocumentVersions"
 	// ControlServiceReloadProcedure is the fully-qualified name of the ControlService's Reload RPC.
 	ControlServiceReloadProcedure = "/ladulas.v1.ControlService/Reload"
 	// ControlServiceSettingsProcedure is the fully-qualified name of the ControlService's Settings RPC.
@@ -515,6 +518,13 @@ type ControlServiceClient interface {
 	ListPeerDirectory(context.Context, *connect.Request[ladulasv1.ListPeerDirectoryRequest]) (*connect.Response[ladulasv1.ListPeerDirectoryResponse], error)
 	SearchPeerProject(context.Context, *connect.Request[ladulasv1.SearchPeerProjectRequest]) (*connect.Response[ladulasv1.SearchPeerProjectResponse], error)
 	ReadPeerPage(context.Context, *connect.Request[ladulasv1.ReadPeerPageRequest]) (*connect.Response[ladulasv1.ReadPeerPageResponse], error)
+	// PeerDocumentVersions is what one document has been: the publisher's
+	// working-tree states since its last commit, then the commits that touched
+	// it (decision AP).
+	//
+	// It goes through the daemon like every other browsing call, because the
+	// answer is the publisher's and reaching a publisher needs the identity key.
+	PeerDocumentVersions(context.Context, *connect.Request[ladulasv1.PeerDocumentVersionsRequest]) (*connect.Response[ladulasv1.PeerDocumentVersionsResponse], error)
 	// Reload re-reads the store and the policy from disk, which is the same thing
 	// SIGHUP does to the daemon. It is here because the front end offers it in a
 	// menu and a menu item may not depend on being able to signal a process.
@@ -828,6 +838,12 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("ReadPeerPage")),
 			connect.WithClientOptions(opts...),
 		),
+		peerDocumentVersions: connect.NewClient[ladulasv1.PeerDocumentVersionsRequest, ladulasv1.PeerDocumentVersionsResponse](
+			httpClient,
+			baseURL+ControlServicePeerDocumentVersionsProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("PeerDocumentVersions")),
+			connect.WithClientOptions(opts...),
+		),
 		reload: connect.NewClient[ladulasv1.ReloadRequest, ladulasv1.ReloadResponse](
 			httpClient,
 			baseURL+ControlServiceReloadProcedure,
@@ -897,6 +913,7 @@ type controlServiceClient struct {
 	listPeerDirectory    *connect.Client[ladulasv1.ListPeerDirectoryRequest, ladulasv1.ListPeerDirectoryResponse]
 	searchPeerProject    *connect.Client[ladulasv1.SearchPeerProjectRequest, ladulasv1.SearchPeerProjectResponse]
 	readPeerPage         *connect.Client[ladulasv1.ReadPeerPageRequest, ladulasv1.ReadPeerPageResponse]
+	peerDocumentVersions *connect.Client[ladulasv1.PeerDocumentVersionsRequest, ladulasv1.PeerDocumentVersionsResponse]
 	reload               *connect.Client[ladulasv1.ReloadRequest, ladulasv1.ReloadResponse]
 	settings             *connect.Client[ladulasv1.SettingsRequest, ladulasv1.SettingsResponse]
 	setSignTimeout       *connect.Client[ladulasv1.SetSignTimeoutRequest, ladulasv1.SettingsResponse]
@@ -1130,6 +1147,11 @@ func (c *controlServiceClient) SearchPeerProject(ctx context.Context, req *conne
 // ReadPeerPage calls ladulas.v1.ControlService.ReadPeerPage.
 func (c *controlServiceClient) ReadPeerPage(ctx context.Context, req *connect.Request[ladulasv1.ReadPeerPageRequest]) (*connect.Response[ladulasv1.ReadPeerPageResponse], error) {
 	return c.readPeerPage.CallUnary(ctx, req)
+}
+
+// PeerDocumentVersions calls ladulas.v1.ControlService.PeerDocumentVersions.
+func (c *controlServiceClient) PeerDocumentVersions(ctx context.Context, req *connect.Request[ladulasv1.PeerDocumentVersionsRequest]) (*connect.Response[ladulasv1.PeerDocumentVersionsResponse], error) {
+	return c.peerDocumentVersions.CallUnary(ctx, req)
 }
 
 // Reload calls ladulas.v1.ControlService.Reload.
@@ -1390,6 +1412,13 @@ type ControlServiceHandler interface {
 	ListPeerDirectory(context.Context, *connect.Request[ladulasv1.ListPeerDirectoryRequest]) (*connect.Response[ladulasv1.ListPeerDirectoryResponse], error)
 	SearchPeerProject(context.Context, *connect.Request[ladulasv1.SearchPeerProjectRequest]) (*connect.Response[ladulasv1.SearchPeerProjectResponse], error)
 	ReadPeerPage(context.Context, *connect.Request[ladulasv1.ReadPeerPageRequest]) (*connect.Response[ladulasv1.ReadPeerPageResponse], error)
+	// PeerDocumentVersions is what one document has been: the publisher's
+	// working-tree states since its last commit, then the commits that touched
+	// it (decision AP).
+	//
+	// It goes through the daemon like every other browsing call, because the
+	// answer is the publisher's and reaching a publisher needs the identity key.
+	PeerDocumentVersions(context.Context, *connect.Request[ladulasv1.PeerDocumentVersionsRequest]) (*connect.Response[ladulasv1.PeerDocumentVersionsResponse], error)
 	// Reload re-reads the store and the policy from disk, which is the same thing
 	// SIGHUP does to the daemon. It is here because the front end offers it in a
 	// menu and a menu item may not depend on being able to signal a process.
@@ -1699,6 +1728,12 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("ReadPeerPage")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServicePeerDocumentVersionsHandler := connect.NewUnaryHandler(
+		ControlServicePeerDocumentVersionsProcedure,
+		svc.PeerDocumentVersions,
+		connect.WithSchema(controlServiceMethods.ByName("PeerDocumentVersions")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceReloadHandler := connect.NewUnaryHandler(
 		ControlServiceReloadProcedure,
 		svc.Reload,
@@ -1811,6 +1846,8 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceSearchPeerProjectHandler.ServeHTTP(w, r)
 		case ControlServiceReadPeerPageProcedure:
 			controlServiceReadPeerPageHandler.ServeHTTP(w, r)
+		case ControlServicePeerDocumentVersionsProcedure:
+			controlServicePeerDocumentVersionsHandler.ServeHTTP(w, r)
 		case ControlServiceReloadProcedure:
 			controlServiceReloadHandler.ServeHTTP(w, r)
 		case ControlServiceSettingsProcedure:
@@ -2008,6 +2045,10 @@ func (UnimplementedControlServiceHandler) SearchPeerProject(context.Context, *co
 
 func (UnimplementedControlServiceHandler) ReadPeerPage(context.Context, *connect.Request[ladulasv1.ReadPeerPageRequest]) (*connect.Response[ladulasv1.ReadPeerPageResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ReadPeerPage is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) PeerDocumentVersions(context.Context, *connect.Request[ladulasv1.PeerDocumentVersionsRequest]) (*connect.Response[ladulasv1.PeerDocumentVersionsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.PeerDocumentVersions is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) Reload(context.Context, *connect.Request[ladulasv1.ReloadRequest]) (*connect.Response[ladulasv1.ReloadResponse], error) {
