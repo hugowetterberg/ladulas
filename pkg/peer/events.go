@@ -2,6 +2,8 @@ package peer
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"github.com/hugowetterberg/ladulas/pkg/project"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 )
 
 // Telling an approver that something changed, without telling it what
@@ -236,4 +239,71 @@ func (n *Node) heartbeatEvery() time.Duration {
 type eventState struct {
 	eventMu     sync.Mutex
 	subscribers map[*subscriber]bool
+}
+
+// WatchPublisher holds an event stream open to one publisher and reports what
+// it says (decision AP).
+//
+// This is the approver's side of EventService, and it runs in the direction a
+// phone can manage: the machine that wants to know does the dialling. It
+// returns when the stream ends, so a caller that wants it kept up reconnects
+// with a backoff — the same shape the presence stream's caller has.
+//
+// **A stream that yields nothing is not a connection.** connect hands one back
+// as soon as the request has been written and keeps the transport error for the
+// first Receive, so onLive is called on the first message rather than on the
+// call returning, and a caller that needs to know whether the publisher is
+// really there waits for that.
+func (n *Node) WatchPublisher(
+	ctx context.Context, fingerprint string,
+	onLive func(),
+	onEvent func(*ladulasv1.Event),
+) error {
+	record, ok := n.trust.Peer(fingerprint)
+	if !ok {
+		return fmt.Errorf("peer: %s is not a paired peer", fingerprint)
+	}
+
+	return n.call(ctx, record, func(
+		ctx context.Context, client *http.Client, baseURL string,
+	) error {
+		events := ladulasv1connect.NewEventServiceClient(client, baseURL)
+
+		stream, err := events.Events(ctx, connect.NewRequest(
+			&ladulasv1.EventsRequest{}))
+		if err != nil {
+			return err //nolint:wrapcheck // call wraps it with the address
+		}
+
+		defer func() {
+			_ = stream.Close()
+		}()
+
+		var live bool
+
+		for stream.Receive() {
+			if !live {
+				live = true
+
+				if onLive != nil {
+					onLive()
+				}
+			}
+
+			event := stream.Msg()
+
+			// A heartbeat is the stream saying it is real, which the first one
+			// has already done. Nothing else is expected of it.
+			if event.GetKind() ==
+				ladulasv1.EventKind_EVENT_KIND_HEARTBEAT {
+				continue
+			}
+
+			if onEvent != nil {
+				onEvent(event)
+			}
+		}
+
+		return stream.Err() //nolint:wrapcheck // call wraps it with the address
+	})
 }

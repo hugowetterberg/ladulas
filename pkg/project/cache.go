@@ -441,6 +441,56 @@ func (c *Cache) Drop(key string) error {
 // DropPeer forgets everything read from a peer, which is the other half of
 // revoking a pairing: a peer that is no longer trusted should not still be
 // occupying an approver's screen.
+// Forget removes one page, for a document the publisher no longer has
+// (decision AP).
+//
+// It is the page-sized counterpart of Drop, and syncing is what needs it: a
+// document deleted on the publisher should stop being readable here, and
+// dropping the whole project to say so would throw away every other page with
+// it. A page that is not held is not an error — two syncs in a row report the
+// same removal if the first was interrupted, and the second must not fail.
+func (c *Cache) Forget(fingerprint, projectID, path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	key := Key(fingerprint, projectID)
+
+	cached, err := c.read(key)
+	if errors.Is(err, ErrNoSuchProject) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	kept := make([]*ladulasv1.CachedFile, 0, len(cached.GetFiles()))
+
+	for _, file := range cached.GetFiles() {
+		if file.GetPath() == path {
+			continue
+		}
+
+		kept = append(kept, file)
+	}
+
+	if len(kept) == len(cached.GetFiles()) {
+		return nil
+	}
+
+	cached.Files = kept
+
+	dir := filepath.Join(c.dir, key)
+
+	if err := c.writeMessage(filepath.Join(dir, "record"), cached); err != nil {
+		return err
+	}
+
+	c.sweep(dir, cached)
+
+	return nil
+}
+
 func (c *Cache) DropPeer(fingerprint string) (int, error) {
 	cached, err := c.List()
 	if err != nil {

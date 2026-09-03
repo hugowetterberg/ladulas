@@ -736,6 +736,12 @@ func (a *App) startPeer(ctx context.Context, c *core) error {
 	c.served = served
 	a.mu.Unlock()
 
+	// The documentation this instance reads is kept up to date with the peer
+	// channel, because reaching a publisher is what that does (decision AP).
+	// The node is handed over rather than the core: c.peer is nilled under the
+	// lock when the channel stops, and a loop reading it would race that.
+	a.startDocSync(peerCtx, c.peer, c.projects)
+
 	return nil
 }
 
