@@ -80,6 +80,80 @@ func (ApprovalEventKind) EnumDescriptor() ([]byte, []int) {
 	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{0}
 }
 
+// EventKind is what happened. A reader gets one line of meaning per kind and
+// nothing else travels.
+type EventKind int32
+
+const (
+	EventKind_EVENT_KIND_UNSPECIFIED EventKind = 0
+	// A heartbeat, sent first and then on a timer. It carries no project and is
+	// how a caller knows the stream is real before anything has happened.
+	EventKind_EVENT_KIND_HEARTBEAT EventKind = 1
+	// A document was created or changed. Sync to get it.
+	EventKind_EVENT_KIND_DOCUMENT_CHANGED EventKind = 2
+	// A document is gone — deleted, renamed away, or no longer a kind that is
+	// served.
+	EventKind_EVENT_KIND_DOCUMENT_REMOVED EventKind = 3
+	// The project moved to another commit, so every snapshot the caller was
+	// offered for it has expired.
+	EventKind_EVENT_KIND_PROJECT_MOVED EventKind = 4
+	// A project was published to this caller.
+	EventKind_EVENT_KIND_PROJECT_PUBLISHED EventKind = 5
+	// A project is no longer published. What the approver has read of it is
+	// still readable; nothing is taken back, because there is nothing to take
+	// back (decision Q).
+	EventKind_EVENT_KIND_PROJECT_WITHDRAWN EventKind = 6
+)
+
+// Enum value maps for EventKind.
+var (
+	EventKind_name = map[int32]string{
+		0: "EVENT_KIND_UNSPECIFIED",
+		1: "EVENT_KIND_HEARTBEAT",
+		2: "EVENT_KIND_DOCUMENT_CHANGED",
+		3: "EVENT_KIND_DOCUMENT_REMOVED",
+		4: "EVENT_KIND_PROJECT_MOVED",
+		5: "EVENT_KIND_PROJECT_PUBLISHED",
+		6: "EVENT_KIND_PROJECT_WITHDRAWN",
+	}
+	EventKind_value = map[string]int32{
+		"EVENT_KIND_UNSPECIFIED":       0,
+		"EVENT_KIND_HEARTBEAT":         1,
+		"EVENT_KIND_DOCUMENT_CHANGED":  2,
+		"EVENT_KIND_DOCUMENT_REMOVED":  3,
+		"EVENT_KIND_PROJECT_MOVED":     4,
+		"EVENT_KIND_PROJECT_PUBLISHED": 5,
+		"EVENT_KIND_PROJECT_WITHDRAWN": 6,
+	}
+)
+
+func (x EventKind) Enum() *EventKind {
+	p := new(EventKind)
+	*p = x
+	return p
+}
+
+func (x EventKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (EventKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ladulas_v1_service_proto_enumTypes[1].Descriptor()
+}
+
+func (EventKind) Type() protoreflect.EnumType {
+	return &file_ladulas_v1_service_proto_enumTypes[1]
+}
+
+func (x EventKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use EventKind.Descriptor instead.
+func (EventKind) EnumDescriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{1}
+}
+
 // PairingAnswer is what one side's user has said about a pending pairing.
 //
 // It has no "expired": a human comparing two fingerprints is not guessing, so
@@ -124,11 +198,11 @@ func (x PairingAnswer) String() string {
 }
 
 func (PairingAnswer) Descriptor() protoreflect.EnumDescriptor {
-	return file_ladulas_v1_service_proto_enumTypes[1].Descriptor()
+	return file_ladulas_v1_service_proto_enumTypes[2].Descriptor()
 }
 
 func (PairingAnswer) Type() protoreflect.EnumType {
-	return &file_ladulas_v1_service_proto_enumTypes[1]
+	return &file_ladulas_v1_service_proto_enumTypes[2]
 }
 
 func (x PairingAnswer) Number() protoreflect.EnumNumber {
@@ -137,7 +211,7 @@ func (x PairingAnswer) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PairingAnswer.Descriptor instead.
 func (PairingAnswer) EnumDescriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{1}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{2}
 }
 
 // PairingRecordState is what the answering side still has on record.
@@ -181,11 +255,11 @@ func (x PairingRecordState) String() string {
 }
 
 func (PairingRecordState) Descriptor() protoreflect.EnumDescriptor {
-	return file_ladulas_v1_service_proto_enumTypes[2].Descriptor()
+	return file_ladulas_v1_service_proto_enumTypes[3].Descriptor()
 }
 
 func (PairingRecordState) Type() protoreflect.EnumType {
-	return &file_ladulas_v1_service_proto_enumTypes[2]
+	return &file_ladulas_v1_service_proto_enumTypes[3]
 }
 
 func (x PairingRecordState) Number() protoreflect.EnumNumber {
@@ -194,7 +268,7 @@ func (x PairingRecordState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PairingRecordState.Descriptor instead.
 func (PairingRecordState) EnumDescriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{2}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{3}
 }
 
 type RequestApprovalRequest struct {
@@ -1851,6 +1925,417 @@ func (x *OfferedKey) GetPrivateKey() []byte {
 	return nil
 }
 
+type SyncProjectRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	// Every document of this project the caller holds, with its own digest of
+	// the contents. An empty manifest is a first sync and is answered with
+	// everything.
+	Have          []*SyncEntry `protobuf:"bytes,2,rep,name=have,proto3" json:"have,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncProjectRequest) Reset() {
+	*x = SyncProjectRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncProjectRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncProjectRequest) ProtoMessage() {}
+
+func (x *SyncProjectRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncProjectRequest.ProtoReflect.Descriptor instead.
+func (*SyncProjectRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *SyncProjectRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *SyncProjectRequest) GetHave() []*SyncEntry {
+	if x != nil {
+		return x.Have
+	}
+	return nil
+}
+
+type SyncProjectEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Set on the first event and on no other, so that a caller learns the commit
+	// and the branch in the same exchange that brings it the documents. Reading
+	// them from a separate ListProjects would be two answers about two moments
+	// stitched into one claim (§6).
+	Project *Publication   `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	Kind    SyncChangeKind `protobuf:"varint,2,opt,name=kind,proto3,enum=ladulas.v1.SyncChangeKind" json:"kind,omitempty"`
+	Path    string         `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	// Set on a PUT: what the listing would have said about the file, and its
+	// contents.
+	File          *ProjectEntry `protobuf:"bytes,4,opt,name=file,proto3" json:"file,omitempty"`
+	Content       []byte        `protobuf:"bytes,5,opt,name=content,proto3" json:"content,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncProjectEvent) Reset() {
+	*x = SyncProjectEvent{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncProjectEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncProjectEvent) ProtoMessage() {}
+
+func (x *SyncProjectEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncProjectEvent.ProtoReflect.Descriptor instead.
+func (*SyncProjectEvent) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *SyncProjectEvent) GetProject() *Publication {
+	if x != nil {
+		return x.Project
+	}
+	return nil
+}
+
+func (x *SyncProjectEvent) GetKind() SyncChangeKind {
+	if x != nil {
+		return x.Kind
+	}
+	return SyncChangeKind_SYNC_CHANGE_KIND_UNSPECIFIED
+}
+
+func (x *SyncProjectEvent) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SyncProjectEvent) GetFile() *ProjectEntry {
+	if x != nil {
+		return x.File
+	}
+	return nil
+}
+
+func (x *SyncProjectEvent) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+type DocumentVersionsRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Path      string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// How many commits to walk back. Capped by the publisher; zero means its
+	// default. The snapshots are never capped by the caller — there are at most
+	// a handful and they are the half that disappears.
+	CommitLimit   int32 `protobuf:"varint,3,opt,name=commit_limit,json=commitLimit,proto3" json:"commit_limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DocumentVersionsRequest) Reset() {
+	*x = DocumentVersionsRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DocumentVersionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DocumentVersionsRequest) ProtoMessage() {}
+
+func (x *DocumentVersionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DocumentVersionsRequest.ProtoReflect.Descriptor instead.
+func (*DocumentVersionsRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *DocumentVersionsRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *DocumentVersionsRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *DocumentVersionsRequest) GetCommitLimit() int32 {
+	if x != nil {
+		return x.CommitLimit
+	}
+	return 0
+}
+
+type DocumentVersionsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Newest first: the snapshots since the last commit, then the commits.
+	Versions []*DocumentVersion `protobuf:"bytes,1,rep,name=versions,proto3" json:"versions,omitempty"`
+	// The commit the publisher is standing on, which is what the snapshots are
+	// relative to.
+	Head string `protobuf:"bytes,2,opt,name=head,proto3" json:"head,omitempty"`
+	// SHA-256 of the document as it stands right now.
+	//
+	// This is what answers "is what I am reading current", and it is a digest
+	// rather than a version handle because the reader has bytes rather than a
+	// handle: it hashed what it was given and can compare without another call.
+	CurrentDigest []byte `protobuf:"bytes,3,opt,name=current_digest,json=currentDigest,proto3" json:"current_digest,omitempty"`
+	// Whether the walk back through the commits stopped before it ran out.
+	Truncated     bool `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DocumentVersionsResponse) Reset() {
+	*x = DocumentVersionsResponse{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DocumentVersionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DocumentVersionsResponse) ProtoMessage() {}
+
+func (x *DocumentVersionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DocumentVersionsResponse.ProtoReflect.Descriptor instead.
+func (*DocumentVersionsResponse) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *DocumentVersionsResponse) GetVersions() []*DocumentVersion {
+	if x != nil {
+		return x.Versions
+	}
+	return nil
+}
+
+func (x *DocumentVersionsResponse) GetHead() string {
+	if x != nil {
+		return x.Head
+	}
+	return ""
+}
+
+func (x *DocumentVersionsResponse) GetCurrentDigest() []byte {
+	if x != nil {
+		return x.CurrentDigest
+	}
+	return nil
+}
+
+func (x *DocumentVersionsResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+type FetchProjectVersionRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProjectId string                 `protobuf:"bytes,1,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Path      string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// Exactly one of these, naming the version the way DocumentVersions did: a
+	// snapshot by the digest it is stored under, a commit by its hash.
+	Digest        []byte `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	Commit        string `protobuf:"bytes,4,opt,name=commit,proto3" json:"commit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchProjectVersionRequest) Reset() {
+	*x = FetchProjectVersionRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchProjectVersionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchProjectVersionRequest) ProtoMessage() {}
+
+func (x *FetchProjectVersionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchProjectVersionRequest.ProtoReflect.Descriptor instead.
+func (*FetchProjectVersionRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *FetchProjectVersionRequest) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *FetchProjectVersionRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FetchProjectVersionRequest) GetDigest() []byte {
+	if x != nil {
+		return x.Digest
+	}
+	return nil
+}
+
+func (x *FetchProjectVersionRequest) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+type FetchProjectVersionResponse struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	File    *ProjectEntry          `protobuf:"bytes,1,opt,name=file,proto3" json:"file,omitempty"`
+	Content []byte                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	// What was returned. A snapshot that expired between the list and this call
+	// is answered NOT_FOUND rather than quietly with the commit behind it: a
+	// reader comparing against a version they did not ask for would be shown
+	// changes nobody made.
+	Version       *DocumentVersion `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchProjectVersionResponse) Reset() {
+	*x = FetchProjectVersionResponse{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchProjectVersionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchProjectVersionResponse) ProtoMessage() {}
+
+func (x *FetchProjectVersionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchProjectVersionResponse.ProtoReflect.Descriptor instead.
+func (*FetchProjectVersionResponse) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *FetchProjectVersionResponse) GetFile() *ProjectEntry {
+	if x != nil {
+		return x.File
+	}
+	return nil
+}
+
+func (x *FetchProjectVersionResponse) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
+func (x *FetchProjectVersionResponse) GetVersion() *DocumentVersion {
+	if x != nil {
+		return x.Version
+	}
+	return nil
+}
+
 type ListDirectoryRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The project, by the identifier both ends derive from the origin URL and the
@@ -1876,7 +2361,7 @@ type ListDirectoryRequest struct {
 
 func (x *ListDirectoryRequest) Reset() {
 	*x = ListDirectoryRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[30]
+	mi := &file_ladulas_v1_service_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1888,7 +2373,7 @@ func (x *ListDirectoryRequest) String() string {
 func (*ListDirectoryRequest) ProtoMessage() {}
 
 func (x *ListDirectoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[30]
+	mi := &file_ladulas_v1_service_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1901,7 +2386,7 @@ func (x *ListDirectoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDirectoryRequest.ProtoReflect.Descriptor instead.
 func (*ListDirectoryRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{30}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListDirectoryRequest) GetProject() string {
@@ -1954,7 +2439,7 @@ type ListDirectoryResponse struct {
 
 func (x *ListDirectoryResponse) Reset() {
 	*x = ListDirectoryResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[31]
+	mi := &file_ladulas_v1_service_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1966,7 +2451,7 @@ func (x *ListDirectoryResponse) String() string {
 func (*ListDirectoryResponse) ProtoMessage() {}
 
 func (x *ListDirectoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[31]
+	mi := &file_ladulas_v1_service_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1979,7 +2464,7 @@ func (x *ListDirectoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDirectoryResponse.ProtoReflect.Descriptor instead.
 func (*ListDirectoryResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{31}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListDirectoryResponse) GetEntries() []*ProjectEntry {
@@ -2017,7 +2502,7 @@ type SearchProjectFilesRequest struct {
 
 func (x *SearchProjectFilesRequest) Reset() {
 	*x = SearchProjectFilesRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[32]
+	mi := &file_ladulas_v1_service_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2029,7 +2514,7 @@ func (x *SearchProjectFilesRequest) String() string {
 func (*SearchProjectFilesRequest) ProtoMessage() {}
 
 func (x *SearchProjectFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[32]
+	mi := &file_ladulas_v1_service_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2042,7 +2527,7 @@ func (x *SearchProjectFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchProjectFilesRequest.ProtoReflect.Descriptor instead.
 func (*SearchProjectFilesRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{32}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SearchProjectFilesRequest) GetProject() string {
@@ -2087,7 +2572,7 @@ type SearchProjectFilesResponse struct {
 
 func (x *SearchProjectFilesResponse) Reset() {
 	*x = SearchProjectFilesResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[33]
+	mi := &file_ladulas_v1_service_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2099,7 +2584,7 @@ func (x *SearchProjectFilesResponse) String() string {
 func (*SearchProjectFilesResponse) ProtoMessage() {}
 
 func (x *SearchProjectFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[33]
+	mi := &file_ladulas_v1_service_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2112,7 +2597,7 @@ func (x *SearchProjectFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchProjectFilesResponse.ProtoReflect.Descriptor instead.
 func (*SearchProjectFilesResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{33}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *SearchProjectFilesResponse) GetEntries() []*ProjectEntry {
@@ -2144,7 +2629,7 @@ type ListProjectsRequest struct {
 
 func (x *ListProjectsRequest) Reset() {
 	*x = ListProjectsRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[34]
+	mi := &file_ladulas_v1_service_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2156,7 +2641,7 @@ func (x *ListProjectsRequest) String() string {
 func (*ListProjectsRequest) ProtoMessage() {}
 
 func (x *ListProjectsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[34]
+	mi := &file_ladulas_v1_service_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2169,7 +2654,7 @@ func (x *ListProjectsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProjectsRequest.ProtoReflect.Descriptor instead.
 func (*ListProjectsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{34}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{40}
 }
 
 type ListProjectsResponse struct {
@@ -2177,14 +2662,22 @@ type ListProjectsResponse struct {
 	// What each project is, and nothing about what is in it. Re-read at the
 	// moment of asking rather than remembered from when it was published, so the
 	// commit here is the commit the publisher is standing on now.
-	Projects      []*Publication `protobuf:"bytes,1,rep,name=projects,proto3" json:"projects,omitempty"`
+	Projects []*Publication `protobuf:"bytes,1,rep,name=projects,proto3" json:"projects,omitempty"`
+	// What this instance does with each kind of file (decision AP). It is a
+	// property of the instance rather than of a project, which is why it is here
+	// rather than on Publication.
+	//
+	// An approver needs it to tell three silences apart: a document that has not
+	// been pushed yet, one that will never be pushed and has to be asked for,
+	// and a kind this publisher does not serve at all.
+	Kinds         []*KindPolicy `protobuf:"bytes,2,rep,name=kinds,proto3" json:"kinds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListProjectsResponse) Reset() {
 	*x = ListProjectsResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[35]
+	mi := &file_ladulas_v1_service_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2196,7 +2689,7 @@ func (x *ListProjectsResponse) String() string {
 func (*ListProjectsResponse) ProtoMessage() {}
 
 func (x *ListProjectsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[35]
+	mi := &file_ladulas_v1_service_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2209,12 +2702,19 @@ func (x *ListProjectsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProjectsResponse.ProtoReflect.Descriptor instead.
 func (*ListProjectsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{35}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListProjectsResponse) GetProjects() []*Publication {
 	if x != nil {
 		return x.Projects
+	}
+	return nil
+}
+
+func (x *ListProjectsResponse) GetKinds() []*KindPolicy {
+	if x != nil {
+		return x.Kinds
 	}
 	return nil
 }
@@ -2229,7 +2729,7 @@ type FetchProjectFileRequest struct {
 
 func (x *FetchProjectFileRequest) Reset() {
 	*x = FetchProjectFileRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[36]
+	mi := &file_ladulas_v1_service_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2241,7 +2741,7 @@ func (x *FetchProjectFileRequest) String() string {
 func (*FetchProjectFileRequest) ProtoMessage() {}
 
 func (x *FetchProjectFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[36]
+	mi := &file_ladulas_v1_service_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2254,7 +2754,7 @@ func (x *FetchProjectFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchProjectFileRequest.ProtoReflect.Descriptor instead.
 func (*FetchProjectFileRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{36}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *FetchProjectFileRequest) GetProjectId() string {
@@ -2283,7 +2783,7 @@ type FetchProjectFileResponse struct {
 
 func (x *FetchProjectFileResponse) Reset() {
 	*x = FetchProjectFileResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[37]
+	mi := &file_ladulas_v1_service_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2295,7 +2795,7 @@ func (x *FetchProjectFileResponse) String() string {
 func (*FetchProjectFileResponse) ProtoMessage() {}
 
 func (x *FetchProjectFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[37]
+	mi := &file_ladulas_v1_service_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2308,7 +2808,7 @@ func (x *FetchProjectFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchProjectFileResponse.ProtoReflect.Descriptor instead.
 func (*FetchProjectFileResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{37}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *FetchProjectFileResponse) GetFile() *ProjectEntry {
@@ -2323,6 +2823,133 @@ func (x *FetchProjectFileResponse) GetContent() []byte {
 		return x.Content
 	}
 	return nil
+}
+
+type EventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The projects the caller cares about, by id. Empty means all of them, which
+	// is what an approver syncing everything asks for.
+	ProjectIds    []string `protobuf:"bytes,1,rep,name=project_ids,json=projectIds,proto3" json:"project_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventsRequest) Reset() {
+	*x = EventsRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventsRequest) ProtoMessage() {}
+
+func (x *EventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventsRequest.ProtoReflect.Descriptor instead.
+func (*EventsRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *EventsRequest) GetProjectIds() []string {
+	if x != nil {
+		return x.ProjectIds
+	}
+	return nil
+}
+
+type Event struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Kind      EventKind              `protobuf:"varint,1,opt,name=kind,proto3,enum=ladulas.v1.EventKind" json:"kind,omitempty"`
+	Timestamp *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ProjectId string                 `protobuf:"bytes,3,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	// The document, on the two document kinds.
+	Path string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	// The commit the publisher is on. Set on every event that is about a
+	// project, because a snapshot is only meaningful against one — an approver
+	// that sees this change knows its snapshot handles are dead without being
+	// told so separately.
+	Head          string `protobuf:"bytes,5,opt,name=head,proto3" json:"head,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Event) Reset() {
+	*x = Event{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Event) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Event) ProtoMessage() {}
+
+func (x *Event) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Event.ProtoReflect.Descriptor instead.
+func (*Event) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *Event) GetKind() EventKind {
+	if x != nil {
+		return x.Kind
+	}
+	return EventKind_EVENT_KIND_UNSPECIFIED
+}
+
+func (x *Event) GetTimestamp() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Timestamp
+	}
+	return nil
+}
+
+func (x *Event) GetProjectId() string {
+	if x != nil {
+		return x.ProjectId
+	}
+	return ""
+}
+
+func (x *Event) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *Event) GetHead() string {
+	if x != nil {
+		return x.Head
+	}
+	return ""
 }
 
 // PairingCode is everything a pairing code carries, and the reason the typed
@@ -2355,7 +2982,7 @@ type PairingCode struct {
 
 func (x *PairingCode) Reset() {
 	*x = PairingCode{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[38]
+	mi := &file_ladulas_v1_service_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2367,7 +2994,7 @@ func (x *PairingCode) String() string {
 func (*PairingCode) ProtoMessage() {}
 
 func (x *PairingCode) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[38]
+	mi := &file_ladulas_v1_service_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2380,7 +3007,7 @@ func (x *PairingCode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PairingCode.ProtoReflect.Descriptor instead.
 func (*PairingCode) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{38}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *PairingCode) GetVersion() int32 {
@@ -2459,7 +3086,7 @@ type PairRequest struct {
 
 func (x *PairRequest) Reset() {
 	*x = PairRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[39]
+	mi := &file_ladulas_v1_service_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2471,7 +3098,7 @@ func (x *PairRequest) String() string {
 func (*PairRequest) ProtoMessage() {}
 
 func (x *PairRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[39]
+	mi := &file_ladulas_v1_service_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2484,7 +3111,7 @@ func (x *PairRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PairRequest.ProtoReflect.Descriptor instead.
 func (*PairRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{39}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *PairRequest) GetProof() []byte {
@@ -2546,7 +3173,7 @@ type PairResponse struct {
 
 func (x *PairResponse) Reset() {
 	*x = PairResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[40]
+	mi := &file_ladulas_v1_service_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2558,7 +3185,7 @@ func (x *PairResponse) String() string {
 func (*PairResponse) ProtoMessage() {}
 
 func (x *PairResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[40]
+	mi := &file_ladulas_v1_service_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2571,7 +3198,7 @@ func (x *PairResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PairResponse.ProtoReflect.Descriptor instead.
 func (*PairResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{40}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *PairResponse) GetAccepted() bool {
@@ -2652,7 +3279,7 @@ type SettlePairingRequest struct {
 
 func (x *SettlePairingRequest) Reset() {
 	*x = SettlePairingRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[41]
+	mi := &file_ladulas_v1_service_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2664,7 +3291,7 @@ func (x *SettlePairingRequest) String() string {
 func (*SettlePairingRequest) ProtoMessage() {}
 
 func (x *SettlePairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[41]
+	mi := &file_ladulas_v1_service_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2677,7 +3304,7 @@ func (x *SettlePairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlePairingRequest.ProtoReflect.Descriptor instead.
 func (*SettlePairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{41}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *SettlePairingRequest) GetSessionId() string {
@@ -2713,7 +3340,7 @@ type SettlePairingResponse struct {
 
 func (x *SettlePairingResponse) Reset() {
 	*x = SettlePairingResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[42]
+	mi := &file_ladulas_v1_service_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2725,7 +3352,7 @@ func (x *SettlePairingResponse) String() string {
 func (*SettlePairingResponse) ProtoMessage() {}
 
 func (x *SettlePairingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[42]
+	mi := &file_ladulas_v1_service_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2738,7 +3365,7 @@ func (x *SettlePairingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlePairingResponse.ProtoReflect.Descriptor instead.
 func (*SettlePairingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{42}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SettlePairingResponse) GetState() PairingRecordState {
@@ -2771,7 +3398,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[43]
+	mi := &file_ladulas_v1_service_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2783,7 +3410,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[43]
+	mi := &file_ladulas_v1_service_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2796,7 +3423,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{43}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PingRequest) GetSentAt() *timestamppb.Timestamp {
@@ -2818,7 +3445,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[44]
+	mi := &file_ladulas_v1_service_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2830,7 +3457,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[44]
+	mi := &file_ladulas_v1_service_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2843,7 +3470,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{44}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PingResponse) GetSentAt() *timestamppb.Timestamp {
@@ -2875,7 +3502,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[45]
+	mi := &file_ladulas_v1_service_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2887,7 +3514,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[45]
+	mi := &file_ladulas_v1_service_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2900,7 +3527,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{45}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{53}
 }
 
 type PresenceEvent struct {
@@ -2914,7 +3541,7 @@ type PresenceEvent struct {
 
 func (x *PresenceEvent) Reset() {
 	*x = PresenceEvent{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[46]
+	mi := &file_ladulas_v1_service_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2926,7 +3553,7 @@ func (x *PresenceEvent) String() string {
 func (*PresenceEvent) ProtoMessage() {}
 
 func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[46]
+	mi := &file_ladulas_v1_service_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2939,7 +3566,7 @@ func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
 func (*PresenceEvent) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{46}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *PresenceEvent) GetTimestamp() *timestamppb.Timestamp {
@@ -3069,7 +3696,37 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x18\n" +
 	"\acomment\x18\x03 \x01(\tR\acomment\x12\x1f\n" +
 	"\vprivate_key\x18\x04 \x01(\fR\n" +
-	"privateKey\"\x98\x01\n" +
+	"privateKey\"^\n" +
+	"\x12SyncProjectRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12)\n" +
+	"\x04have\x18\x02 \x03(\v2\x15.ladulas.v1.SyncEntryR\x04have\"\xd1\x01\n" +
+	"\x10SyncProjectEvent\x121\n" +
+	"\aproject\x18\x01 \x01(\v2\x17.ladulas.v1.PublicationR\aproject\x12.\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1a.ladulas.v1.SyncChangeKindR\x04kind\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12,\n" +
+	"\x04file\x18\x04 \x01(\v2\x18.ladulas.v1.ProjectEntryR\x04file\x12\x18\n" +
+	"\acontent\x18\x05 \x01(\fR\acontent\"o\n" +
+	"\x17DocumentVersionsRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12!\n" +
+	"\fcommit_limit\x18\x03 \x01(\x05R\vcommitLimit\"\xac\x01\n" +
+	"\x18DocumentVersionsResponse\x127\n" +
+	"\bversions\x18\x01 \x03(\v2\x1b.ladulas.v1.DocumentVersionR\bversions\x12\x12\n" +
+	"\x04head\x18\x02 \x01(\tR\x04head\x12%\n" +
+	"\x0ecurrent_digest\x18\x03 \x01(\fR\rcurrentDigest\x12\x1c\n" +
+	"\ttruncated\x18\x04 \x01(\bR\ttruncated\"\x7f\n" +
+	"\x1aFetchProjectVersionRequest\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
+	"\x06digest\x18\x03 \x01(\fR\x06digest\x12\x16\n" +
+	"\x06commit\x18\x04 \x01(\tR\x06commit\"\x9c\x01\n" +
+	"\x1bFetchProjectVersionResponse\x12,\n" +
+	"\x04file\x18\x01 \x01(\v2\x18.ladulas.v1.ProjectEntryR\x04file\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\fR\acontent\x125\n" +
+	"\aversion\x18\x03 \x01(\v2\x1b.ladulas.v1.DocumentVersionR\aversion\"\x98\x01\n" +
 	"\x14ListDirectoryRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
@@ -3091,16 +3748,27 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\aentries\x18\x01 \x03(\v2\x18.ladulas.v1.ProjectEntryR\aentries\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12\x1c\n" +
 	"\ttruncated\x18\x03 \x01(\bR\ttruncated\"\x15\n" +
-	"\x13ListProjectsRequest\"K\n" +
+	"\x13ListProjectsRequest\"y\n" +
 	"\x14ListProjectsResponse\x123\n" +
-	"\bprojects\x18\x01 \x03(\v2\x17.ladulas.v1.PublicationR\bprojects\"L\n" +
+	"\bprojects\x18\x01 \x03(\v2\x17.ladulas.v1.PublicationR\bprojects\x12,\n" +
+	"\x05kinds\x18\x02 \x03(\v2\x16.ladulas.v1.KindPolicyR\x05kinds\"L\n" +
 	"\x17FetchProjectFileRequest\x12\x1d\n" +
 	"\n" +
 	"project_id\x18\x01 \x01(\tR\tprojectId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"b\n" +
 	"\x18FetchProjectFileResponse\x12,\n" +
 	"\x04file\x18\x01 \x01(\v2\x18.ladulas.v1.ProjectEntryR\x04file\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\fR\acontent\"\xed\x01\n" +
+	"\acontent\x18\x02 \x01(\fR\acontent\"0\n" +
+	"\rEventsRequest\x12\x1f\n" +
+	"\vproject_ids\x18\x01 \x03(\tR\n" +
+	"projectIds\"\xb3\x01\n" +
+	"\x05Event\x12)\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x15.ladulas.v1.EventKindR\x04kind\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1d\n" +
+	"\n" +
+	"project_id\x18\x03 \x01(\tR\tprojectId\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\x12\x12\n" +
+	"\x04head\x18\x05 \x01(\tR\x04head\"\xed\x01\n" +
 	"\vPairingCode\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x05R\aversion\x12\x16\n" +
 	"\x06secret\x18\x02 \x01(\tR\x06secret\x12.\n" +
@@ -3153,7 +3821,15 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x1fAPPROVAL_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cAPPROVAL_EVENT_KIND_ACCEPTED\x10\x01\x12 \n" +
 	"\x1cAPPROVAL_EVENT_KIND_PROMPTED\x10\x02\x12\x1f\n" +
-	"\x1bAPPROVAL_EVENT_KIND_DECIDED\x10\x03*\x87\x01\n" +
+	"\x1bAPPROVAL_EVENT_KIND_DECIDED\x10\x03*\xe5\x01\n" +
+	"\tEventKind\x12\x1a\n" +
+	"\x16EVENT_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14EVENT_KIND_HEARTBEAT\x10\x01\x12\x1f\n" +
+	"\x1bEVENT_KIND_DOCUMENT_CHANGED\x10\x02\x12\x1f\n" +
+	"\x1bEVENT_KIND_DOCUMENT_REMOVED\x10\x03\x12\x1c\n" +
+	"\x18EVENT_KIND_PROJECT_MOVED\x10\x04\x12 \n" +
+	"\x1cEVENT_KIND_PROJECT_PUBLISHED\x10\x05\x12 \n" +
+	"\x1cEVENT_KIND_PROJECT_WITHDRAWN\x10\x06*\x87\x01\n" +
 	"\rPairingAnswer\x12\x1e\n" +
 	"\x1aPAIRING_ANSWER_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17PAIRING_ANSWER_ACCEPTED\x10\x01\x12\x1b\n" +
@@ -3182,12 +3858,17 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x10CollectKeyOffers\x12#.ladulas.v1.CollectKeyOffersRequest\x1a$.ladulas.v1.CollectKeyOffersResponse\x12Q\n" +
 	"\fAnnounceKeys\x12\x1f.ladulas.v1.AnnounceKeysRequest\x1a .ladulas.v1.AnnounceKeysResponse\x12c\n" +
 	"\x12PublishEndorsement\x12%.ladulas.v1.PublishEndorsementRequest\x1a&.ladulas.v1.PublishEndorsementResponse\x12`\n" +
-	"\x11PublishRetraction\x12$.ladulas.v1.PublishRetractionRequest\x1a%.ladulas.v1.PublishRetractionResponse2\xfd\x02\n" +
+	"\x11PublishRetraction\x12$.ladulas.v1.PublishRetractionRequest\x1a%.ladulas.v1.PublishRetractionResponse2\x93\x05\n" +
 	"\x0eProjectService\x12Q\n" +
 	"\fListProjects\x12\x1f.ladulas.v1.ListProjectsRequest\x1a .ladulas.v1.ListProjectsResponse\x12T\n" +
 	"\rListDirectory\x12 .ladulas.v1.ListDirectoryRequest\x1a!.ladulas.v1.ListDirectoryResponse\x12c\n" +
 	"\x12SearchProjectFiles\x12%.ladulas.v1.SearchProjectFilesRequest\x1a&.ladulas.v1.SearchProjectFilesResponse\x12]\n" +
-	"\x10FetchProjectFile\x12#.ladulas.v1.FetchProjectFileRequest\x1a$.ladulas.v1.FetchProjectFileResponse2\xa1\x01\n" +
+	"\x10FetchProjectFile\x12#.ladulas.v1.FetchProjectFileRequest\x1a$.ladulas.v1.FetchProjectFileResponse\x12M\n" +
+	"\vSyncProject\x12\x1e.ladulas.v1.SyncProjectRequest\x1a\x1c.ladulas.v1.SyncProjectEvent0\x01\x12]\n" +
+	"\x10DocumentVersions\x12#.ladulas.v1.DocumentVersionsRequest\x1a$.ladulas.v1.DocumentVersionsResponse\x12f\n" +
+	"\x13FetchProjectVersion\x12&.ladulas.v1.FetchProjectVersionRequest\x1a'.ladulas.v1.FetchProjectVersionResponse2H\n" +
+	"\fEventService\x128\n" +
+	"\x06Events\x12\x19.ladulas.v1.EventsRequest\x1a\x11.ladulas.v1.Event0\x012\xa1\x01\n" +
 	"\x0ePairingService\x129\n" +
 	"\x04Pair\x12\x17.ladulas.v1.PairRequest\x1a\x18.ladulas.v1.PairResponse\x12T\n" +
 	"\rSettlePairing\x12 .ladulas.v1.SettlePairingRequest\x1a!.ladulas.v1.SettlePairingResponse2\x8c\x01\n" +
@@ -3207,153 +3888,184 @@ func file_ladulas_v1_service_proto_rawDescGZIP() []byte {
 	return file_ladulas_v1_service_proto_rawDescData
 }
 
-var file_ladulas_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
+var file_ladulas_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_ladulas_v1_service_proto_goTypes = []any{
-	(ApprovalEventKind)(0),             // 0: ladulas.v1.ApprovalEventKind
-	(PairingAnswer)(0),                 // 1: ladulas.v1.PairingAnswer
-	(PairingRecordState)(0),            // 2: ladulas.v1.PairingRecordState
-	(*RequestApprovalRequest)(nil),     // 3: ladulas.v1.RequestApprovalRequest
-	(*ApprovalEvent)(nil),              // 4: ladulas.v1.ApprovalEvent
-	(*CancelApprovalRequest)(nil),      // 5: ladulas.v1.CancelApprovalRequest
-	(*CancelApprovalResponse)(nil),     // 6: ladulas.v1.CancelApprovalResponse
-	(*FetchDiffRequest)(nil),           // 7: ladulas.v1.FetchDiffRequest
-	(*FetchDiffResponse)(nil),          // 8: ladulas.v1.FetchDiffResponse
-	(*ReportGrantUseRequest)(nil),      // 9: ladulas.v1.ReportGrantUseRequest
-	(*ReportGrantUseResponse)(nil),     // 10: ladulas.v1.ReportGrantUseResponse
-	(*ReconcileGrantsRequest)(nil),     // 11: ladulas.v1.ReconcileGrantsRequest
-	(*ReconcileGrantsResponse)(nil),    // 12: ladulas.v1.ReconcileGrantsResponse
-	(*FetchPendingRequest)(nil),        // 13: ladulas.v1.FetchPendingRequest
-	(*FetchPendingResponse)(nil),       // 14: ladulas.v1.FetchPendingResponse
-	(*PendingApproval)(nil),            // 15: ladulas.v1.PendingApproval
-	(*AnswerPendingRequest)(nil),       // 16: ladulas.v1.AnswerPendingRequest
-	(*AnswerPendingResponse)(nil),      // 17: ladulas.v1.AnswerPendingResponse
-	(*PublishEndorsementRequest)(nil),  // 18: ladulas.v1.PublishEndorsementRequest
-	(*PublishEndorsementResponse)(nil), // 19: ladulas.v1.PublishEndorsementResponse
-	(*PublishRetractionRequest)(nil),   // 20: ladulas.v1.PublishRetractionRequest
-	(*PublishRetractionResponse)(nil),  // 21: ladulas.v1.PublishRetractionResponse
-	(*ListKeysRequest)(nil),            // 22: ladulas.v1.ListKeysRequest
-	(*ListKeysResponse)(nil),           // 23: ladulas.v1.ListKeysResponse
-	(*AnnounceKeysRequest)(nil),        // 24: ladulas.v1.AnnounceKeysRequest
-	(*AnnounceKeysResponse)(nil),       // 25: ladulas.v1.AnnounceKeysResponse
-	(*RemoteSignRequest)(nil),          // 26: ladulas.v1.RemoteSignRequest
-	(*RemoteSignResponse)(nil),         // 27: ladulas.v1.RemoteSignResponse
-	(*OfferKeyRequest)(nil),            // 28: ladulas.v1.OfferKeyRequest
-	(*OfferKeyResponse)(nil),           // 29: ladulas.v1.OfferKeyResponse
-	(*CollectKeyOffersRequest)(nil),    // 30: ladulas.v1.CollectKeyOffersRequest
-	(*CollectKeyOffersResponse)(nil),   // 31: ladulas.v1.CollectKeyOffersResponse
-	(*OfferedKey)(nil),                 // 32: ladulas.v1.OfferedKey
-	(*ListDirectoryRequest)(nil),       // 33: ladulas.v1.ListDirectoryRequest
-	(*ListDirectoryResponse)(nil),      // 34: ladulas.v1.ListDirectoryResponse
-	(*SearchProjectFilesRequest)(nil),  // 35: ladulas.v1.SearchProjectFilesRequest
-	(*SearchProjectFilesResponse)(nil), // 36: ladulas.v1.SearchProjectFilesResponse
-	(*ListProjectsRequest)(nil),        // 37: ladulas.v1.ListProjectsRequest
-	(*ListProjectsResponse)(nil),       // 38: ladulas.v1.ListProjectsResponse
-	(*FetchProjectFileRequest)(nil),    // 39: ladulas.v1.FetchProjectFileRequest
-	(*FetchProjectFileResponse)(nil),   // 40: ladulas.v1.FetchProjectFileResponse
-	(*PairingCode)(nil),                // 41: ladulas.v1.PairingCode
-	(*PairRequest)(nil),                // 42: ladulas.v1.PairRequest
-	(*PairResponse)(nil),               // 43: ladulas.v1.PairResponse
-	(*SettlePairingRequest)(nil),       // 44: ladulas.v1.SettlePairingRequest
-	(*SettlePairingResponse)(nil),      // 45: ladulas.v1.SettlePairingResponse
-	(*PingRequest)(nil),                // 46: ladulas.v1.PingRequest
-	(*PingResponse)(nil),               // 47: ladulas.v1.PingResponse
-	(*WatchRequest)(nil),               // 48: ladulas.v1.WatchRequest
-	(*PresenceEvent)(nil),              // 49: ladulas.v1.PresenceEvent
-	(*timestamppb.Timestamp)(nil),      // 50: google.protobuf.Timestamp
-	(*SignedApproval)(nil),             // 51: ladulas.v1.SignedApproval
-	(*GitDiff)(nil),                    // 52: ladulas.v1.GitDiff
-	(*GrantUse)(nil),                   // 53: ladulas.v1.GrantUse
-	(*SignedDelegation)(nil),           // 54: ladulas.v1.SignedDelegation
-	(*durationpb.Duration)(nil),        // 55: google.protobuf.Duration
-	(*SignedEndorsement)(nil),          // 56: ladulas.v1.SignedEndorsement
-	(*SignedRetraction)(nil),           // 57: ladulas.v1.SignedRetraction
-	(*KeyRef)(nil),                     // 58: ladulas.v1.KeyRef
-	(*ProjectEntry)(nil),               // 59: ladulas.v1.ProjectEntry
-	(*Publication)(nil),                // 60: ladulas.v1.Publication
+	(ApprovalEventKind)(0),              // 0: ladulas.v1.ApprovalEventKind
+	(EventKind)(0),                      // 1: ladulas.v1.EventKind
+	(PairingAnswer)(0),                  // 2: ladulas.v1.PairingAnswer
+	(PairingRecordState)(0),             // 3: ladulas.v1.PairingRecordState
+	(*RequestApprovalRequest)(nil),      // 4: ladulas.v1.RequestApprovalRequest
+	(*ApprovalEvent)(nil),               // 5: ladulas.v1.ApprovalEvent
+	(*CancelApprovalRequest)(nil),       // 6: ladulas.v1.CancelApprovalRequest
+	(*CancelApprovalResponse)(nil),      // 7: ladulas.v1.CancelApprovalResponse
+	(*FetchDiffRequest)(nil),            // 8: ladulas.v1.FetchDiffRequest
+	(*FetchDiffResponse)(nil),           // 9: ladulas.v1.FetchDiffResponse
+	(*ReportGrantUseRequest)(nil),       // 10: ladulas.v1.ReportGrantUseRequest
+	(*ReportGrantUseResponse)(nil),      // 11: ladulas.v1.ReportGrantUseResponse
+	(*ReconcileGrantsRequest)(nil),      // 12: ladulas.v1.ReconcileGrantsRequest
+	(*ReconcileGrantsResponse)(nil),     // 13: ladulas.v1.ReconcileGrantsResponse
+	(*FetchPendingRequest)(nil),         // 14: ladulas.v1.FetchPendingRequest
+	(*FetchPendingResponse)(nil),        // 15: ladulas.v1.FetchPendingResponse
+	(*PendingApproval)(nil),             // 16: ladulas.v1.PendingApproval
+	(*AnswerPendingRequest)(nil),        // 17: ladulas.v1.AnswerPendingRequest
+	(*AnswerPendingResponse)(nil),       // 18: ladulas.v1.AnswerPendingResponse
+	(*PublishEndorsementRequest)(nil),   // 19: ladulas.v1.PublishEndorsementRequest
+	(*PublishEndorsementResponse)(nil),  // 20: ladulas.v1.PublishEndorsementResponse
+	(*PublishRetractionRequest)(nil),    // 21: ladulas.v1.PublishRetractionRequest
+	(*PublishRetractionResponse)(nil),   // 22: ladulas.v1.PublishRetractionResponse
+	(*ListKeysRequest)(nil),             // 23: ladulas.v1.ListKeysRequest
+	(*ListKeysResponse)(nil),            // 24: ladulas.v1.ListKeysResponse
+	(*AnnounceKeysRequest)(nil),         // 25: ladulas.v1.AnnounceKeysRequest
+	(*AnnounceKeysResponse)(nil),        // 26: ladulas.v1.AnnounceKeysResponse
+	(*RemoteSignRequest)(nil),           // 27: ladulas.v1.RemoteSignRequest
+	(*RemoteSignResponse)(nil),          // 28: ladulas.v1.RemoteSignResponse
+	(*OfferKeyRequest)(nil),             // 29: ladulas.v1.OfferKeyRequest
+	(*OfferKeyResponse)(nil),            // 30: ladulas.v1.OfferKeyResponse
+	(*CollectKeyOffersRequest)(nil),     // 31: ladulas.v1.CollectKeyOffersRequest
+	(*CollectKeyOffersResponse)(nil),    // 32: ladulas.v1.CollectKeyOffersResponse
+	(*OfferedKey)(nil),                  // 33: ladulas.v1.OfferedKey
+	(*SyncProjectRequest)(nil),          // 34: ladulas.v1.SyncProjectRequest
+	(*SyncProjectEvent)(nil),            // 35: ladulas.v1.SyncProjectEvent
+	(*DocumentVersionsRequest)(nil),     // 36: ladulas.v1.DocumentVersionsRequest
+	(*DocumentVersionsResponse)(nil),    // 37: ladulas.v1.DocumentVersionsResponse
+	(*FetchProjectVersionRequest)(nil),  // 38: ladulas.v1.FetchProjectVersionRequest
+	(*FetchProjectVersionResponse)(nil), // 39: ladulas.v1.FetchProjectVersionResponse
+	(*ListDirectoryRequest)(nil),        // 40: ladulas.v1.ListDirectoryRequest
+	(*ListDirectoryResponse)(nil),       // 41: ladulas.v1.ListDirectoryResponse
+	(*SearchProjectFilesRequest)(nil),   // 42: ladulas.v1.SearchProjectFilesRequest
+	(*SearchProjectFilesResponse)(nil),  // 43: ladulas.v1.SearchProjectFilesResponse
+	(*ListProjectsRequest)(nil),         // 44: ladulas.v1.ListProjectsRequest
+	(*ListProjectsResponse)(nil),        // 45: ladulas.v1.ListProjectsResponse
+	(*FetchProjectFileRequest)(nil),     // 46: ladulas.v1.FetchProjectFileRequest
+	(*FetchProjectFileResponse)(nil),    // 47: ladulas.v1.FetchProjectFileResponse
+	(*EventsRequest)(nil),               // 48: ladulas.v1.EventsRequest
+	(*Event)(nil),                       // 49: ladulas.v1.Event
+	(*PairingCode)(nil),                 // 50: ladulas.v1.PairingCode
+	(*PairRequest)(nil),                 // 51: ladulas.v1.PairRequest
+	(*PairResponse)(nil),                // 52: ladulas.v1.PairResponse
+	(*SettlePairingRequest)(nil),        // 53: ladulas.v1.SettlePairingRequest
+	(*SettlePairingResponse)(nil),       // 54: ladulas.v1.SettlePairingResponse
+	(*PingRequest)(nil),                 // 55: ladulas.v1.PingRequest
+	(*PingResponse)(nil),                // 56: ladulas.v1.PingResponse
+	(*WatchRequest)(nil),                // 57: ladulas.v1.WatchRequest
+	(*PresenceEvent)(nil),               // 58: ladulas.v1.PresenceEvent
+	(*timestamppb.Timestamp)(nil),       // 59: google.protobuf.Timestamp
+	(*SignedApproval)(nil),              // 60: ladulas.v1.SignedApproval
+	(*GitDiff)(nil),                     // 61: ladulas.v1.GitDiff
+	(*GrantUse)(nil),                    // 62: ladulas.v1.GrantUse
+	(*SignedDelegation)(nil),            // 63: ladulas.v1.SignedDelegation
+	(*durationpb.Duration)(nil),         // 64: google.protobuf.Duration
+	(*SignedEndorsement)(nil),           // 65: ladulas.v1.SignedEndorsement
+	(*SignedRetraction)(nil),            // 66: ladulas.v1.SignedRetraction
+	(*KeyRef)(nil),                      // 67: ladulas.v1.KeyRef
+	(*SyncEntry)(nil),                   // 68: ladulas.v1.SyncEntry
+	(*Publication)(nil),                 // 69: ladulas.v1.Publication
+	(SyncChangeKind)(0),                 // 70: ladulas.v1.SyncChangeKind
+	(*ProjectEntry)(nil),                // 71: ladulas.v1.ProjectEntry
+	(*DocumentVersion)(nil),             // 72: ladulas.v1.DocumentVersion
+	(*KindPolicy)(nil),                  // 73: ladulas.v1.KindPolicy
 }
 var file_ladulas_v1_service_proto_depIdxs = []int32{
 	0,  // 0: ladulas.v1.ApprovalEvent.kind:type_name -> ladulas.v1.ApprovalEventKind
-	50, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
-	51, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
-	52, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
-	53, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
-	54, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
-	53, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
-	55, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
-	15, // 8: ladulas.v1.FetchPendingResponse.pending:type_name -> ladulas.v1.PendingApproval
-	50, // 9: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
-	55, // 10: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
-	56, // 11: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	51, // 12: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
-	56, // 13: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	57, // 14: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
-	57, // 15: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
-	58, // 16: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
-	58, // 17: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
-	56, // 18: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	51, // 19: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
-	32, // 20: ladulas.v1.CollectKeyOffersResponse.offers:type_name -> ladulas.v1.OfferedKey
-	59, // 21: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	59, // 22: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	60, // 23: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
-	59, // 24: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
-	50, // 25: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 26: ladulas.v1.SettlePairingRequest.answer:type_name -> ladulas.v1.PairingAnswer
-	2,  // 27: ladulas.v1.SettlePairingResponse.state:type_name -> ladulas.v1.PairingRecordState
-	1,  // 28: ladulas.v1.SettlePairingResponse.answer:type_name -> ladulas.v1.PairingAnswer
-	50, // 29: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
-	50, // 30: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
-	50, // 31: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 32: ladulas.v1.ApprovalService.RequestApproval:input_type -> ladulas.v1.RequestApprovalRequest
-	5,  // 33: ladulas.v1.ApprovalService.CancelApproval:input_type -> ladulas.v1.CancelApprovalRequest
-	7,  // 34: ladulas.v1.ApprovalService.FetchDiff:input_type -> ladulas.v1.FetchDiffRequest
-	13, // 35: ladulas.v1.InboxService.FetchPending:input_type -> ladulas.v1.FetchPendingRequest
-	16, // 36: ladulas.v1.InboxService.AnswerPending:input_type -> ladulas.v1.AnswerPendingRequest
-	9,  // 37: ladulas.v1.InboxService.ReportGrantUse:input_type -> ladulas.v1.ReportGrantUseRequest
-	11, // 38: ladulas.v1.InboxService.ReconcileGrants:input_type -> ladulas.v1.ReconcileGrantsRequest
-	22, // 39: ladulas.v1.KeyService.ListKeys:input_type -> ladulas.v1.ListKeysRequest
-	26, // 40: ladulas.v1.KeyService.RemoteSign:input_type -> ladulas.v1.RemoteSignRequest
-	28, // 41: ladulas.v1.KeyService.OfferKey:input_type -> ladulas.v1.OfferKeyRequest
-	30, // 42: ladulas.v1.KeyService.CollectKeyOffers:input_type -> ladulas.v1.CollectKeyOffersRequest
-	24, // 43: ladulas.v1.KeyService.AnnounceKeys:input_type -> ladulas.v1.AnnounceKeysRequest
-	18, // 44: ladulas.v1.KeyService.PublishEndorsement:input_type -> ladulas.v1.PublishEndorsementRequest
-	20, // 45: ladulas.v1.KeyService.PublishRetraction:input_type -> ladulas.v1.PublishRetractionRequest
-	37, // 46: ladulas.v1.ProjectService.ListProjects:input_type -> ladulas.v1.ListProjectsRequest
-	33, // 47: ladulas.v1.ProjectService.ListDirectory:input_type -> ladulas.v1.ListDirectoryRequest
-	35, // 48: ladulas.v1.ProjectService.SearchProjectFiles:input_type -> ladulas.v1.SearchProjectFilesRequest
-	39, // 49: ladulas.v1.ProjectService.FetchProjectFile:input_type -> ladulas.v1.FetchProjectFileRequest
-	42, // 50: ladulas.v1.PairingService.Pair:input_type -> ladulas.v1.PairRequest
-	44, // 51: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
-	46, // 52: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
-	48, // 53: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
-	4,  // 54: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
-	6,  // 55: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
-	8,  // 56: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
-	14, // 57: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
-	17, // 58: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
-	10, // 59: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
-	12, // 60: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
-	23, // 61: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
-	27, // 62: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
-	29, // 63: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
-	31, // 64: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
-	25, // 65: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
-	19, // 66: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
-	21, // 67: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
-	38, // 68: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
-	34, // 69: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
-	36, // 70: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
-	40, // 71: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
-	43, // 72: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
-	45, // 73: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
-	47, // 74: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
-	49, // 75: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
-	54, // [54:76] is the sub-list for method output_type
-	32, // [32:54] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	59, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
+	60, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
+	61, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
+	62, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
+	63, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
+	62, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
+	64, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
+	16, // 8: ladulas.v1.FetchPendingResponse.pending:type_name -> ladulas.v1.PendingApproval
+	59, // 9: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
+	64, // 10: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
+	65, // 11: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	60, // 12: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
+	65, // 13: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	66, // 14: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
+	66, // 15: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
+	67, // 16: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
+	67, // 17: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
+	65, // 18: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	60, // 19: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
+	33, // 20: ladulas.v1.CollectKeyOffersResponse.offers:type_name -> ladulas.v1.OfferedKey
+	68, // 21: ladulas.v1.SyncProjectRequest.have:type_name -> ladulas.v1.SyncEntry
+	69, // 22: ladulas.v1.SyncProjectEvent.project:type_name -> ladulas.v1.Publication
+	70, // 23: ladulas.v1.SyncProjectEvent.kind:type_name -> ladulas.v1.SyncChangeKind
+	71, // 24: ladulas.v1.SyncProjectEvent.file:type_name -> ladulas.v1.ProjectEntry
+	72, // 25: ladulas.v1.DocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
+	71, // 26: ladulas.v1.FetchProjectVersionResponse.file:type_name -> ladulas.v1.ProjectEntry
+	72, // 27: ladulas.v1.FetchProjectVersionResponse.version:type_name -> ladulas.v1.DocumentVersion
+	71, // 28: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	71, // 29: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	69, // 30: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
+	73, // 31: ladulas.v1.ListProjectsResponse.kinds:type_name -> ladulas.v1.KindPolicy
+	71, // 32: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
+	1,  // 33: ladulas.v1.Event.kind:type_name -> ladulas.v1.EventKind
+	59, // 34: ladulas.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
+	59, // 35: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
+	2,  // 36: ladulas.v1.SettlePairingRequest.answer:type_name -> ladulas.v1.PairingAnswer
+	3,  // 37: ladulas.v1.SettlePairingResponse.state:type_name -> ladulas.v1.PairingRecordState
+	2,  // 38: ladulas.v1.SettlePairingResponse.answer:type_name -> ladulas.v1.PairingAnswer
+	59, // 39: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
+	59, // 40: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
+	59, // 41: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	4,  // 42: ladulas.v1.ApprovalService.RequestApproval:input_type -> ladulas.v1.RequestApprovalRequest
+	6,  // 43: ladulas.v1.ApprovalService.CancelApproval:input_type -> ladulas.v1.CancelApprovalRequest
+	8,  // 44: ladulas.v1.ApprovalService.FetchDiff:input_type -> ladulas.v1.FetchDiffRequest
+	14, // 45: ladulas.v1.InboxService.FetchPending:input_type -> ladulas.v1.FetchPendingRequest
+	17, // 46: ladulas.v1.InboxService.AnswerPending:input_type -> ladulas.v1.AnswerPendingRequest
+	10, // 47: ladulas.v1.InboxService.ReportGrantUse:input_type -> ladulas.v1.ReportGrantUseRequest
+	12, // 48: ladulas.v1.InboxService.ReconcileGrants:input_type -> ladulas.v1.ReconcileGrantsRequest
+	23, // 49: ladulas.v1.KeyService.ListKeys:input_type -> ladulas.v1.ListKeysRequest
+	27, // 50: ladulas.v1.KeyService.RemoteSign:input_type -> ladulas.v1.RemoteSignRequest
+	29, // 51: ladulas.v1.KeyService.OfferKey:input_type -> ladulas.v1.OfferKeyRequest
+	31, // 52: ladulas.v1.KeyService.CollectKeyOffers:input_type -> ladulas.v1.CollectKeyOffersRequest
+	25, // 53: ladulas.v1.KeyService.AnnounceKeys:input_type -> ladulas.v1.AnnounceKeysRequest
+	19, // 54: ladulas.v1.KeyService.PublishEndorsement:input_type -> ladulas.v1.PublishEndorsementRequest
+	21, // 55: ladulas.v1.KeyService.PublishRetraction:input_type -> ladulas.v1.PublishRetractionRequest
+	44, // 56: ladulas.v1.ProjectService.ListProjects:input_type -> ladulas.v1.ListProjectsRequest
+	40, // 57: ladulas.v1.ProjectService.ListDirectory:input_type -> ladulas.v1.ListDirectoryRequest
+	42, // 58: ladulas.v1.ProjectService.SearchProjectFiles:input_type -> ladulas.v1.SearchProjectFilesRequest
+	46, // 59: ladulas.v1.ProjectService.FetchProjectFile:input_type -> ladulas.v1.FetchProjectFileRequest
+	34, // 60: ladulas.v1.ProjectService.SyncProject:input_type -> ladulas.v1.SyncProjectRequest
+	36, // 61: ladulas.v1.ProjectService.DocumentVersions:input_type -> ladulas.v1.DocumentVersionsRequest
+	38, // 62: ladulas.v1.ProjectService.FetchProjectVersion:input_type -> ladulas.v1.FetchProjectVersionRequest
+	48, // 63: ladulas.v1.EventService.Events:input_type -> ladulas.v1.EventsRequest
+	51, // 64: ladulas.v1.PairingService.Pair:input_type -> ladulas.v1.PairRequest
+	53, // 65: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
+	55, // 66: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
+	57, // 67: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
+	5,  // 68: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
+	7,  // 69: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
+	9,  // 70: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
+	15, // 71: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
+	18, // 72: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
+	11, // 73: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
+	13, // 74: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
+	24, // 75: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
+	28, // 76: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
+	30, // 77: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
+	32, // 78: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
+	26, // 79: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
+	20, // 80: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
+	22, // 81: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
+	45, // 82: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
+	41, // 83: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
+	43, // 84: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
+	47, // 85: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
+	35, // 86: ladulas.v1.ProjectService.SyncProject:output_type -> ladulas.v1.SyncProjectEvent
+	37, // 87: ladulas.v1.ProjectService.DocumentVersions:output_type -> ladulas.v1.DocumentVersionsResponse
+	39, // 88: ladulas.v1.ProjectService.FetchProjectVersion:output_type -> ladulas.v1.FetchProjectVersionResponse
+	49, // 89: ladulas.v1.EventService.Events:output_type -> ladulas.v1.Event
+	52, // 90: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
+	54, // 91: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
+	56, // 92: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
+	58, // 93: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
+	68, // [68:94] is the sub-list for method output_type
+	42, // [42:68] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_service_proto_init() }
@@ -3368,10 +4080,10 @@ func file_ladulas_v1_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_service_proto_rawDesc), len(file_ladulas_v1_service_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   47,
+			NumEnums:      4,
+			NumMessages:   55,
 			NumExtensions: 0,
-			NumServices:   6,
+			NumServices:   7,
 		},
 		GoTypes:           file_ladulas_v1_service_proto_goTypes,
 		DependencyIndexes: file_ladulas_v1_service_proto_depIdxs,

@@ -70,3 +70,85 @@ message ProjectEntry {
   // same reason: not knowing is not the same as knowing there is nothing.
   bool nothing_readable = 8;
 }
+
+// KindPolicy is what a publisher does with one kind of file (decision AP).
+//
+// An approver is told this so that it can tell three different silences apart:
+// a document that has not arrived yet, one that will never be pushed and must
+// be asked for, and one this publisher will not serve at all. Without it an
+// empty sync answer and a project full of unservable files look the same.
+message KindPolicy {
+  // What a person calls this kind, for the sentence explaining a file that was
+  // not offered.
+  string name = 1;
+  // The extensions it matches, with the leading dot.
+  repeated string extensions = 2;
+  // Whether the contents may be handed over at all. A kind that is not served
+  // is still listed (§6).
+  bool serve = 3;
+  // Whether the publisher sends these ahead of being asked.
+  bool push = 4;
+  // What history it can answer for: "none", "git", or "snapshots".
+  string versions = 5;
+}
+
+// DocumentVersionKind says where a version came from, which decides both what
+// it means and how long it will still be there.
+enum DocumentVersionKind {
+  DOCUMENT_VERSION_KIND_UNSPECIFIED = 0;
+  // A working-tree state the publisher captured between two commits. It exists
+  // because git has no record of what a file looked like between them — and it
+  // lives only until HEAD moves, because after that it describes a tree that no
+  // longer exists (decision AP).
+  DOCUMENT_VERSION_KIND_SNAPSHOT = 1;
+  // A commit that touched the document. Permanent, and read from the
+  // repository at the moment of asking.
+  DOCUMENT_VERSION_KIND_COMMIT = 2;
+}
+
+// DocumentVersion is one state of a document a reader may ask to see.
+message DocumentVersion {
+  DocumentVersionKind kind = 1;
+  // For a snapshot: the digest it is stored under, and how it is fetched.
+  bytes digest = 2;
+  // For a commit: the hash, and how it is fetched.
+  string commit = 3;
+  int64 size = 4;
+  // When the snapshot was taken, or when the commit was authored.
+  google.protobuf.Timestamp at = 5;
+  // For a commit: its subject line and author, which is what a version list
+  // shows beside it. A snapshot has neither — nobody wrote a message about
+  // saving a file.
+  string subject = 6;
+  string author = 7;
+}
+
+// SyncEntry is one document an approver already holds, as it describes it to a
+// publisher.
+//
+// The digest is the approver's own, computed over what it has. It is sent so
+// that the publisher can answer with what differs rather than with everything;
+// what comes back is still verified against the bytes, so a publisher that
+// lied about a digest would gain nothing but a wasted transfer.
+message SyncEntry {
+  string path = 1;
+  bytes digest = 2;
+}
+
+// SyncChangeKind is what happened to one document since the approver last
+// looked.
+enum SyncChangeKind {
+  SYNC_CHANGE_KIND_UNSPECIFIED = 0;
+  // The approver does not have it, or has different bytes. The contents come
+  // with it.
+  SYNC_CHANGE_KIND_PUT = 1;
+  // The approver has it, it is a kind this publisher pushes, and the publisher
+  // does not have it — so it has been deleted or renamed away. No contents.
+  //
+  // A path that is *not* a pushed kind is never reported here, however little
+  // the publisher has at it. An approver's cache also holds pages it pulled
+  // because somebody opened them (decision Q), and a reconciliation that
+  // removed everything the publisher does not push would delete those — pages
+  // that are legitimately readable and that nobody said anything about.
+  SYNC_CHANGE_KIND_REMOVE = 2;
+}

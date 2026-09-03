@@ -496,6 +496,103 @@ service ProjectService {
   // FetchProjectFile returns one file's current contents. What an approver
   // keeps is what it has asked for here.
   rpc FetchProjectFile(FetchProjectFileRequest) returns (FetchProjectFileResponse);
+
+  // SyncProject reconciles what an approver holds against what the publisher
+  // has, for the kinds the publisher pushes (decision AP).
+  //
+  // The caller sends what it has — a path and a digest per document — and the
+  // answer streams only what differs: the documents it lacks or holds stale
+  // bytes of, and the paths it holds that are gone. That is what makes opening
+  // a document a read from local disk instead of a call to somebody's laptop,
+  // which is the whole point of pushing documentation.
+  //
+  // The manifest arrives in one request rather than a page at a time, and the
+  // bound that makes that safe is the policy: it covers the pushed kinds only,
+  // so it is a doc set's worth of paths and digests and not a repository's.
+  // A project whose manifest would not fit is a project whose policy is wrong.
+  rpc SyncProject(SyncProjectRequest) returns (stream SyncProjectEvent);
+
+  // DocumentVersions is what a reader may ask to see of one document: the
+  // working-tree states since the last commit, then the commits that touched
+  // it.
+  //
+  // The two halves come from different places and keep different time. The
+  // snapshots are the publisher's own and exist only until HEAD moves; the
+  // commits are git's and are permanent. Saying which is which is the point —
+  // a reader offered "yesterday afternoon" and "the commit that landed it"
+  // should know that only one of them will still be there tomorrow.
+  rpc DocumentVersions(DocumentVersionsRequest) returns (DocumentVersionsResponse);
+
+  // FetchProjectVersion returns one version's contents, named the way
+  // DocumentVersions named it.
+  rpc FetchProjectVersion(FetchProjectVersionRequest)
+      returns (FetchProjectVersionResponse);
+}
+
+message SyncProjectRequest {
+  string project_id = 1;
+  // Every document of this project the caller holds, with its own digest of
+  // the contents. An empty manifest is a first sync and is answered with
+  // everything.
+  repeated SyncEntry have = 2;
+}
+
+message SyncProjectEvent {
+  // Set on the first event and on no other, so that a caller learns the commit
+  // and the branch in the same exchange that brings it the documents. Reading
+  // them from a separate ListProjects would be two answers about two moments
+  // stitched into one claim (§6).
+  Publication project = 1;
+  SyncChangeKind kind = 2;
+  string path = 3;
+  // Set on a PUT: what the listing would have said about the file, and its
+  // contents.
+  ProjectEntry file = 4;
+  bytes content = 5;
+}
+
+message DocumentVersionsRequest {
+  string project_id = 1;
+  string path = 2;
+  // How many commits to walk back. Capped by the publisher; zero means its
+  // default. The snapshots are never capped by the caller — there are at most
+  // a handful and they are the half that disappears.
+  int32 commit_limit = 3;
+}
+
+message DocumentVersionsResponse {
+  // Newest first: the snapshots since the last commit, then the commits.
+  repeated DocumentVersion versions = 1;
+  // The commit the publisher is standing on, which is what the snapshots are
+  // relative to.
+  string head = 2;
+  // SHA-256 of the document as it stands right now.
+  //
+  // This is what answers "is what I am reading current", and it is a digest
+  // rather than a version handle because the reader has bytes rather than a
+  // handle: it hashed what it was given and can compare without another call.
+  bytes current_digest = 3;
+  // Whether the walk back through the commits stopped before it ran out.
+  bool truncated = 4;
+}
+
+message FetchProjectVersionRequest {
+  string project_id = 1;
+  string path = 2;
+  // Exactly one of these, naming the version the way DocumentVersions did: a
+  // snapshot by the digest it is stored under, a commit by its hash.
+  bytes digest = 3;
+  string commit = 4;
+}
+
+message FetchProjectVersionResponse {
+  ProjectEntry file = 1;
+  bytes content = 2;
+  // What was returned. A snapshot that expired between the list and this call
+  // is answered NOT_FOUND rather than quietly with the commit behind it: a
+  // reader comparing against a version they did not ask for would be shown
+  // changes nobody made.
+  DocumentVersion version = 3;
 }
 
 message ListDirectoryRequest {
@@ -553,6 +650,14 @@ message ListProjectsResponse {
   // moment of asking rather than remembered from when it was published, so the
   // commit here is the commit the publisher is standing on now.
   repeated Publication projects = 1;
+  // What this instance does with each kind of file (decision AP). It is a
+  // property of the instance rather than of a project, which is why it is here
+  // rather than on Publication.
+  //
+  // An approver needs it to tell three silences apart: a document that has not
+  // been pushed yet, one that will never be pushed and has to be asked for,
+  // and a kind this publisher does not serve at all.
+  repeated KindPolicy kinds = 2;
 }
 
 message FetchProjectFileRequest {
@@ -565,6 +670,78 @@ message FetchProjectFileResponse {
   // fetched by name rather than by browsing gets the same facts about it.
   ProjectEntry file = 1;
   bytes content = 2;
+}
+
+// EventService is how an approver hears about a change without asking for it
+// (decision AP).
+//
+// It runs in the same direction as ProjectService and for the same reason: the
+// approver dials the publisher, because a phone cannot be dialled at all (§11)
+// and an approver is the side that has agreed to be answered by this one. So
+// the stream is opened by the machine that wants to know, and the machine that
+// knows writes into it.
+//
+// **What travels here is thin on purpose.** An event says a document changed;
+// it does not carry the document. A reader may not have that project open, may
+// not have that kind pushed to it, and may be about to go through a tunnel —
+// so the event is a reason to sync, not a delivery. That also keeps the stream
+// cheap enough to hold open on a phone.
+//
+// Approvals are deliberately not on it. They already have two low-latency
+// paths, the stream on RequestApproval and the held call on FetchPending, and
+// moving them is a change to the one part of this system that already works.
+service EventService {
+  // Events holds a connection open and reports what changes on the publisher.
+  //
+  // It heartbeats before it waits, and a caller must treat a stream that
+  // yields nothing as a failed connection rather than as a live one. connect
+  // hands a stream back as soon as the request has been written and keeps the
+  // transport error for the first Receive, so "no error from the call" is not
+  // a connection — that mistake is what made a sleeping laptop look linked for
+  // months, and there is no reason to make it twice.
+  rpc Events(EventsRequest) returns (stream Event);
+}
+
+message EventsRequest {
+  // The projects the caller cares about, by id. Empty means all of them, which
+  // is what an approver syncing everything asks for.
+  repeated string project_ids = 1;
+}
+
+// EventKind is what happened. A reader gets one line of meaning per kind and
+// nothing else travels.
+enum EventKind {
+  EVENT_KIND_UNSPECIFIED = 0;
+  // A heartbeat, sent first and then on a timer. It carries no project and is
+  // how a caller knows the stream is real before anything has happened.
+  EVENT_KIND_HEARTBEAT = 1;
+  // A document was created or changed. Sync to get it.
+  EVENT_KIND_DOCUMENT_CHANGED = 2;
+  // A document is gone — deleted, renamed away, or no longer a kind that is
+  // served.
+  EVENT_KIND_DOCUMENT_REMOVED = 3;
+  // The project moved to another commit, so every snapshot the caller was
+  // offered for it has expired.
+  EVENT_KIND_PROJECT_MOVED = 4;
+  // A project was published to this caller.
+  EVENT_KIND_PROJECT_PUBLISHED = 5;
+  // A project is no longer published. What the approver has read of it is
+  // still readable; nothing is taken back, because there is nothing to take
+  // back (decision Q).
+  EVENT_KIND_PROJECT_WITHDRAWN = 6;
+}
+
+message Event {
+  EventKind kind = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string project_id = 3;
+  // The document, on the two document kinds.
+  string path = 4;
+  // The commit the publisher is on. Set on every event that is about a
+  // project, because a snapshot is only meaningful against one — an approver
+  // that sees this change knows its snapshot handles are dead without being
+  // told so separately.
+  string head = 5;
 }
 
 // PairingService establishes trust on first use (§7).

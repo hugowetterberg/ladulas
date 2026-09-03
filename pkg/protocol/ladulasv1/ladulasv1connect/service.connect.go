@@ -29,6 +29,8 @@ const (
 	KeyServiceName = "ladulas.v1.KeyService"
 	// ProjectServiceName is the fully-qualified name of the ProjectService service.
 	ProjectServiceName = "ladulas.v1.ProjectService"
+	// EventServiceName is the fully-qualified name of the EventService service.
+	EventServiceName = "ladulas.v1.EventService"
 	// PairingServiceName is the fully-qualified name of the PairingService service.
 	PairingServiceName = "ladulas.v1.PairingService"
 	// PresenceServiceName is the fully-qualified name of the PresenceService service.
@@ -93,6 +95,17 @@ const (
 	// ProjectServiceFetchProjectFileProcedure is the fully-qualified name of the ProjectService's
 	// FetchProjectFile RPC.
 	ProjectServiceFetchProjectFileProcedure = "/ladulas.v1.ProjectService/FetchProjectFile"
+	// ProjectServiceSyncProjectProcedure is the fully-qualified name of the ProjectService's
+	// SyncProject RPC.
+	ProjectServiceSyncProjectProcedure = "/ladulas.v1.ProjectService/SyncProject"
+	// ProjectServiceDocumentVersionsProcedure is the fully-qualified name of the ProjectService's
+	// DocumentVersions RPC.
+	ProjectServiceDocumentVersionsProcedure = "/ladulas.v1.ProjectService/DocumentVersions"
+	// ProjectServiceFetchProjectVersionProcedure is the fully-qualified name of the ProjectService's
+	// FetchProjectVersion RPC.
+	ProjectServiceFetchProjectVersionProcedure = "/ladulas.v1.ProjectService/FetchProjectVersion"
+	// EventServiceEventsProcedure is the fully-qualified name of the EventService's Events RPC.
+	EventServiceEventsProcedure = "/ladulas.v1.EventService/Events"
 	// PairingServicePairProcedure is the fully-qualified name of the PairingService's Pair RPC.
 	PairingServicePairProcedure = "/ladulas.v1.PairingService/Pair"
 	// PairingServiceSettlePairingProcedure is the fully-qualified name of the PairingService's
@@ -853,6 +866,33 @@ type ProjectServiceClient interface {
 	// FetchProjectFile returns one file's current contents. What an approver
 	// keeps is what it has asked for here.
 	FetchProjectFile(context.Context, *connect.Request[ladulasv1.FetchProjectFileRequest]) (*connect.Response[ladulasv1.FetchProjectFileResponse], error)
+	// SyncProject reconciles what an approver holds against what the publisher
+	// has, for the kinds the publisher pushes (decision AP).
+	//
+	// The caller sends what it has — a path and a digest per document — and the
+	// answer streams only what differs: the documents it lacks or holds stale
+	// bytes of, and the paths it holds that are gone. That is what makes opening
+	// a document a read from local disk instead of a call to somebody's laptop,
+	// which is the whole point of pushing documentation.
+	//
+	// The manifest arrives in one request rather than a page at a time, and the
+	// bound that makes that safe is the policy: it covers the pushed kinds only,
+	// so it is a doc set's worth of paths and digests and not a repository's.
+	// A project whose manifest would not fit is a project whose policy is wrong.
+	SyncProject(context.Context, *connect.Request[ladulasv1.SyncProjectRequest]) (*connect.ServerStreamForClient[ladulasv1.SyncProjectEvent], error)
+	// DocumentVersions is what a reader may ask to see of one document: the
+	// working-tree states since the last commit, then the commits that touched
+	// it.
+	//
+	// The two halves come from different places and keep different time. The
+	// snapshots are the publisher's own and exist only until HEAD moves; the
+	// commits are git's and are permanent. Saying which is which is the point —
+	// a reader offered "yesterday afternoon" and "the commit that landed it"
+	// should know that only one of them will still be there tomorrow.
+	DocumentVersions(context.Context, *connect.Request[ladulasv1.DocumentVersionsRequest]) (*connect.Response[ladulasv1.DocumentVersionsResponse], error)
+	// FetchProjectVersion returns one version's contents, named the way
+	// DocumentVersions named it.
+	FetchProjectVersion(context.Context, *connect.Request[ladulasv1.FetchProjectVersionRequest]) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error)
 }
 
 // NewProjectServiceClient constructs a client for the ladulas.v1.ProjectService service. By
@@ -890,15 +930,36 @@ func NewProjectServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(projectServiceMethods.ByName("FetchProjectFile")),
 			connect.WithClientOptions(opts...),
 		),
+		syncProject: connect.NewClient[ladulasv1.SyncProjectRequest, ladulasv1.SyncProjectEvent](
+			httpClient,
+			baseURL+ProjectServiceSyncProjectProcedure,
+			connect.WithSchema(projectServiceMethods.ByName("SyncProject")),
+			connect.WithClientOptions(opts...),
+		),
+		documentVersions: connect.NewClient[ladulasv1.DocumentVersionsRequest, ladulasv1.DocumentVersionsResponse](
+			httpClient,
+			baseURL+ProjectServiceDocumentVersionsProcedure,
+			connect.WithSchema(projectServiceMethods.ByName("DocumentVersions")),
+			connect.WithClientOptions(opts...),
+		),
+		fetchProjectVersion: connect.NewClient[ladulasv1.FetchProjectVersionRequest, ladulasv1.FetchProjectVersionResponse](
+			httpClient,
+			baseURL+ProjectServiceFetchProjectVersionProcedure,
+			connect.WithSchema(projectServiceMethods.ByName("FetchProjectVersion")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // projectServiceClient implements ProjectServiceClient.
 type projectServiceClient struct {
-	listProjects       *connect.Client[ladulasv1.ListProjectsRequest, ladulasv1.ListProjectsResponse]
-	listDirectory      *connect.Client[ladulasv1.ListDirectoryRequest, ladulasv1.ListDirectoryResponse]
-	searchProjectFiles *connect.Client[ladulasv1.SearchProjectFilesRequest, ladulasv1.SearchProjectFilesResponse]
-	fetchProjectFile   *connect.Client[ladulasv1.FetchProjectFileRequest, ladulasv1.FetchProjectFileResponse]
+	listProjects        *connect.Client[ladulasv1.ListProjectsRequest, ladulasv1.ListProjectsResponse]
+	listDirectory       *connect.Client[ladulasv1.ListDirectoryRequest, ladulasv1.ListDirectoryResponse]
+	searchProjectFiles  *connect.Client[ladulasv1.SearchProjectFilesRequest, ladulasv1.SearchProjectFilesResponse]
+	fetchProjectFile    *connect.Client[ladulasv1.FetchProjectFileRequest, ladulasv1.FetchProjectFileResponse]
+	syncProject         *connect.Client[ladulasv1.SyncProjectRequest, ladulasv1.SyncProjectEvent]
+	documentVersions    *connect.Client[ladulasv1.DocumentVersionsRequest, ladulasv1.DocumentVersionsResponse]
+	fetchProjectVersion *connect.Client[ladulasv1.FetchProjectVersionRequest, ladulasv1.FetchProjectVersionResponse]
 }
 
 // ListProjects calls ladulas.v1.ProjectService.ListProjects.
@@ -919,6 +980,21 @@ func (c *projectServiceClient) SearchProjectFiles(ctx context.Context, req *conn
 // FetchProjectFile calls ladulas.v1.ProjectService.FetchProjectFile.
 func (c *projectServiceClient) FetchProjectFile(ctx context.Context, req *connect.Request[ladulasv1.FetchProjectFileRequest]) (*connect.Response[ladulasv1.FetchProjectFileResponse], error) {
 	return c.fetchProjectFile.CallUnary(ctx, req)
+}
+
+// SyncProject calls ladulas.v1.ProjectService.SyncProject.
+func (c *projectServiceClient) SyncProject(ctx context.Context, req *connect.Request[ladulasv1.SyncProjectRequest]) (*connect.ServerStreamForClient[ladulasv1.SyncProjectEvent], error) {
+	return c.syncProject.CallServerStream(ctx, req)
+}
+
+// DocumentVersions calls ladulas.v1.ProjectService.DocumentVersions.
+func (c *projectServiceClient) DocumentVersions(ctx context.Context, req *connect.Request[ladulasv1.DocumentVersionsRequest]) (*connect.Response[ladulasv1.DocumentVersionsResponse], error) {
+	return c.documentVersions.CallUnary(ctx, req)
+}
+
+// FetchProjectVersion calls ladulas.v1.ProjectService.FetchProjectVersion.
+func (c *projectServiceClient) FetchProjectVersion(ctx context.Context, req *connect.Request[ladulasv1.FetchProjectVersionRequest]) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error) {
+	return c.fetchProjectVersion.CallUnary(ctx, req)
 }
 
 // ProjectServiceHandler is an implementation of the ladulas.v1.ProjectService service.
@@ -946,6 +1022,33 @@ type ProjectServiceHandler interface {
 	// FetchProjectFile returns one file's current contents. What an approver
 	// keeps is what it has asked for here.
 	FetchProjectFile(context.Context, *connect.Request[ladulasv1.FetchProjectFileRequest]) (*connect.Response[ladulasv1.FetchProjectFileResponse], error)
+	// SyncProject reconciles what an approver holds against what the publisher
+	// has, for the kinds the publisher pushes (decision AP).
+	//
+	// The caller sends what it has — a path and a digest per document — and the
+	// answer streams only what differs: the documents it lacks or holds stale
+	// bytes of, and the paths it holds that are gone. That is what makes opening
+	// a document a read from local disk instead of a call to somebody's laptop,
+	// which is the whole point of pushing documentation.
+	//
+	// The manifest arrives in one request rather than a page at a time, and the
+	// bound that makes that safe is the policy: it covers the pushed kinds only,
+	// so it is a doc set's worth of paths and digests and not a repository's.
+	// A project whose manifest would not fit is a project whose policy is wrong.
+	SyncProject(context.Context, *connect.Request[ladulasv1.SyncProjectRequest], *connect.ServerStream[ladulasv1.SyncProjectEvent]) error
+	// DocumentVersions is what a reader may ask to see of one document: the
+	// working-tree states since the last commit, then the commits that touched
+	// it.
+	//
+	// The two halves come from different places and keep different time. The
+	// snapshots are the publisher's own and exist only until HEAD moves; the
+	// commits are git's and are permanent. Saying which is which is the point —
+	// a reader offered "yesterday afternoon" and "the commit that landed it"
+	// should know that only one of them will still be there tomorrow.
+	DocumentVersions(context.Context, *connect.Request[ladulasv1.DocumentVersionsRequest]) (*connect.Response[ladulasv1.DocumentVersionsResponse], error)
+	// FetchProjectVersion returns one version's contents, named the way
+	// DocumentVersions named it.
+	FetchProjectVersion(context.Context, *connect.Request[ladulasv1.FetchProjectVersionRequest]) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error)
 }
 
 // NewProjectServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -979,6 +1082,24 @@ func NewProjectServiceHandler(svc ProjectServiceHandler, opts ...connect.Handler
 		connect.WithSchema(projectServiceMethods.ByName("FetchProjectFile")),
 		connect.WithHandlerOptions(opts...),
 	)
+	projectServiceSyncProjectHandler := connect.NewServerStreamHandler(
+		ProjectServiceSyncProjectProcedure,
+		svc.SyncProject,
+		connect.WithSchema(projectServiceMethods.ByName("SyncProject")),
+		connect.WithHandlerOptions(opts...),
+	)
+	projectServiceDocumentVersionsHandler := connect.NewUnaryHandler(
+		ProjectServiceDocumentVersionsProcedure,
+		svc.DocumentVersions,
+		connect.WithSchema(projectServiceMethods.ByName("DocumentVersions")),
+		connect.WithHandlerOptions(opts...),
+	)
+	projectServiceFetchProjectVersionHandler := connect.NewUnaryHandler(
+		ProjectServiceFetchProjectVersionProcedure,
+		svc.FetchProjectVersion,
+		connect.WithSchema(projectServiceMethods.ByName("FetchProjectVersion")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ladulas.v1.ProjectService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ProjectServiceListProjectsProcedure:
@@ -989,6 +1110,12 @@ func NewProjectServiceHandler(svc ProjectServiceHandler, opts ...connect.Handler
 			projectServiceSearchProjectFilesHandler.ServeHTTP(w, r)
 		case ProjectServiceFetchProjectFileProcedure:
 			projectServiceFetchProjectFileHandler.ServeHTTP(w, r)
+		case ProjectServiceSyncProjectProcedure:
+			projectServiceSyncProjectHandler.ServeHTTP(w, r)
+		case ProjectServiceDocumentVersionsProcedure:
+			projectServiceDocumentVersionsHandler.ServeHTTP(w, r)
+		case ProjectServiceFetchProjectVersionProcedure:
+			projectServiceFetchProjectVersionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1012,6 +1139,104 @@ func (UnimplementedProjectServiceHandler) SearchProjectFiles(context.Context, *c
 
 func (UnimplementedProjectServiceHandler) FetchProjectFile(context.Context, *connect.Request[ladulasv1.FetchProjectFileRequest]) (*connect.Response[ladulasv1.FetchProjectFileResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ProjectService.FetchProjectFile is not implemented"))
+}
+
+func (UnimplementedProjectServiceHandler) SyncProject(context.Context, *connect.Request[ladulasv1.SyncProjectRequest], *connect.ServerStream[ladulasv1.SyncProjectEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ProjectService.SyncProject is not implemented"))
+}
+
+func (UnimplementedProjectServiceHandler) DocumentVersions(context.Context, *connect.Request[ladulasv1.DocumentVersionsRequest]) (*connect.Response[ladulasv1.DocumentVersionsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ProjectService.DocumentVersions is not implemented"))
+}
+
+func (UnimplementedProjectServiceHandler) FetchProjectVersion(context.Context, *connect.Request[ladulasv1.FetchProjectVersionRequest]) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ProjectService.FetchProjectVersion is not implemented"))
+}
+
+// EventServiceClient is a client for the ladulas.v1.EventService service.
+type EventServiceClient interface {
+	// Events holds a connection open and reports what changes on the publisher.
+	//
+	// It heartbeats before it waits, and a caller must treat a stream that
+	// yields nothing as a failed connection rather than as a live one. connect
+	// hands a stream back as soon as the request has been written and keeps the
+	// transport error for the first Receive, so "no error from the call" is not
+	// a connection — that mistake is what made a sleeping laptop look linked for
+	// months, and there is no reason to make it twice.
+	Events(context.Context, *connect.Request[ladulasv1.EventsRequest]) (*connect.ServerStreamForClient[ladulasv1.Event], error)
+}
+
+// NewEventServiceClient constructs a client for the ladulas.v1.EventService service. By default, it
+// uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and sends
+// uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or
+// connect.WithGRPCWeb() options.
+//
+// The URL supplied here should be the base URL for the Connect or gRPC server (for example,
+// http://api.acme.com or https://acme.com/grpc).
+func NewEventServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) EventServiceClient {
+	baseURL = strings.TrimRight(baseURL, "/")
+	eventServiceMethods := ladulasv1.File_ladulas_v1_service_proto.Services().ByName("EventService").Methods()
+	return &eventServiceClient{
+		events: connect.NewClient[ladulasv1.EventsRequest, ladulasv1.Event](
+			httpClient,
+			baseURL+EventServiceEventsProcedure,
+			connect.WithSchema(eventServiceMethods.ByName("Events")),
+			connect.WithClientOptions(opts...),
+		),
+	}
+}
+
+// eventServiceClient implements EventServiceClient.
+type eventServiceClient struct {
+	events *connect.Client[ladulasv1.EventsRequest, ladulasv1.Event]
+}
+
+// Events calls ladulas.v1.EventService.Events.
+func (c *eventServiceClient) Events(ctx context.Context, req *connect.Request[ladulasv1.EventsRequest]) (*connect.ServerStreamForClient[ladulasv1.Event], error) {
+	return c.events.CallServerStream(ctx, req)
+}
+
+// EventServiceHandler is an implementation of the ladulas.v1.EventService service.
+type EventServiceHandler interface {
+	// Events holds a connection open and reports what changes on the publisher.
+	//
+	// It heartbeats before it waits, and a caller must treat a stream that
+	// yields nothing as a failed connection rather than as a live one. connect
+	// hands a stream back as soon as the request has been written and keeps the
+	// transport error for the first Receive, so "no error from the call" is not
+	// a connection — that mistake is what made a sleeping laptop look linked for
+	// months, and there is no reason to make it twice.
+	Events(context.Context, *connect.Request[ladulasv1.EventsRequest], *connect.ServerStream[ladulasv1.Event]) error
+}
+
+// NewEventServiceHandler builds an HTTP handler from the service implementation. It returns the
+// path on which to mount the handler and the handler itself.
+//
+// By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
+// and JSON codecs. They also support gzip compression.
+func NewEventServiceHandler(svc EventServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	eventServiceMethods := ladulasv1.File_ladulas_v1_service_proto.Services().ByName("EventService").Methods()
+	eventServiceEventsHandler := connect.NewServerStreamHandler(
+		EventServiceEventsProcedure,
+		svc.Events,
+		connect.WithSchema(eventServiceMethods.ByName("Events")),
+		connect.WithHandlerOptions(opts...),
+	)
+	return "/ladulas.v1.EventService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case EventServiceEventsProcedure:
+			eventServiceEventsHandler.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+}
+
+// UnimplementedEventServiceHandler returns CodeUnimplemented from all methods.
+type UnimplementedEventServiceHandler struct{}
+
+func (UnimplementedEventServiceHandler) Events(context.Context, *connect.Request[ladulasv1.EventsRequest], *connect.ServerStream[ladulasv1.Event]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.EventService.Events is not implemented"))
 }
 
 // PairingServiceClient is a client for the ladulas.v1.PairingService service.

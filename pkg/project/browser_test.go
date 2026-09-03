@@ -354,3 +354,26 @@ func TestWithdrawnProjectsSaySo(t *testing.T) {
 		t.Errorf("%d projects are reported as withdrawn", withdrawn)
 	}
 }
+
+// The three calls decision AP added. This fake exists to exercise the browser,
+// which does not use them — the sync worker and the version list are their
+// callers and have their own tests — so they are here to satisfy the client
+// interface and say so rather than to pretend.
+
+func (p *publisher) SyncProject(
+	_ context.Context, _ *connect.Request[ladulasv1.SyncProjectRequest],
+) (*connect.ServerStreamForClient[ladulasv1.SyncProjectEvent], error) {
+	return nil, errors.New("this fake does not sync")
+}
+
+func (p *publisher) DocumentVersions(
+	_ context.Context, _ *connect.Request[ladulasv1.DocumentVersionsRequest],
+) (*connect.Response[ladulasv1.DocumentVersionsResponse], error) {
+	return nil, errors.New("this fake keeps no versions")
+}
+
+func (p *publisher) FetchProjectVersion(
+	_ context.Context, _ *connect.Request[ladulasv1.FetchProjectVersionRequest],
+) (*connect.Response[ladulasv1.FetchProjectVersionResponse], error) {
+	return nil, errors.New("this fake keeps no versions")
+}

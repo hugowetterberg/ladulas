@@ -33,6 +33,124 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// DocumentVersionKind says where a version came from, which decides both what
+// it means and how long it will still be there.
+type DocumentVersionKind int32
+
+const (
+	DocumentVersionKind_DOCUMENT_VERSION_KIND_UNSPECIFIED DocumentVersionKind = 0
+	// A working-tree state the publisher captured between two commits. It exists
+	// because git has no record of what a file looked like between them — and it
+	// lives only until HEAD moves, because after that it describes a tree that no
+	// longer exists (decision AP).
+	DocumentVersionKind_DOCUMENT_VERSION_KIND_SNAPSHOT DocumentVersionKind = 1
+	// A commit that touched the document. Permanent, and read from the
+	// repository at the moment of asking.
+	DocumentVersionKind_DOCUMENT_VERSION_KIND_COMMIT DocumentVersionKind = 2
+)
+
+// Enum value maps for DocumentVersionKind.
+var (
+	DocumentVersionKind_name = map[int32]string{
+		0: "DOCUMENT_VERSION_KIND_UNSPECIFIED",
+		1: "DOCUMENT_VERSION_KIND_SNAPSHOT",
+		2: "DOCUMENT_VERSION_KIND_COMMIT",
+	}
+	DocumentVersionKind_value = map[string]int32{
+		"DOCUMENT_VERSION_KIND_UNSPECIFIED": 0,
+		"DOCUMENT_VERSION_KIND_SNAPSHOT":    1,
+		"DOCUMENT_VERSION_KIND_COMMIT":      2,
+	}
+)
+
+func (x DocumentVersionKind) Enum() *DocumentVersionKind {
+	p := new(DocumentVersionKind)
+	*p = x
+	return p
+}
+
+func (x DocumentVersionKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DocumentVersionKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ladulas_v1_project_proto_enumTypes[0].Descriptor()
+}
+
+func (DocumentVersionKind) Type() protoreflect.EnumType {
+	return &file_ladulas_v1_project_proto_enumTypes[0]
+}
+
+func (x DocumentVersionKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DocumentVersionKind.Descriptor instead.
+func (DocumentVersionKind) EnumDescriptor() ([]byte, []int) {
+	return file_ladulas_v1_project_proto_rawDescGZIP(), []int{0}
+}
+
+// SyncChangeKind is what happened to one document since the approver last
+// looked.
+type SyncChangeKind int32
+
+const (
+	SyncChangeKind_SYNC_CHANGE_KIND_UNSPECIFIED SyncChangeKind = 0
+	// The approver does not have it, or has different bytes. The contents come
+	// with it.
+	SyncChangeKind_SYNC_CHANGE_KIND_PUT SyncChangeKind = 1
+	// The approver has it, it is a kind this publisher pushes, and the publisher
+	// does not have it — so it has been deleted or renamed away. No contents.
+	//
+	// A path that is *not* a pushed kind is never reported here, however little
+	// the publisher has at it. An approver's cache also holds pages it pulled
+	// because somebody opened them (decision Q), and a reconciliation that
+	// removed everything the publisher does not push would delete those — pages
+	// that are legitimately readable and that nobody said anything about.
+	SyncChangeKind_SYNC_CHANGE_KIND_REMOVE SyncChangeKind = 2
+)
+
+// Enum value maps for SyncChangeKind.
+var (
+	SyncChangeKind_name = map[int32]string{
+		0: "SYNC_CHANGE_KIND_UNSPECIFIED",
+		1: "SYNC_CHANGE_KIND_PUT",
+		2: "SYNC_CHANGE_KIND_REMOVE",
+	}
+	SyncChangeKind_value = map[string]int32{
+		"SYNC_CHANGE_KIND_UNSPECIFIED": 0,
+		"SYNC_CHANGE_KIND_PUT":         1,
+		"SYNC_CHANGE_KIND_REMOVE":      2,
+	}
+)
+
+func (x SyncChangeKind) Enum() *SyncChangeKind {
+	p := new(SyncChangeKind)
+	*p = x
+	return p
+}
+
+func (x SyncChangeKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SyncChangeKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_ladulas_v1_project_proto_enumTypes[1].Descriptor()
+}
+
+func (SyncChangeKind) Type() protoreflect.EnumType {
+	return &file_ladulas_v1_project_proto_enumTypes[1]
+}
+
+func (x SyncChangeKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SyncChangeKind.Descriptor instead.
+func (SyncChangeKind) EnumDescriptor() ([]byte, []int) {
+	return file_ladulas_v1_project_proto_rawDescGZIP(), []int{1}
+}
+
 // Publication is a project on offer: what it is called, where it lives on the
 // requester, and what commit it is at.
 //
@@ -259,6 +377,253 @@ func (x *ProjectEntry) GetNothingReadable() bool {
 	return false
 }
 
+// KindPolicy is what a publisher does with one kind of file (decision AP).
+//
+// An approver is told this so that it can tell three different silences apart:
+// a document that has not arrived yet, one that will never be pushed and must
+// be asked for, and one this publisher will not serve at all. Without it an
+// empty sync answer and a project full of unservable files look the same.
+type KindPolicy struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What a person calls this kind, for the sentence explaining a file that was
+	// not offered.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The extensions it matches, with the leading dot.
+	Extensions []string `protobuf:"bytes,2,rep,name=extensions,proto3" json:"extensions,omitempty"`
+	// Whether the contents may be handed over at all. A kind that is not served
+	// is still listed (§6).
+	Serve bool `protobuf:"varint,3,opt,name=serve,proto3" json:"serve,omitempty"`
+	// Whether the publisher sends these ahead of being asked.
+	Push bool `protobuf:"varint,4,opt,name=push,proto3" json:"push,omitempty"`
+	// What history it can answer for: "none", "git", or "snapshots".
+	Versions      string `protobuf:"bytes,5,opt,name=versions,proto3" json:"versions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KindPolicy) Reset() {
+	*x = KindPolicy{}
+	mi := &file_ladulas_v1_project_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KindPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KindPolicy) ProtoMessage() {}
+
+func (x *KindPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_project_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KindPolicy.ProtoReflect.Descriptor instead.
+func (*KindPolicy) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_project_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *KindPolicy) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *KindPolicy) GetExtensions() []string {
+	if x != nil {
+		return x.Extensions
+	}
+	return nil
+}
+
+func (x *KindPolicy) GetServe() bool {
+	if x != nil {
+		return x.Serve
+	}
+	return false
+}
+
+func (x *KindPolicy) GetPush() bool {
+	if x != nil {
+		return x.Push
+	}
+	return false
+}
+
+func (x *KindPolicy) GetVersions() string {
+	if x != nil {
+		return x.Versions
+	}
+	return ""
+}
+
+// DocumentVersion is one state of a document a reader may ask to see.
+type DocumentVersion struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Kind  DocumentVersionKind    `protobuf:"varint,1,opt,name=kind,proto3,enum=ladulas.v1.DocumentVersionKind" json:"kind,omitempty"`
+	// For a snapshot: the digest it is stored under, and how it is fetched.
+	Digest []byte `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	// For a commit: the hash, and how it is fetched.
+	Commit string `protobuf:"bytes,3,opt,name=commit,proto3" json:"commit,omitempty"`
+	Size   int64  `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	// When the snapshot was taken, or when the commit was authored.
+	At *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=at,proto3" json:"at,omitempty"`
+	// For a commit: its subject line and author, which is what a version list
+	// shows beside it. A snapshot has neither — nobody wrote a message about
+	// saving a file.
+	Subject       string `protobuf:"bytes,6,opt,name=subject,proto3" json:"subject,omitempty"`
+	Author        string `protobuf:"bytes,7,opt,name=author,proto3" json:"author,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DocumentVersion) Reset() {
+	*x = DocumentVersion{}
+	mi := &file_ladulas_v1_project_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DocumentVersion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DocumentVersion) ProtoMessage() {}
+
+func (x *DocumentVersion) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_project_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DocumentVersion.ProtoReflect.Descriptor instead.
+func (*DocumentVersion) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_project_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DocumentVersion) GetKind() DocumentVersionKind {
+	if x != nil {
+		return x.Kind
+	}
+	return DocumentVersionKind_DOCUMENT_VERSION_KIND_UNSPECIFIED
+}
+
+func (x *DocumentVersion) GetDigest() []byte {
+	if x != nil {
+		return x.Digest
+	}
+	return nil
+}
+
+func (x *DocumentVersion) GetCommit() string {
+	if x != nil {
+		return x.Commit
+	}
+	return ""
+}
+
+func (x *DocumentVersion) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *DocumentVersion) GetAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.At
+	}
+	return nil
+}
+
+func (x *DocumentVersion) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *DocumentVersion) GetAuthor() string {
+	if x != nil {
+		return x.Author
+	}
+	return ""
+}
+
+// SyncEntry is one document an approver already holds, as it describes it to a
+// publisher.
+//
+// The digest is the approver's own, computed over what it has. It is sent so
+// that the publisher can answer with what differs rather than with everything;
+// what comes back is still verified against the bytes, so a publisher that
+// lied about a digest would gain nothing but a wasted transfer.
+type SyncEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Digest        []byte                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncEntry) Reset() {
+	*x = SyncEntry{}
+	mi := &file_ladulas_v1_project_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncEntry) ProtoMessage() {}
+
+func (x *SyncEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_project_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncEntry.ProtoReflect.Descriptor instead.
+func (*SyncEntry) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_project_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SyncEntry) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SyncEntry) GetDigest() []byte {
+	if x != nil {
+		return x.Digest
+	}
+	return nil
+}
+
 var File_ladulas_v1_project_proto protoreflect.FileDescriptor
 
 const file_ladulas_v1_project_proto_rawDesc = "" +
@@ -283,7 +648,35 @@ const file_ladulas_v1_project_proto_rawDesc = "" +
 	"\bmodified\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bmodified\x12\x1a\n" +
 	"\breadable\x18\x06 \x01(\bR\breadable\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x12)\n" +
-	"\x10nothing_readable\x18\b \x01(\bR\x0fnothingReadableBDZBgithub.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1b\x06proto3"
+	"\x10nothing_readable\x18\b \x01(\bR\x0fnothingReadable\"\x86\x01\n" +
+	"\n" +
+	"KindPolicy\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
+	"\n" +
+	"extensions\x18\x02 \x03(\tR\n" +
+	"extensions\x12\x14\n" +
+	"\x05serve\x18\x03 \x01(\bR\x05serve\x12\x12\n" +
+	"\x04push\x18\x04 \x01(\bR\x04push\x12\x1a\n" +
+	"\bversions\x18\x05 \x01(\tR\bversions\"\xe8\x01\n" +
+	"\x0fDocumentVersion\x123\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1f.ladulas.v1.DocumentVersionKindR\x04kind\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\fR\x06digest\x12\x16\n" +
+	"\x06commit\x18\x03 \x01(\tR\x06commit\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\x12*\n" +
+	"\x02at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\x12\x18\n" +
+	"\asubject\x18\x06 \x01(\tR\asubject\x12\x16\n" +
+	"\x06author\x18\a \x01(\tR\x06author\"7\n" +
+	"\tSyncEntry\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\fR\x06digest*\x82\x01\n" +
+	"\x13DocumentVersionKind\x12%\n" +
+	"!DOCUMENT_VERSION_KIND_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eDOCUMENT_VERSION_KIND_SNAPSHOT\x10\x01\x12 \n" +
+	"\x1cDOCUMENT_VERSION_KIND_COMMIT\x10\x02*i\n" +
+	"\x0eSyncChangeKind\x12 \n" +
+	"\x1cSYNC_CHANGE_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14SYNC_CHANGE_KIND_PUT\x10\x01\x12\x1b\n" +
+	"\x17SYNC_CHANGE_KIND_REMOVE\x10\x02BDZBgithub.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1b\x06proto3"
 
 var (
 	file_ladulas_v1_project_proto_rawDescOnce sync.Once
@@ -297,20 +690,28 @@ func file_ladulas_v1_project_proto_rawDescGZIP() []byte {
 	return file_ladulas_v1_project_proto_rawDescData
 }
 
-var file_ladulas_v1_project_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_ladulas_v1_project_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_ladulas_v1_project_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_ladulas_v1_project_proto_goTypes = []any{
-	(*Publication)(nil),           // 0: ladulas.v1.Publication
-	(*ProjectEntry)(nil),          // 1: ladulas.v1.ProjectEntry
-	(*timestamppb.Timestamp)(nil), // 2: google.protobuf.Timestamp
+	(DocumentVersionKind)(0),      // 0: ladulas.v1.DocumentVersionKind
+	(SyncChangeKind)(0),           // 1: ladulas.v1.SyncChangeKind
+	(*Publication)(nil),           // 2: ladulas.v1.Publication
+	(*ProjectEntry)(nil),          // 3: ladulas.v1.ProjectEntry
+	(*KindPolicy)(nil),            // 4: ladulas.v1.KindPolicy
+	(*DocumentVersion)(nil),       // 5: ladulas.v1.DocumentVersion
+	(*SyncEntry)(nil),             // 6: ladulas.v1.SyncEntry
+	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
 }
 var file_ladulas_v1_project_proto_depIdxs = []int32{
-	2, // 0: ladulas.v1.Publication.published_at:type_name -> google.protobuf.Timestamp
-	2, // 1: ladulas.v1.ProjectEntry.modified:type_name -> google.protobuf.Timestamp
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	7, // 0: ladulas.v1.Publication.published_at:type_name -> google.protobuf.Timestamp
+	7, // 1: ladulas.v1.ProjectEntry.modified:type_name -> google.protobuf.Timestamp
+	0, // 2: ladulas.v1.DocumentVersion.kind:type_name -> ladulas.v1.DocumentVersionKind
+	7, // 3: ladulas.v1.DocumentVersion.at:type_name -> google.protobuf.Timestamp
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_project_proto_init() }
@@ -323,13 +724,14 @@ func file_ladulas_v1_project_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_project_proto_rawDesc), len(file_ladulas_v1_project_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   2,
+			NumEnums:      2,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_ladulas_v1_project_proto_goTypes,
 		DependencyIndexes: file_ladulas_v1_project_proto_depIdxs,
+		EnumInfos:         file_ladulas_v1_project_proto_enumTypes,
 		MessageInfos:      file_ladulas_v1_project_proto_msgTypes,
 	}.Build()
 	File_ladulas_v1_project_proto = out.File
