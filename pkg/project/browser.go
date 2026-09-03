@@ -470,6 +470,29 @@ func (b *Browser) File(
 		return nil, err
 	}
 
+	// **The cache is read first, and that is what decision AP bought.**
+	//
+	// Under decision Q the cache was a fallback: a page was here because
+	// somebody had opened it, nothing kept it current, and the only honest
+	// thing to do was ask the publisher every time. The sync changed that — the
+	// documentation here is reconciled on the way up, on a timer and on an
+	// event — so the copy in the cache is the copy the publisher has, and
+	// dialling to confirm what is already known is what turned opening a
+	// document into the time it takes to reach a laptop.
+	//
+	// So a hit is served and nothing is dialled. What keeps it true is the
+	// syncer rather than this call, which is the right place for it: one
+	// reconciliation covers every document, and a read that revalidated would
+	// pay a round trip per document to learn what one manifest already said.
+	//
+	// **A pulled kind would need the publisher asked**, because nothing keeps
+	// it current — there is no such kind today, since everything served is
+	// pushed (decision AP), and the check to add when there is one is the
+	// publisher's advertised policy rather than this instance's.
+	if page, ok := b.cachedPage(fingerprint, projectID, name); ok {
+		return page, nil
+	}
+
 	publisher := b.publisher(fingerprint)
 	if publisher == nil {
 		return b.keptPage(fingerprint, projectID, name, "")
@@ -680,6 +703,25 @@ func (b *Browser) keptSearch(
 	listing.Total = len(listing.Entries)
 
 	return listing
+}
+
+// cachedPage is what is held here, and whether anything is.
+//
+// It is the boolean-returning shape rather than keptPage's error one because
+// its caller is asking a question — is this here — rather than handling a
+// failure, and a miss is the ordinary answer for a document nobody has synced.
+func (b *Browser) cachedPage(
+	fingerprint, projectID, name string,
+) (*Page, bool) {
+	page, err := b.keptPage(fingerprint, projectID, name, "")
+	if err != nil {
+		return nil, false
+	}
+
+	// Kept means kept by the syncer now, not read once and abandoned, so it is
+	// not the offline answer it used to be. Saying so is the note's business
+	// (pkg/bridge), and what travels is when it was last written here.
+	return page, true
 }
 
 func (b *Browser) keptPage(

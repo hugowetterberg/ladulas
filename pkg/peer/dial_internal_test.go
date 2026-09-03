@@ -73,7 +73,7 @@ func TestTheReportedFailureIsTheInformativeOne(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := node.callOver(context.Background(), &transport.Client{},
+			_, err := node.callOver(context.Background(), &transport.Client{},
 				tc.addresses,
 				func(_ context.Context, _ *http.Client, baseURL string) error {
 					for address, failure := range tc.failures {
@@ -107,7 +107,7 @@ func TestTheReportedFailureIsTheInformativeOne(t *testing.T) {
 func TestEveryAddressBeingOursSaysSo(t *testing.T) {
 	node := &Node{}
 
-	err := node.callOver(context.Background(), &transport.Client{},
+	_, err := node.callOver(context.Background(), &transport.Client{},
 		[]string{"127.0.0.1:7373", "[::1]:7373"},
 		func(_ context.Context, _ *http.Client, _ string) error {
 			return transport.ErrSelfAddress

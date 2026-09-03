@@ -7,12 +7,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
-	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // Some of M4 goes the other way down a pairing from everything before it.
@@ -94,25 +94,36 @@ func (n *Node) call(
 	fn func(ctx context.Context, client *http.Client, baseURL string) error,
 ) error {
 	if existing := n.link(record.GetFingerprint()); existing != nil {
-		return n.callOver(ctx, existing.client, existing.addresses(), fn)
+		used, err := n.callOver(ctx, existing.client, existing.addresses(), fn)
+		if used != "" {
+			existing.succeeded(used)
+		}
+
+		return err
 	}
 
-	key, err := trust.PublicKey(record)
+	// A peer with no link still gets a client that stays warm and an address
+	// that is remembered, because the calls that go this way — a listing, a
+	// page, a sync manifest — are the repeated ones.
+	held, err := n.dialerFor(record)
 	if err != nil {
 		return err
 	}
 
-	client, err := transport.NewClient(transport.ClientOptions{
-		Identity: n.identity,
-		Expect:   key,
-	})
-	if err != nil {
-		return err
+	addresses := held.order(func(all []string) []string {
+		return reachableFirst(ctx, all)
+	}, record.GetAddresses())
+
+	used, err := n.callOver(ctx, held.client, addresses, fn)
+
+	switch {
+	case used != "":
+		held.remember(used)
+	case ctx.Err() == nil:
+		// Every address failed, and the one that worked before is the least
+		// likely to be the right guess on whatever network this is now.
+		held.forget()
 	}
-
-	defer client.CloseIdle()
-
-	err = n.callOver(ctx, client, record.GetAddresses(), fn)
 
 	// A cancelled call says nothing about the peer — it is the app going into
 	// the background, or a long poll being torn down — so it is not recorded as
@@ -144,14 +155,110 @@ func (n *Node) call(
 //     and a refusal says less than a peer that answered and complained;
 //   - the count of the others goes in the message, so that "there were four
 //     more" is visible without a log level.
+//
+// probeTimeout bounds the race that decides which address to call first.
+//
+// It is short on purpose. A peer that is actually reachable answers a TCP
+// connect in milliseconds over a tailnet and in tens of them over anything
+// else; two seconds is far past that and far short of the ten a blackholed
+// address takes to admit defeat.
+const probeTimeout = 2 * time.Second
+
+// reachableFirst reorders a peer's addresses so that one that answered a TCP
+// connect is tried first.
+//
+// **The race is on the connection, not on the call.** Running fn against every
+// address at once would be the obvious happy-eyeballs shape and is wrong here:
+// callOver carries answers, endorsements and grant reports as well as reads, so
+// racing the call itself would apply a mutation once per address that answered.
+// What is raced is a bare TCP connect, which tells a blackholed address from a
+// live one — exactly the failure this exists for — and the identity pin is
+// still checked by the real call, as it always was.
+//
+// It is a reordering rather than a decision. Everything callOver already does
+// still happens: the winner is simply not the address that takes ten seconds to
+// time out. A race that finds nothing changes nothing.
+//
+// The case it is for: two machines on a tailnet whose IPv6 is blackholed and
+// whose IPv4 works. Serially that is a ten-second wait before the first address
+// that could have worked is tried, on every call; the phone pays it four times
+// over and looks broken rather than slow.
+func reachableFirst(ctx context.Context, addresses []string) []string {
+	if len(addresses) < 2 {
+		return addresses
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	winner := make(chan string, len(addresses))
+
+	var wait sync.WaitGroup
+
+	for _, address := range addresses {
+		wait.Add(1)
+
+		go func() {
+			defer wait.Done()
+
+			var dialer net.Dialer
+
+			conn, err := dialer.DialContext(probeCtx, "tcp", address)
+			if err != nil {
+				return
+			}
+
+			_ = conn.Close()
+
+			winner <- address
+		}()
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		wait.Wait()
+		close(done)
+	}()
+
+	var first string
+
+	select {
+	case first = <-winner:
+	case <-done:
+		// Every probe finished without connecting, or one slipped in just as
+		// they did; either way the drain below settles it.
+		select {
+		case first = <-winner:
+		default:
+		}
+	case <-probeCtx.Done():
+	}
+
+	if first == "" {
+		return addresses
+	}
+
+	out := make([]string, 0, len(addresses))
+	out = append(out, first)
+
+	for _, address := range addresses {
+		if address != first {
+			out = append(out, address)
+		}
+	}
+
+	return out
+}
+
 func (n *Node) callOver(
 	ctx context.Context,
 	client *transport.Client,
 	addresses []string,
 	fn func(ctx context.Context, client *http.Client, baseURL string) error,
-) error {
+) (string, error) {
 	if len(addresses) == 0 {
-		return ErrNoAddress
+		return "", ErrNoAddress
 	}
 
 	var (
@@ -164,11 +271,11 @@ func (n *Node) callOver(
 	for _, address := range addresses {
 		err := fn(ctx, client.HTTP(), client.URL(address))
 		if err == nil {
-			return nil
+			return address, nil
 		}
 
 		if ctx.Err() != nil {
-			return err
+			return "", err
 		}
 
 		if errors.Is(err, transport.ErrSelfAddress) {
@@ -187,18 +294,18 @@ func (n *Node) callOver(
 
 	switch {
 	case best != nil && attempted > 1:
-		return fmt.Errorf("%w (%d more addresses also failed)",
+		return "", fmt.Errorf("%w (%d more addresses also failed)",
 			best, attempted-1)
 	case best != nil:
-		return best
+		return "", best
 	case ourselves > 0:
 		// Every address the peer advertises is one of this machine's own, which
 		// is a trust record to repair rather than a peer to wait for.
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"peer: every address recorded for this peer is one of ours, so it "+
 				"was never dialled: %w", transport.ErrSelfAddress)
 	default:
-		return ErrNoAddress
+		return "", ErrNoAddress
 	}
 }
 

@@ -210,7 +210,10 @@ func (s *Session) handleProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	listed, err := s.opts.Projects.List(r.Context(), r.URL.Query().Get("peer"))
+	ctx, cancel := context.WithTimeout(r.Context(), BrowseTimeout)
+	defer cancel()
+
+	listed, err := s.opts.Projects.List(ctx, r.URL.Query().Get("peer"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 
@@ -226,13 +229,16 @@ func (s *Session) handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Session) handleProject(w http.ResponseWriter, r *http.Request) {
-	if !s.browsable(w) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
 		return
 	}
 
+	defer cancel()
+
 	fingerprint, id := where(r)
 
-	overview, err := s.opts.Projects.Open(r.Context(), fingerprint, id)
+	overview, err := s.opts.Projects.Open(ctx, fingerprint, id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 
@@ -244,9 +250,12 @@ func (s *Session) handleProject(w http.ResponseWriter, r *http.Request) {
 
 // handleProjectDirectory is one page of one directory (decision Q).
 func (s *Session) handleProjectDirectory(w http.ResponseWriter, r *http.Request) {
-	if !s.browsable(w) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
 		return
 	}
+
+	defer cancel()
 
 	fingerprint, id := where(r)
 	query := r.URL.Query()
@@ -257,7 +266,7 @@ func (s *Session) handleProjectDirectory(w http.ResponseWriter, r *http.Request)
 			token, pageSize(query.Get("size")))
 	}
 
-	listing, err := read(r.Context(), query.Get("token"))
+	listing, err := read(ctx, query.Get("token"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 
@@ -265,16 +274,19 @@ func (s *Session) handleProjectDirectory(w http.ResponseWriter, r *http.Request)
 	}
 
 	if wantsReadable(query) {
-		listing = keepReadable(r.Context(), listing, read)
+		listing = keepReadable(ctx, listing, read)
 	}
 
 	s.writeListing(w, fingerprint, id, listing)
 }
 
 func (s *Session) handleProjectSearch(w http.ResponseWriter, r *http.Request) {
-	if !s.browsable(w) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
 		return
 	}
+
+	defer cancel()
 
 	fingerprint, id := where(r)
 	query := r.URL.Query()
@@ -285,7 +297,7 @@ func (s *Session) handleProjectSearch(w http.ResponseWriter, r *http.Request) {
 			pageSize(query.Get("size")))
 	}
 
-	listing, err := read(r.Context(), query.Get("token"))
+	listing, err := read(ctx, query.Get("token"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 
@@ -293,7 +305,7 @@ func (s *Session) handleProjectSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if wantsReadable(query) {
-		listing = keepReadable(r.Context(), listing, read)
+		listing = keepReadable(ctx, listing, read)
 	}
 
 	s.writeListing(w, fingerprint, id, listing)
@@ -385,9 +397,12 @@ func readableEntries(entries []*ladulasv1.ProjectEntry) []*ladulasv1.ProjectEntr
 
 // handleProjectFile reads one page, and keeps it (decision Q).
 func (s *Session) handleProjectFile(w http.ResponseWriter, r *http.Request) {
-	if !s.browsable(w) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
 		return
 	}
+
+	defer cancel()
 
 	fingerprint, id := where(r)
 	name := r.URL.Query().Get("path")
@@ -405,7 +420,7 @@ func (s *Session) handleProjectFile(w http.ResponseWriter, r *http.Request) {
 	commit := r.URL.Query().Get("commit")
 
 	read, err := s.opts.Projects.Read(
-		r.Context(), fingerprint, id, name, digest, commit)
+		ctx, fingerprint, id, name, digest, commit)
 	if err != nil && read == nil {
 		writeError(w, http.StatusNotFound, err.Error())
 
@@ -455,14 +470,17 @@ func versionDigest(value string) ([]byte, error) {
 
 // handleProjectVersions is what a document has been (decision AP).
 func (s *Session) handleProjectVersions(w http.ResponseWriter, r *http.Request) {
-	if !s.browsable(w) {
+	ctx, cancel, ok := s.browsing(w, r)
+	if !ok {
 		return
 	}
+
+	defer cancel()
 
 	fingerprint, id := where(r)
 	name := r.URL.Query().Get("path")
 
-	list, err := s.opts.Projects.Versions(r.Context(), fingerprint, id, name, 0)
+	list, err := s.opts.Projects.Versions(ctx, fingerprint, id, name, 0)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 
@@ -577,6 +595,41 @@ func (s *Session) writeListing(
 	view.Error = listing.Err
 
 	writeJSON(w, http.StatusOK, view)
+}
+
+// BrowseTimeout bounds a call made while somebody is looking at a screen.
+//
+// Everything else on the peer channel is bounded by what it is waiting for, and
+// for an approval that is a human deciding — §9 gives it an hour, and a client
+// timeout there would be a promise taken away from somebody halfway through
+// making it. Reading a document is the opposite: the wait *is* the delay, and a
+// reader who cannot be told "that machine is not answering" until four dial
+// timeouts have run is a reader looking at nothing for the better part of a
+// minute.
+//
+// Twenty seconds is past what a reachable peer takes and short of the wait that
+// reads as broken. It bounds the whole call including the addresses tried after
+// the first, which is the number that was unbounded before.
+const BrowseTimeout = 20 * time.Second
+
+// browsing bounds a browsing call and reports whether there is anything to
+// browse.
+//
+// The deadline is applied here rather than by each host because both of them
+// had the same gap in different shapes: the phone passes no context at all, so
+// its calls ran under context.Background() and could not be given up on, and
+// the desktop's own timeout covers the control socket rather than what the
+// daemon does behind it.
+func (s *Session) browsing(
+	w http.ResponseWriter, r *http.Request,
+) (context.Context, context.CancelFunc, bool) {
+	if !s.browsable(w) {
+		return nil, nil, false
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), BrowseTimeout)
+
+	return ctx, cancel, true
 }
 
 func (s *Session) browsable(w http.ResponseWriter) bool {
@@ -716,12 +769,32 @@ func listingNote(listing *project.Listing) string {
 	return note
 }
 
+// pageNote says where a document came from, when that is worth saying.
+//
+// It used to have two cases, because a page that was not live meant one thing:
+// the publisher could not be reached and this is what was read of it once. The
+// sync made a third — a page served from here because it is kept current, which
+// is the ordinary case now and is not an apology (decision AP).
+//
+// The two are told apart by whether anything went wrong. A read that failed
+// carries the reason; one that never needed to dial carries none, and saying
+// "could not be reached" about a machine nobody tried to reach would be the
+// note lying about the thing it exists to be honest about.
 func pageNote(page *project.Page) string {
 	if page.Live {
 		return ""
 	}
 
 	when := page.ReadAt.Local().Format("2 Jan 15:04")
+
+	if page.Err == "" {
+		if page.Commit != "" {
+			return fmt.Sprintf("Kept here, last updated %s, at %s.",
+				when, shortCommit(page.Commit))
+		}
+
+		return fmt.Sprintf("Kept here, last updated %s.", when)
+	}
 
 	if page.Commit != "" {
 		return fmt.Sprintf("Read here on %s, at %s. The machine it belongs to "+

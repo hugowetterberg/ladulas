@@ -215,6 +215,11 @@ type Node struct {
 	// with a link coming up or a pairing settling.
 	eventState
 
+	// dialers are the warm clients for peers there is no link to, with the
+	// address each was last reached on. Its own mutex for the same reason.
+	dialMu  sync.Mutex
+	dialers map[string]*dialer
+
 	mu    sync.Mutex
 	links map[string]*link
 	// reached is what dialling a peer without keeping a link found, by
@@ -440,6 +445,7 @@ func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		n.stopWatching()
 		n.stopLinks()
+		n.closeDialers()
 
 		err = n.server.Close()
 	})

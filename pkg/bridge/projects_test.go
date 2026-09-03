@@ -526,7 +526,16 @@ func TestAnUnreachablePublisherShowsWhatWasRead(t *testing.T) {
 		t.Errorf("the reader is not told why: %q", listing.Error)
 	}
 
-	// The page that was read is still readable, and says when it was read.
+	// The page that was read is still readable, and says when it was last
+	// written here.
+	//
+	// It no longer says the publisher could not be reached, and that is the
+	// point rather than a regression: since decision AP a read is served from
+	// the cache without dialling at all, so a note claiming the machine was
+	// unreachable would be describing a call nobody made. What it says instead
+	// is the thing this side actually knows — when the copy here was last
+	// updated. The unreachable wording is still there for a read that did dial
+	// and failed, which is a cache miss.
 	status, body = f.get(t, browse("file", map[string]string{"path": "docs/design.md"}))
 	if status != http.StatusOK {
 		t.Fatalf("status %d: %s", status, body)
@@ -538,7 +547,7 @@ func TestAnUnreachablePublisherShowsWhatWasRead(t *testing.T) {
 		t.Fatalf("decode: %v\n%s", err, body)
 	}
 
-	if page.Live || !strings.Contains(page.Note, "Read here") {
+	if page.Live || !strings.Contains(page.Note, "Kept here") {
 		t.Errorf("the kept page says %q", page.Note)
 	}
 
