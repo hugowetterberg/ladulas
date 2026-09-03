@@ -132,6 +132,17 @@ func (c Config) ProjectsDir() string {
 	return filepath.Join(c.DataDir, "projects")
 }
 
+// VersionsDir is where the working-tree states of this instance's *own*
+// published documents are kept (decision AP).
+//
+// A sibling of ProjectsDir rather than a subdirectory of it, because the two
+// hold opposite things and confusing them would be bad in one direction: that
+// one is what has been read of other machines' projects, and this one is what
+// has not yet been committed on this one. Both are sealed with the store key.
+func (c Config) VersionsDir() string {
+	return filepath.Join(c.DataDir, "versions")
+}
+
 // DefaultDataDir is $XDG_DATA_HOME/ladulas, or ~/.local/share/ladulas.
 func DefaultDataDir() string {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
@@ -212,6 +223,10 @@ type core struct {
 	vault    *keystore.Vault
 	engine   *approval.Engine
 	projects *project.Cache
+	// versions is what this instance keeps of its own documents between
+	// commits, which is the publisher's side of decision AP. projects above is
+	// the approver's side, and they are not the same thing in either direction.
+	versions *project.VersionStore
 	// peer is nil when peering is switched off.
 	peer *peer.Node
 	// listen is where the peer channel was told to bind, and what said so. It
@@ -424,7 +439,21 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 		return nil, err
 	}
 
-	built := &core{vault: vault, engine: engine, projects: projects}
+	// The publisher's half of versions. It is opened with the store, because it
+	// is sealed with the store's key and a sealed instance keeps no versions at
+	// all — there would be nothing to encrypt them with and nobody able to read
+	// them (decision AP).
+	versions, err := project.OpenVersions(cfg.VersionsDir(), vault)
+	if err != nil {
+		return nil, err
+	}
+
+	built := &core{
+		vault:    vault,
+		engine:   engine,
+		projects: projects,
+		versions: versions,
+	}
 
 	built.listen = a.listenSetting(vault)
 
@@ -497,6 +526,7 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 		Engine:       built.engine,
 		Keys:         built.vault,
 		Projects:     built.projects,
+		Versions:     built.versions,
 		Delegations:  built.vault,
 		Wakeups:      built.vault,
 		Handovers:    built.vault,

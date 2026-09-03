@@ -49,6 +49,17 @@ type Repository struct {
 // it means no version history beyond the snapshots.
 var ErrNotARepository = errors.New("project: not a git repository")
 
+// IsNotARepository reports whether an error is a directory turning out not to
+// be a git checkout.
+//
+// It is a function rather than the caller matching on the sentinel because the
+// distinction matters at every call site that starts a watch: not a repository
+// is the ordinary case and is reported quietly, while everything else is a
+// question somebody will ask.
+func IsNotARepository(err error) bool {
+	return errors.Is(err, ErrNotARepository)
+}
+
 // OpenRepository opens the repository a published project lives in.
 func OpenRepository(root string) (*Repository, error) {
 	repo, err := git.PlainOpen(root)

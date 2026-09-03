@@ -66,6 +66,16 @@ func (n *Node) PublishProject(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// Under watch from here, so that an edit made a second later is a version a
+	// peer can be offered (decision AP).
+	n.watchPublication(publication)
+
+	n.Announce(&ladulasv1.Event{
+		Kind:      ladulasv1.EventKind_EVENT_KIND_PROJECT_PUBLISHED,
+		ProjectId: publication.GetProjectId(),
+		Head:      publication.GetCommit(),
+	})
+
 	n.engine.LogLifecycle(fmt.Sprintf(
 		"published %q from %s",
 		publication.GetName(), publication.GetPath()))
@@ -178,6 +188,18 @@ func (n *Node) withdraw(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
+
+	// Nobody is told — there is no copy of any of it anywhere to take back
+	// (decision Q) — but this side stops watching and drops what it kept. A
+	// withdrawn publication is one no peer may read, so leaving the snapshots
+	// would be keeping a copy of somebody's uncommitted work that nothing can
+	// reach and nothing will remove.
+	n.forgetWatched(publication.GetProjectId())
+
+	n.Announce(&ladulasv1.Event{
+		Kind:      ladulasv1.EventKind_EVENT_KIND_PROJECT_WITHDRAWN,
+		ProjectId: publication.GetProjectId(),
+	})
 
 	n.engine.LogLifecycle("stopped publishing " + publication.GetName())
 

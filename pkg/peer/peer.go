@@ -181,8 +181,13 @@ type Node struct {
 	// AP). The zero value is not special-cased here because it does not have to
 	// be: project's own calls resolve an unset Serving to the default, so an
 	// instance built without one serves markdown and nothing else.
-	serving      project.Serving
-	versions     *project.VersionStore
+	serving  project.Serving
+	versions *project.VersionStore
+	// docWatcher keeps the version store up to date with what is being edited.
+	// Nil when there is no version store, and on a node whose watch failed to
+	// start — in which case peers see committed versions only. Not to be
+	// confused with `watchers` below, which is the pairing commands waiting.
+	docWatcher   *project.Watcher
 	delegations  Delegations
 	wakeups      Wakeups
 	handovers    Handovers
@@ -361,6 +366,11 @@ func New(opts Options) (*Node, error) {
 
 	node.server = server
 
+	// Last, and after the server, because the watcher's events are announced
+	// through this node and there has to be a whole one for them to reach
+	// (decision AP).
+	node.startWatching()
+
 	return node, nil
 }
 
@@ -428,6 +438,7 @@ func (n *Node) Close() error {
 	var err error
 
 	n.closeOnce.Do(func() {
+		n.stopWatching()
 		n.stopLinks()
 
 		err = n.server.Close()
