@@ -1401,6 +1401,123 @@ function autoPublishCard(state, publishing) {
     said);
 }
 
+// publishedCard is what this instance publishes now, whichever way it got
+// there — automatically, or by `ladulas projects publish`, or from the sheet
+// below — and the way to stop publishing one (decision Q).
+//
+// Stopping is one press. Nothing is taken back from anybody by it: what an
+// approver has read stays read on their machine, and what changes is only
+// whether the next read is answered. Publishing it again is one press too. So
+// the two-press shape kept for the irreversible would be theatre here.
+function publishedCard(state, publishing) {
+  const published = publishing.published || [];
+  const publish = el("button", null, "Publish a directory");
+
+  publish.onclick = () => publishSheet(state);
+
+  if (!published.length) {
+    return ui.card(null,
+      el("div", "row-title", "Nothing is published from here"),
+      ui.note(publishing.autoPublish
+        ? "The first project this machine asks for a signature in will be, "
+          + "or name one below."
+        : "Name a directory below, or run `ladulas projects publish .` in "
+          + "a project."),
+      append(el("div", "card-actions"), publish));
+  }
+
+  const rows = [];
+
+  for (const pub of published) {
+    const stop = el("button", null, "Stop publishing");
+    const said = ui.note("");
+
+    said.hidden = true;
+
+    stop.onclick = () => {
+      stop.disabled = true;
+      said.hidden = true;
+
+      bridge
+        .unpublishProject(pub.projectId || pub.name)
+        .then(() => state.refresh())
+        .catch((error) => {
+          stop.disabled = false;
+          said.textContent = error.message;
+          said.hidden = false;
+        });
+    };
+
+    // Not a ui.row: that is a button, and a button holding a button is not
+    // a thing a browser will do what is meant with.
+    rows.push(append(el("div", "publication"),
+      el("div", "row-title", pub.name || pub.path),
+      facts([
+        { label: "Directory", value: pub.path, mono: true },
+        { label: "Remote", value: pub.originUrl, mono: true },
+        { label: "Branch", value: pub.branch },
+        { label: "Commit", value: pub.commit, mono: true },
+        { label: "Since", value: pub.publishedAt },
+      ]),
+      append(el("div", "card-actions"), stop),
+      said));
+  }
+
+  return ui.card(null,
+    el("div", "row-title", published.length === 1
+      ? "One project is published from here"
+      : published.length + " projects are published from here"),
+    ui.note("Each is read by the machines that approve for this one, while "
+      + "this one is reachable. The branch and commit are what the "
+      + "repository is at now, not what it was at when it was published."),
+    ...rows,
+    append(el("div", "card-actions"), publish));
+}
+
+// publishSheet offers a directory's repository to this instance's approvers.
+// The path is typed rather than picked (decision AF): a webview's directory
+// picker is not worth the shell it costs, and `ladulas projects publish .`
+// from inside the project is the shorter way in anyway. The sheet is for the
+// case where somebody is already here.
+function publishSheet(state) {
+  const path = field("Directory", "/home/me/projects/handbook", "text");
+  const name = field("Name", "the directory's name", "text");
+  const publish = el("button", "primary", "Publish");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  const sheet = ui.sheet("Publish a directory",
+    path.root,
+    name.root,
+    ui.note("The directory has to be in a git repository on this machine. "
+      + "The machines that approve for this one can then read its "
+      + "documentation, so the person approving knows what they are "
+      + "signing — and nothing else in it. The name is what they see it "
+      + "as; empty means the directory's own."),
+    append(el("div", "card-actions"), publish),
+    said);
+
+  publish.onclick = () => {
+    publish.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .publishProject(path.input.value, name.input.value)
+      .then(() => {
+        sheet.close();
+        state.refresh();
+      })
+      .catch((error) => {
+        publish.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return sheet;
+}
+
 // listenCard is where the peer channel listens (§8), and the way to change it
 // (§14).
 //
@@ -2167,6 +2284,7 @@ export function settings(state) {
   if (instance.publishing) {
     body.push(ui.heading("Documents"));
     body.push(autoPublishCard(state, instance.publishing));
+    body.push(publishedCard(state, instance.publishing));
   }
 
   body.push(ui.heading("The daemon"));

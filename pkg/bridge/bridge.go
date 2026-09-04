@@ -425,11 +425,25 @@ type Options struct {
 	SetListen func(
 		ctx context.Context, spec string, allowPublic, clear bool,
 	) (*ladulasv1.SetPeerListenResponse, error)
-	// AutoPublish is whether projects this instance asks for signatures in are
-	// published to its approvers automatically, and SetAutoPublish changes it
-	// (decision Q). Both optional and offered together.
-	AutoPublish    func() (bool, error)
-	SetAutoPublish func(ctx context.Context, enabled bool) error
+	// Publishing is what this instance publishes to its approvers: whether it
+	// does so automatically for the projects it asks for signatures in, and
+	// what it publishes now, by name or by hand (decision Q). SetAutoPublish
+	// changes the first; PublishProject and UnpublishProject change the second.
+	//
+	// PublishProject takes a directory rather than a repository, the way the
+	// CLI does, and the host decides what the directory is: the project's
+	// identity is derived from the repository the path is in (core §6). The
+	// name is what approvers see it as, and empty means the host's default,
+	// which is the directory's basename.
+	//
+	// UnpublishProject names a publication the way the daemon accepts one — by
+	// name or by project identifier. The screen sends the identifier, because
+	// two publications can share a name and one of them is the one whose row
+	// the button sat on.
+	Publishing       func() (PublishingView, error)
+	SetAutoPublish   func(ctx context.Context, enabled bool) error
+	PublishProject   func(ctx context.Context, path, name string) (PublicationView, error)
+	UnpublishProject func(ctx context.Context, project string) error
 	// UnlockAtLogin is whether this instance unlocks from the platform keychain
 	// at login, and SetUnlockAtLogin enrols it or forgets it (decision I). Both
 	// optional and offered together. Enrolling copies the data encryption key
@@ -942,6 +956,8 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/settings/listen", s.handleListen)
 	mux.HandleFunc("POST /api/v1/settings/listen", s.handleSetListen)
 	mux.HandleFunc("POST /api/v1/settings/auto-publish", s.handleSetAutoPublish)
+	mux.HandleFunc("POST /api/v1/publications", s.handlePublishProject)
+	mux.HandleFunc("POST /api/v1/publications/unpublish", s.handleUnpublishProject)
 	mux.HandleFunc("POST /api/v1/settings/unlock-at-login",
 		s.handleSetUnlockAtLogin)
 	mux.HandleFunc("GET /api/v1/lock", s.handleLockState)
@@ -1201,9 +1217,9 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	if s.opts.AutoPublish != nil {
-		if enabled, err := s.opts.AutoPublish(); err == nil {
-			view.Publishing = &PublishingView{AutoPublish: enabled}
+	if s.opts.Publishing != nil {
+		if publishing, err := s.opts.Publishing(); err == nil {
+			view.Publishing = &publishing
 		}
 	}
 
@@ -1467,7 +1483,107 @@ func (s *Session) handleSetAutoPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, PublishingView{AutoPublish: *body.Enabled})
+	s.writePublishing(w, PublishingView{AutoPublish: *body.Enabled})
+}
+
+// writePublishing answers a change to what is published with what a read now
+// says, falling back to what the handler knows when the host cannot be read
+// back — a host that offers the write and not the read is an odd one, but the
+// option is optional and a half-wired host should still get its answer.
+func (s *Session) writePublishing(w http.ResponseWriter, fallback PublishingView) {
+	if s.opts.Publishing != nil {
+		if publishing, err := s.opts.Publishing(); err == nil {
+			writeJSON(w, http.StatusOK, publishing)
+
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, fallback)
+}
+
+// handlePublishProject offers a directory's repository to the instances that
+// approve for this one (decision Q). The path is typed, not picked: a webview
+// has no directory picker worth the name, and the CLI's `ladulas projects
+// publish .` is the way in from inside a project anyway.
+func (s *Session) handlePublishProject(w http.ResponseWriter, r *http.Request) {
+	if s.opts.PublishProject == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot publish a project")
+
+		return
+	}
+
+	var body struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 8192)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the project could not be read")
+
+		return
+	}
+
+	body.Path = strings.TrimSpace(body.Path)
+	body.Name = strings.TrimSpace(body.Name)
+
+	if body.Path == "" {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say which directory to publish")
+
+		return
+	}
+
+	publication, err := s.opts.PublishProject(r.Context(), body.Path, body.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, publication)
+}
+
+// handleUnpublishProject stops publishing one project. Nothing is taken back
+// from anybody — what an approver has read stays read (decision Q) — so it is
+// one press, not two: publishing it again is one press as well.
+func (s *Session) handleUnpublishProject(w http.ResponseWriter, r *http.Request) {
+	if s.opts.UnpublishProject == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change what is published")
+
+		return
+	}
+
+	var body struct {
+		Project string `json:"project"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the project could not be read")
+
+		return
+	}
+
+	body.Project = strings.TrimSpace(body.Project)
+
+	if body.Project == "" {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say which project to stop publishing")
+
+		return
+	}
+
+	if err := s.opts.UnpublishProject(r.Context(), body.Project); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	s.writePublishing(w, PublishingView{})
 }
 
 // handleSetUnlockAtLogin enrols the platform keychain or forgets it (decision

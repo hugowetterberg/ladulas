@@ -44,6 +44,7 @@ type manageHost struct {
 	detail   string
 
 	autoPublish bool
+	published   []bridge.PublicationView
 	enrolled    bool
 	refuse      error
 
@@ -180,11 +181,51 @@ func (h *manageHost) setListen(
 	}, nil
 }
 
-func (h *manageHost) readAutoPublish() (bool, error) {
+func (h *manageHost) publishing() (bridge.PublishingView, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return h.autoPublish, nil
+	return bridge.PublishingView{
+		AutoPublish: h.autoPublish,
+		Published:   append([]bridge.PublicationView(nil), h.published...),
+	}, nil
+}
+
+func (h *manageHost) publishProject(
+	_ context.Context, path, name string,
+) (bridge.PublicationView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if name == "" {
+		name = "docs"
+	}
+
+	pub := bridge.PublicationView{
+		ProjectID: "project-" + name,
+		Name:      name,
+		Path:      path,
+		Branch:    "main",
+	}
+
+	h.published = append(h.published, pub)
+
+	return pub, nil
+}
+
+func (h *manageHost) unpublishProject(_ context.Context, project string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for i, pub := range h.published {
+		if pub.ProjectID == project || pub.Name == project {
+			h.published = append(h.published[:i], h.published[i+1:]...)
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("nothing published as %q", project)
 }
 
 func (h *manageHost) setAutoPublish(_ context.Context, enabled bool) error {
@@ -276,8 +317,10 @@ func newManageFixture(
 		opts.SendKey = host.sendKey
 		opts.Listen = host.listenState
 		opts.SetListen = host.setListen
-		opts.AutoPublish = host.readAutoPublish
+		opts.Publishing = host.publishing
 		opts.SetAutoPublish = host.setAutoPublish
+		opts.PublishProject = host.publishProject
+		opts.UnpublishProject = host.unpublishProject
 		opts.UnlockAtLogin = host.unlockAtLogin
 		opts.SetUnlockAtLogin = host.setUnlockAtLogin
 	}
@@ -801,6 +844,8 @@ func TestAHostThatManagesNothingOffersNothing(t *testing.T) {
 		"/api/v1/keys/send":                fmt.Sprintf(`{"key":%q,"peer":"x","passphrase":"eA=="}`, key.GetFingerprint()),
 		"/api/v1/settings/listen":          `{"spec":"auto"}`,
 		"/api/v1/settings/auto-publish":    `{"enabled":true}`,
+		"/api/v1/publications":             `{"path":"/srv/docs"}`,
+		"/api/v1/publications/unpublish":   `{"project":"docs"}`,
 		"/api/v1/settings/unlock-at-login": `{"enrol":true}`,
 	}
 
@@ -814,5 +859,70 @@ func TestAHostThatManagesNothingOffersNothing(t *testing.T) {
 	resp := getFrom(t, handler, "/api/v1/settings/listen")
 	if resp.Code != http.StatusNotImplemented {
 		t.Errorf("reading the listen state on a host that cannot answered %d", resp.Code)
+	}
+}
+
+// TestPublishingADirectoryShowsUpUnderPublishing: a publication made from the
+// window is on the next read of the instance, an unpublish answers with what is
+// left, and neither goes through without saying which project.
+func TestPublishingADirectoryShowsUpUnderPublishing(t *testing.T) {
+	host, _, _ := newManageHost(t)
+	handler := newManageFixture(t, host, true)
+
+	resp := postTo(t, handler, "/api/v1/publications", `{"path":"  "}`)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("publishing nothing answered %d", resp.Code)
+	}
+
+	resp = postTo(t, handler, "/api/v1/publications",
+		`{"path":"/srv/docs","name":"handbook"}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("publishing answered %d %s", resp.Code, resp.Body.String())
+	}
+
+	var pub bridge.PublicationView
+
+	if err := json.Unmarshal(resp.Body.Bytes(), &pub); err != nil {
+		t.Fatalf("decode publication: %v", err)
+	}
+
+	if pub.Name != "handbook" || pub.Path != "/srv/docs" {
+		t.Errorf("published %+v", pub)
+	}
+
+	var view bridge.InstanceView
+
+	getJSON(t, handler, "/api/v1/instance", &view)
+
+	if view.Publishing == nil || len(view.Publishing.Published) != 1 ||
+		view.Publishing.Published[0].ProjectID != pub.ProjectID {
+		t.Fatalf("publishing reads %+v", view.Publishing)
+	}
+
+	resp = postTo(t, handler, "/api/v1/publications/unpublish", `{}`)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("unpublishing nothing answered %d", resp.Code)
+	}
+
+	resp = postTo(t, handler, "/api/v1/publications/unpublish",
+		fmt.Sprintf(`{"project":%q}`, pub.ProjectID))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unpublishing answered %d %s", resp.Code, resp.Body.String())
+	}
+
+	var after bridge.PublishingView
+
+	if err := json.Unmarshal(resp.Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode publishing: %v", err)
+	}
+
+	if len(after.Published) != 0 {
+		t.Errorf("after unpublishing, %+v is still published", after.Published)
+	}
+
+	resp = postTo(t, handler, "/api/v1/publications/unpublish",
+		fmt.Sprintf(`{"project":%q}`, pub.ProjectID))
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("unpublishing twice answered %d", resp.Code)
 	}
 }

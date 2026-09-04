@@ -2832,6 +2832,26 @@ reach. Every one of these is a body the bridge refuses when it does not say
 which way — a missing boolean reads as *off* in JSON, and one of them is a
 store that stops opening at login because a field was misspelled.
 
+**What is published from here is under the same heading**, since
+2026-09-04: every project this instance offers its approvers, however it got
+onto the list — automatically, by `ladulas projects publish`, or from the
+sheet — with the directory, the remote, and the branch and commit the
+repository is at *now*, which is what the daemon re-reads on every listing
+and what a staleness label compares against (decision Q). *Stop publishing*
+is one press, not two. Nothing is taken back by it — what an approver has
+read stays read on their machine, and only the next read changes — and
+publishing again is one press as well, so the two-press shape kept for the
+irreversible would be theatre. *Publish a directory* is a sheet with a typed
+path and an optional name. Typed, not picked: a webview's directory picker
+is not worth what it costs the shell (decision AF's reason, without the
+passphrase), and `ladulas projects publish .` from inside the project is the
+shorter way in anyway. The sheet is for somebody who is already on this
+screen. The window makes the path absolute before it asks, the way the CLI
+does, because the daemon has no idea what directory a window thinks it is
+in. The bridge's `PublishingView` carries the list beside the switch, so the
+phones draw it from the same instance view when their shells have a place
+for it.
+
 **Three rules the sidebar screens follow, all three learned on the phone.**
 A poll that found nothing new redraws nothing: the instance is re-read every
 few seconds to keep a countdown honest, and a pane rebuilt under somebody's

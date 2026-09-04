@@ -769,10 +769,27 @@ func localTierWord(bound []string) string {
 	return "the tailnet and local network addresses"
 }
 
-// PublishingView is whether projects this instance asks for signatures in are
-// published to its approvers automatically (decision Q).
+// PublishingView is what this instance publishes to its approvers (decision
+// Q): whether projects it asks for signatures in are published automatically,
+// and what is published now, whichever way it got there.
 type PublishingView struct {
-	AutoPublish bool `json:"autoPublish"`
+	AutoPublish bool              `json:"autoPublish"`
+	Published   []PublicationView `json:"published,omitempty"`
+}
+
+// PublicationView is one project this instance publishes: what approvers see
+// it as, where it is on this machine, and which commit of which branch was
+// current when it was last looked at. The identifier is what an unpublish
+// names, because names are not unique and rows are.
+type PublicationView struct {
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	OriginURL string `json:"originUrl,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Commit    string `json:"commit,omitempty"`
+	// PublishedAt is when it was offered, rendered for the screen.
+	PublishedAt string `json:"publishedAt,omitempty"`
 }
 
 // UnlockAtLoginView is whether this instance unlocks from the platform
@@ -1580,4 +1597,25 @@ func named(name, fingerprint string) string {
 	}
 
 	return fingerprint
+}
+
+// PublicationViewOf renders one of the daemon's publications for a screen. It
+// is exported because the hosts that read publications off the control socket
+// — the desktop window and the phones — should agree on the rendering rather
+// than each choosing a time format.
+func PublicationViewOf(pub *ladulasv1.Publication) PublicationView {
+	view := PublicationView{
+		ProjectID: pub.GetProjectId(),
+		Name:      pub.GetName(),
+		Path:      pub.GetPath(),
+		OriginURL: pub.GetOriginUrl(),
+		Branch:    pub.GetBranch(),
+		Commit:    pub.GetCommit(),
+	}
+
+	if at := pub.GetPublishedAt(); at != nil {
+		view.PublishedAt = at.AsTime().Local().Format(time.RFC1123)
+	}
+
+	return view
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -144,20 +145,68 @@ func (f *Frontend) setListen(
 	return resp.Msg, nil
 }
 
-// autoPublish is whether projects this instance asks for signatures in are
-// published automatically (decision Q). It rides on the publications listing,
-// which is the one call that knows.
-func (f *Frontend) autoPublish() (bool, error) {
+// publishing is what this instance publishes and whether it does so
+// automatically (decision Q). It rides on the publications listing, which is
+// the one call that knows both.
+func (f *Frontend) publishing() (bridge.PublishingView, error) {
 	ctx, cancel := call()
 	defer cancel()
 
 	resp, err := f.client.ListPublications(ctx,
 		connect.NewRequest(&ladulasv1.ListPublicationsRequest{}))
 	if err != nil {
-		return false, fmt.Errorf("ask about publishing: %w", err)
+		return bridge.PublishingView{}, fmt.Errorf("ask about publishing: %w", err)
 	}
 
-	return resp.Msg.GetAutoPublish(), nil
+	view := bridge.PublishingView{AutoPublish: resp.Msg.GetAutoPublish()}
+
+	for _, pub := range resp.Msg.GetPublished() {
+		view.Published = append(view.Published, bridge.PublicationViewOf(pub))
+	}
+
+	return view, nil
+}
+
+// publishProject offers a directory's repository to this instance's approvers.
+// The path is made absolute here rather than in the daemon because the daemon
+// has no idea what directory the window thinks it is in — the CLI does the same
+// before it asks.
+func (f *Frontend) publishProject(
+	ctx context.Context, path, name string,
+) (bridge.PublicationView, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return bridge.PublicationView{}, fmt.Errorf("resolve %q: %w", path, err)
+	}
+
+	resp, err := f.client.PublishProject(ctx,
+		connect.NewRequest(&ladulasv1.PublishProjectRequest{
+			Path: abs,
+			Name: name,
+		}))
+	if err != nil {
+		return bridge.PublicationView{}, fmt.Errorf("publish %s: %w", abs, err)
+	}
+
+	return bridge.PublicationViewOf(resp.Msg.GetPublication()), nil
+}
+
+func (f *Frontend) unpublishProject(ctx context.Context, project string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	_, err := f.client.UnpublishProject(ctx,
+		connect.NewRequest(&ladulasv1.UnpublishProjectRequest{
+			Project: project,
+		}))
+	if err != nil {
+		return fmt.Errorf("stop publishing %s: %w", project, err)
+	}
+
+	return nil
 }
 
 func (f *Frontend) setAutoPublish(ctx context.Context, enabled bool) error {

@@ -630,7 +630,13 @@ consent beside them, or forgetting the stored setting. The daemon's sentence
 about what happened stays on the sheet, since a bind that fell back to the old
 addresses looks like a success from the state alone. Whether projects are
 published automatically (decision Q) and whether the store opens from the
-keychain at login (decision I) are a card each beside it.
+keychain at login (decision I) are a card each beside it — and under
+*Documents* the projects this instance publishes now, however they got there,
+each with its directory, remote, branch and commit and a one-press *Stop
+publishing*, plus *Publish a directory*, a sheet that takes a typed path and
+an optional name. `projects list`, `projects publish` and `projects
+unpublish` are the same at a terminal, and `projects publish .` from inside
+the project is the shorter way in.
 
 **A popup per request**, small, centred and above the others, the way 1Password
 and OpenSnitch ask. Only one is on screen at a time: the rest queue, and the

@@ -167,6 +167,12 @@ export const bridge = {
   // its approvers automatically (decision Q).
   setAutoPublish: (enabled) =>
     call("POST", "/settings/auto-publish", { enabled: Boolean(enabled) }),
+  // What is published by hand: a directory offered to the approvers, and one
+  // project taken off the list. Both answer with what a read now says.
+  publishProject: (path, name) =>
+    call("POST", "/publications", { path, name }),
+  unpublishProject: (project) =>
+    call("POST", "/publications/unpublish", { project }),
   // Whether the store opens from the platform keychain at login (decision I).
   setUnlockAtLogin: (enrol) =>
     call("POST", "/settings/unlock-at-login", { enrol: Boolean(enrol) }),

@@ -1484,6 +1484,15 @@ button.danger:hover:not(:disabled) {
 /* The keys a peer may use, indented under the choice that showed them. */
 .key-choices { margin-left: 12px; }
 
+/* One published project inside the publications card: separated from the
+   next by a rule rather than a border, because the card is the unit and these
+   are its lines. */
+.publication {
+  border-top: 1px solid var(--border);
+  margin-top: 11px;
+  padding-top: 11px;
+}
+
 button.primary {
   border-color: var(--accent);
   color: var(--accent);
