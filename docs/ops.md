@@ -436,15 +436,19 @@ trust record.
 **Signal:** `ladulas peers list` showing a peer with a dozen addresses,
 `172.17.0.1` and friends among them, and reconnections that take a while.
 
-**Action:** expected on a record written before 2026-08-21, and nothing
-here refreshes it: a trust record keeps the addresses the peer advertised
-when it paired, and a peer that has since pruned its own list has no way to
-say so (there is no address-refresh RPC, and adding one is unbuilt). The
-cost is bounded — an address that is one of this machine's own is skipped
-outright, and a link puts the address that last worked first — so the
-choice is to leave it or to `ladulas peers forget` and pair again. Check
-what the peer advertises *now* on the peer itself, with `ladulas listen`:
-the "Peers dial" line is exactly what a new pairing would record.
+**Action:** wait for the two to speak. A trust record used to keep the
+addresses the peer advertised when it paired, for good; since decision AQ
+(2026-09-04) the peer says where it can be dialled on every presence
+heartbeat, on every stream it opens and on every poll a phone makes, and the
+list here is replaced with what it says the next time either happens. The
+log line is `where a peer can be reached changed`. If the list stays long,
+one of two things: the peer is on a build from before that date — its
+heartbeats carry no addresses, and an empty list changes nothing by design —
+or the two have not been in contact since. Check what the peer advertises
+*now* on the peer itself, with `ladulas listen`: the "Peers dial" line is
+exactly what this record becomes, plus the one address this machine is
+actually reaching it on. `ladulas peers forget` and pairing again is no
+longer needed for this.
 
 ### A pairing never completes
 

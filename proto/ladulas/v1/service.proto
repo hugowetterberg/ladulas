@@ -211,6 +211,11 @@ message FetchPendingResponse {
   // arrives at all, because the push below can never reach one.
   bool grant_activity_waiting = 10;
 
+  // Where this instance can be dialled now, as it would advertise in a pairing
+  // (decision AQ). A collector has no link to hear it on, and the poll is the
+  // one call it reliably makes. Empty says nothing and changes nothing.
+  repeated string listen_addresses = 11;
+
   repeated PendingApproval pending = 1;
 }
 
@@ -922,10 +927,19 @@ message PingResponse {
   bool can_prompt = 3;
 }
 
-message WatchRequest {}
+message WatchRequest {
+  // Where the watcher can be dialled now, as it would advertise in a pairing
+  // (decision AQ). The approver dials a requester back to read what it
+  // publishes, and this is the requester's one standing call to it. Empty says
+  // nothing and changes nothing.
+  repeated string listen_addresses = 1;
+}
 
 message PresenceEvent {
   google.protobuf.Timestamp timestamp = 1;
   string instance_name = 2;
   bool can_prompt = 3;
+  // Where the approver can be dialled now, as it would advertise in a pairing
+  // (decision AQ), on every beat. Empty says nothing and changes nothing.
+  repeated string listen_addresses = 4;
 }

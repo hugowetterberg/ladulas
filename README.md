@@ -302,11 +302,13 @@ What peers are told to dial is a second list, printed as **Peers dial**. A
 tailnet address is advertised under its node name first —
 `horatio.tailnet.ts.net:7373` before `100.74.235.31:7373` — which is what
 the other machine records and shows; loopback is advertised only by an
-instance that has nothing else. **A trust record keeps the addresses a peer
-advertised when it paired**, and nothing refreshes it, so pruning a list
-here does not tidy up a peer that already has the old one — the dialling
-side skips the addresses that turn out to be its own, and re-pairing is what
-replaces the list.
+instance that has nothing else. **A trust record starts with the addresses a
+peer advertised when it paired, and is rewritten with what the peer says the
+next time the two speak** — on every presence heartbeat, on every stream a
+requester opens, and on every poll a phone makes — so pruning or extending
+the list here reaches every paired peer without re-pairing. The one address
+a peer is actually reaching this machine on stays on its list whether or not
+it is advertised.
 
 `ladulas listen set` remembers the change in the store and rebinds at once;
 if the new addresses cannot be bound the previous ones come back and it says

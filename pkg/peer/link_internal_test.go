@@ -119,7 +119,7 @@ func TestAPeerThatNeverBeatsIsNotALink(t *testing.T) {
 
 	// node is nil on purpose: nothing before the first beat may need it, and a
 	// panic here would mean something claims the peer is there before it is.
-	if err := l.presence(context.Background()); err == nil {
+	if err := l.presence(context.Background(), nil); err == nil {
 		t.Error("a peer that never answered produced no error")
 	}
 

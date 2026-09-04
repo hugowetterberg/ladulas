@@ -301,6 +301,20 @@ func Renamed(record *storepb.TrustRecord, name string) *storepb.TrustRecord {
 	return revised
 }
 
+// Readdressed returns the record with a different set of addresses to dial the
+// peer on, and returns a new one for the same reason Applied does.
+//
+// The list is taken as given. What to do about an address the peer no longer
+// advertises but this instance is reaching it on is the caller's question,
+// because only the caller knows which address that is (see peer.Node).
+func Readdressed(record *storepb.TrustRecord, addresses []string) *storepb.TrustRecord {
+	revised := proto.CloneOf(record)
+
+	revised.Addresses = append([]string(nil), addresses...)
+
+	return revised
+}
+
 // MayUseKey reports whether a peer is allowed to ask for a signature with a
 // key.
 //

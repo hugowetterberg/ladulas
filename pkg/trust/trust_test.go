@@ -421,3 +421,25 @@ func TestDescribeStateOfAMachineThatListens(t *testing.T) {
 		}
 	}
 }
+
+// TestReaddressedLeavesTheOldOneAlone: the same rule, for the one other field a
+// running instance rewrites (decision AQ).
+func TestReaddressedLeavesTheOldOneAlone(t *testing.T) {
+	key := newKey(t, "desk")
+	record := trust.NewRecord("desk", key,
+		[]string{"old.example:7373"}, true, false, false)
+
+	revised := trust.Readdressed(record, []string{"new.example:7373"})
+
+	if got := record.GetAddresses(); len(got) != 1 || got[0] != "old.example:7373" {
+		t.Errorf("Readdressed changed the addresses on the record it was given: %v", got)
+	}
+
+	if got := revised.GetAddresses(); len(got) != 1 || got[0] != "new.example:7373" {
+		t.Errorf("the revised record dials %v", got)
+	}
+
+	if !revised.GetMayApprove() || revised.GetMayRequest() {
+		t.Error("Readdressed changed the directions")
+	}
+}

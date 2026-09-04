@@ -165,12 +165,17 @@ func (s *peerService) Ping(
 // knows whether there is anyone to ask before it has anything to ask.
 func (s *peerService) Watch(
 	ctx context.Context,
-	_ *connect.Request[ladulasv1.WatchRequest],
+	req *connect.Request[ladulasv1.WatchRequest],
 	stream *connect.ServerStream[ladulasv1.PresenceEvent],
 ) error {
-	if _, _, err := s.node.authorize(ctx); err != nil {
+	peer, _, err := s.node.authorize(ctx)
+	if err != nil {
 		return err
 	}
+
+	// A requester is a machine this instance only ever dials back, and opening
+	// its stream is the one time it says where (decision AQ).
+	s.node.learnAddresses(peer.Fingerprint, req.Msg.GetListenAddresses())
 
 	ticker := time.NewTicker(s.node.heartbeat)
 	defer ticker.Stop()
@@ -180,6 +185,9 @@ func (s *peerService) Watch(
 			Timestamp:    timestamppb.Now(),
 			InstanceName: s.node.identity.Name(),
 			CanPrompt:    s.node.canPrompt(),
+			// Said on every beat rather than once, so an approver that
+			// changes networks under a held stream is still heard.
+			ListenAddresses: s.node.Advertised(),
 		})
 		if err != nil {
 			return fmt.Errorf("send a presence heartbeat: %w", err)

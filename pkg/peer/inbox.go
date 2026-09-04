@@ -324,6 +324,9 @@ func (s *peerService) FetchPending(
 		// already making is what turns reconciliation from something done on
 		// every round regardless into something done when there is a reason.
 		GrantActivityWaiting: s.node.HasGrantActivityFor(peer.Fingerprint),
+		// A collector has no link to hear this on, and the poll is the one
+		// call it reliably makes (decision AQ).
+		ListenAddresses: s.node.Advertised(),
 	}), nil
 }
 

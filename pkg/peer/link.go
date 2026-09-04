@@ -302,7 +302,10 @@ func (l *link) watch(ctx context.Context) {
 	delay := l.node.floor
 
 	for {
-		err := l.presence(ctx)
+		// Where the approver can dial this instance back is read afresh for
+		// every stream, so a requester that moved networks says so on the
+		// reconnect (decision AQ).
+		err := l.presence(ctx, l.node.Advertised())
 
 		if ctx.Err() != nil {
 			return
@@ -370,8 +373,9 @@ func (l *link) presenceOrder() []string {
 	return l.addresses()
 }
 
-// presence opens a presence stream and reads it until it breaks.
-func (l *link) presence(ctx context.Context) error {
+// presence opens a presence stream and reads it until it breaks, telling the
+// approver where this instance can be dialled as it opens.
+func (l *link) presence(ctx context.Context, advertised []string) error {
 	addresses := l.presenceOrder()
 	if len(addresses) == 0 {
 		return errors.New("the peer has no address to dial")
@@ -387,7 +391,9 @@ func (l *link) presence(ctx context.Context) error {
 		client := ladulasv1connect.NewPresenceServiceClient(
 			l.client.HTTP(), l.client.URL(address))
 
-		stream, err := client.Watch(ctx, connect.NewRequest(&ladulasv1.WatchRequest{}))
+		stream, err := client.Watch(ctx, connect.NewRequest(&ladulasv1.WatchRequest{
+			ListenAddresses: advertised,
+		}))
 		if err != nil {
 			lastErr = err
 
@@ -422,12 +428,18 @@ func (l *link) presence(ctx context.Context) error {
 		// something to list the moment ssh asks.
 		l.learnKeys(ctx, address)
 
+		// And where the approver says it can be dialled, which is on every
+		// beat (decision AQ). succeeded ran first so the address this stream
+		// is on is what learnAddresses keeps.
+		l.node.learnAddresses(l.Fingerprint(), stream.Msg().GetListenAddresses())
+
 		for stream.Receive() {
 			l.succeeded(address)
 
 			// And again on every beat, so a key granted on the holder reaches
 			// the requester without either side being restarted.
 			l.learnKeys(ctx, address)
+			l.node.learnAddresses(l.Fingerprint(), stream.Msg().GetListenAddresses())
 		}
 
 		closeErr := stream.Close()

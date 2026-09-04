@@ -335,7 +335,10 @@ func (n *Node) collectFrom(
 ) (bool, error) {
 	var pending []*ladulasv1.PendingApproval
 
-	var owed bool
+	var (
+		owed      bool
+		addresses []string
+	)
 
 	err := n.call(ctx, record, func(
 		ctx context.Context, client *http.Client, baseURL string,
@@ -351,12 +354,17 @@ func (n *Node) collectFrom(
 
 		pending = resp.Msg.GetPending()
 		owed = resp.Msg.GetGrantActivityWaiting()
+		addresses = resp.Msg.GetListenAddresses()
 
 		return nil
 	})
 	if err != nil {
 		return false, err
 	}
+
+	// The requester said where it can be dialled, and call has just remembered
+	// where it was (decision AQ).
+	n.learnAddresses(record.GetFingerprint(), addresses)
 
 	// The requester says it has done things under a delegation that this
 	// instance has not been told about, so go and get them. It is bookkeeping

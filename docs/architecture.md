@@ -960,9 +960,9 @@ is not there — and the failure is silent by design, because the address is
 the documented fallback. So an instance would come up advertising the
 number, keep advertising it for as long as the channel stayed up, and a
 pairing made in that window would write the number into the peer's trust
-record for good, since nothing refreshes one. A convenience that degrades
-under a transient fault is fine; one whose transient fault is written down
-permanently is not.
+record — and, until decision AQ, for good, since nothing refreshed one. A
+convenience that degrades under a transient fault is fine; one whose
+transient fault is written down permanently is not.
 
 Asking at the point of use makes it self-healing, and a small cache in
 front of the resolver is what makes that affordable — five minutes for a
@@ -974,6 +974,37 @@ resolver. A lookup that finds nothing logs once at `debug` rather than once
 per question — the original bug went unnoticed because nothing said
 anything at all, and a feature that degrades in silence is one discovered
 by comparing two screens.
+
+**A peer says where it can be dialled every time the two are in contact
+anyway, and its word replaces the list (decision AQ).** A trust record used
+to keep the addresses the peer advertised at the moment of pairing and
+nothing ever wrote them again, which made the record a photograph of one
+moment on one network: the wrong number above was carried for good, a
+machine that later began advertising its LAN address stayed dialled over
+the tailnet alone, and a list pruned of docker bridges on the peer stayed a
+dozen long here. The only repair was `peers forget` and pairing again,
+which spends a human ceremony on bookkeeping. There is no new RPC for it;
+the list rides on calls that are already made. An approver says it on every
+presence heartbeat, which is the stream a requester holds open to it. A
+requester says it as it opens that stream, which is the one time an
+approver — a machine that only ever dials a requester back, for
+documentation — hears from it. And a requester says it on every
+`FetchPending`, because a phone holds no stream and is dialled by nobody,
+and the poll is the one call it reliably makes (§3). The receiving side
+rewrites its record when the set differs, and reconciles so its links work
+from the new one. Three rules keep it from being a way to lose a peer. An
+empty list says nothing and changes nothing: nothing that arrives over the
+wire empties a record, and an instance with its channel off is not thereby
+forgotten as a machine that once listened. The address this instance is
+reaching the peer on right now stays on the list whether or not the peer
+names it, for the reason a pairing puts the dialled address first — reaching
+a machine is better evidence than being told about it, and a typed address
+through a forwarded port is one the peer does not know it has. And the peer
+is authenticated by the channel and can only rewrite its own record's dial
+list, with every address on it still dialled against its pinned identity,
+so the most it can do is send this instance's connection attempts somewhere
+that will not authenticate as it — which advertising an address at pairing
+already let it do.
 
 **A link is not up until the peer has said something.** The presence stream
 is what tells this instance whether there is anybody to ask before it has
@@ -3590,6 +3621,12 @@ Added 2026-09-03:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AP | How documentation reaches an approver, and what "published" costs the machine that published it | **per file kind, and markdown is the one that is pushed.** A file over the per-file cap is served cut short at a line ending rather than refused, and says so — the cap bounds what a machine sends, not what a reader may see, and refusing made this repository's own design authority unopenable and then invisible (§6). Decision Q made publishing a state rather than an action, and an approver reads what it opens: a project nobody has opened is not readable offline at all. That is still the right rule for most of a repository, and this does not overturn it — it narrows the set it applies to. A doc set is small, it is what an approver actually reads, and fetching it a page at a time down a link to somebody's laptop is why browsing is slow enough to be worth avoiding. So a kind now carries three separate answers rather than one: whether its contents may be **served** at all, which is the question `servable` used to answer alone; how they are **distributed**, pull or push; and what **versions** are kept of them, none, the commits that touched the file, or those plus the working-tree states since the last commit. The default policy is markdown — served, pushed, snapshotted — and nothing else served, which is exactly what this instance did before. **The objection decision Q raised is answered rather than overruled, and the difference matters.** Q superseded decision F because F paid for offline browsing by shipping every doc set to every approver whether or not anybody would ever open one; `pkg/project/cache.go` states the rule as "nothing is here because somebody might want it". What is pushed here is the documentation kinds, bounded by the approver's cache budget; a repository full of Go files does not become a repository that mirrors itself onto every phone that approves for it, and **that is what must not be reintroduced** — a policy that pushes a source kind, or a default that pushes whatever it finds, is decision F again with a new spelling. The rail is that turning a kind on is one act and pushing it is a second, and a kind arrives pull-only. **The version half is why the watcher is affordable.** Only a snapshotted kind needs a filesystem watch, and inotify is not recursive: a watch over the pushed kinds is a watch over a doc set, while a watch over the tree is a watch over somebody's `node_modules`. A served kind that is not snapshotted costs nothing until it is asked for, which is the normal case. Rejected: **a single global switch** for eager publishing, which is decision F with a flag in front of it and no way to say that documentation and source are different things. Rejected: **bounding the push by bytes alone** rather than by kind, which is a ceiling and not a principle — it makes the answer to "why is my phone full" depend on what somebody committed this week, and it still ships whatever fits. Rejected: **per-project opt-in**, which puts the reader in charge of a decision the publisher's file kinds already answer, and leaves an unfollowed project as slow as it was. Supersedes the part of decision Q that made *every* kind pull-only; the rest of Q stands, including that a listing is wider than what is served (§6) and that provenance travels with an answer. Rationale in §6 |
+
+Added 2026-09-04:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

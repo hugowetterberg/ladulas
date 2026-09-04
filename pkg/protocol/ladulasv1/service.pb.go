@@ -850,10 +850,14 @@ type FetchPendingResponse struct {
 	// somebody may be waiting on a card, and the reconciliation that follows is
 	// bookkeeping. An approver that cannot be dialled — a phone — is how this
 	// arrives at all, because the push below can never reach one.
-	GrantActivityWaiting bool               `protobuf:"varint,10,opt,name=grant_activity_waiting,json=grantActivityWaiting,proto3" json:"grant_activity_waiting,omitempty"`
-	Pending              []*PendingApproval `protobuf:"bytes,1,rep,name=pending,proto3" json:"pending,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	GrantActivityWaiting bool `protobuf:"varint,10,opt,name=grant_activity_waiting,json=grantActivityWaiting,proto3" json:"grant_activity_waiting,omitempty"`
+	// Where this instance can be dialled now, as it would advertise in a pairing
+	// (decision AQ). A collector has no link to hear it on, and the poll is the
+	// one call it reliably makes. Empty says nothing and changes nothing.
+	ListenAddresses []string           `protobuf:"bytes,11,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
+	Pending         []*PendingApproval `protobuf:"bytes,1,rep,name=pending,proto3" json:"pending,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *FetchPendingResponse) Reset() {
@@ -891,6 +895,13 @@ func (x *FetchPendingResponse) GetGrantActivityWaiting() bool {
 		return x.GrantActivityWaiting
 	}
 	return false
+}
+
+func (x *FetchPendingResponse) GetListenAddresses() []string {
+	if x != nil {
+		return x.ListenAddresses
+	}
+	return nil
 }
 
 func (x *FetchPendingResponse) GetPending() []*PendingApproval {
@@ -3495,9 +3506,14 @@ func (x *PingResponse) GetCanPrompt() bool {
 }
 
 type WatchRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where the watcher can be dialled now, as it would advertise in a pairing
+	// (decision AQ). The approver dials a requester back to read what it
+	// publishes, and this is the requester's one standing call to it. Empty says
+	// nothing and changes nothing.
+	ListenAddresses []string `protobuf:"bytes,1,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *WatchRequest) Reset() {
@@ -3530,13 +3546,23 @@ func (*WatchRequest) Descriptor() ([]byte, []int) {
 	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{53}
 }
 
+func (x *WatchRequest) GetListenAddresses() []string {
+	if x != nil {
+		return x.ListenAddresses
+	}
+	return nil
+}
+
 type PresenceEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	InstanceName  string                 `protobuf:"bytes,2,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
-	CanPrompt     bool                   `protobuf:"varint,3,opt,name=can_prompt,json=canPrompt,proto3" json:"can_prompt,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Timestamp    *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	InstanceName string                 `protobuf:"bytes,2,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
+	CanPrompt    bool                   `protobuf:"varint,3,opt,name=can_prompt,json=canPrompt,proto3" json:"can_prompt,omitempty"`
+	// Where the approver can be dialled now, as it would advertise in a pairing
+	// (decision AQ), on every beat. Empty says nothing and changes nothing.
+	ListenAddresses []string `protobuf:"bytes,4,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *PresenceEvent) Reset() {
@@ -3590,6 +3616,13 @@ func (x *PresenceEvent) GetCanPrompt() bool {
 	return false
 }
 
+func (x *PresenceEvent) GetListenAddresses() []string {
+	if x != nil {
+		return x.ListenAddresses
+	}
+	return nil
+}
+
 var File_ladulas_v1_service_proto protoreflect.FileDescriptor
 
 const file_ladulas_v1_service_proto_rawDesc = "" +
@@ -3625,10 +3658,11 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x04uses\x18\x01 \x03(\v2\x14.ladulas.v1.GrantUseR\x04uses\x12.\n" +
 	"\x13held_delegation_ids\x18\x02 \x03(\tR\x11heldDelegationIds\"D\n" +
 	"\x13FetchPendingRequest\x12-\n" +
-	"\x04wait\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x04wait\"\x83\x01\n" +
+	"\x04wait\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\x04wait\"\xae\x01\n" +
 	"\x14FetchPendingResponse\x124\n" +
 	"\x16grant_activity_waiting\x18\n" +
-	" \x01(\bR\x14grantActivityWaiting\x125\n" +
+	" \x01(\bR\x14grantActivityWaiting\x12)\n" +
+	"\x10listen_addresses\x18\v \x03(\tR\x0flistenAddresses\x125\n" +
 	"\apending\x18\x01 \x03(\v2\x1b.ladulas.v1.PendingApprovalR\apending\"\xc1\x02\n" +
 	"\x0fPendingApproval\x12\x1d\n" +
 	"\n" +
@@ -3810,13 +3844,15 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\asent_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12\x1d\n" +
 	"\n" +
-	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\"\x0e\n" +
-	"\fWatchRequest\"\x8d\x01\n" +
+	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\"9\n" +
+	"\fWatchRequest\x12)\n" +
+	"\x10listen_addresses\x18\x01 \x03(\tR\x0flistenAddresses\"\xb8\x01\n" +
 	"\rPresenceEvent\x128\n" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12\x1d\n" +
 	"\n" +
-	"can_prompt\x18\x03 \x01(\bR\tcanPrompt*\x9d\x01\n" +
+	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\x12)\n" +
+	"\x10listen_addresses\x18\x04 \x03(\tR\x0flistenAddresses*\x9d\x01\n" +
 	"\x11ApprovalEventKind\x12#\n" +
 	"\x1fAPPROVAL_EVENT_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cAPPROVAL_EVENT_KIND_ACCEPTED\x10\x01\x12 \n" +
