@@ -79,18 +79,23 @@ func IsLocalIP(ip net.IP) bool {
 		IsTailnetIP(ip)
 }
 
-// The tiers the automatic policy chooses between, best first, and the headline
-// of decision AH: it picks one tier rather than binding every address it can
-// find. TierExplicit is what a specification that named its own addresses gets,
-// since nothing was chosen for it.
+// The tiers the automatic policy chooses between, best first. TierLocal is the
+// tailnet and the local network together, whichever of the two the machine has
+// (decision AR); TierLoopback is what is left when it has neither. TierExplicit
+// is what a specification that named its own addresses gets, since nothing was
+// chosen for it.
+//
+// Between 2026-08-21 and 2026-09-04 the tailnet and the local network were two
+// tiers, "tailnet" and "private", and only the better one present was bound
+// (decision AH). Those two strings are gone rather than kept as aliases: a
+// reader of the field would take them to mean the other one was left out.
 //
 // Plain strings and not a named type, because §21: a named string type is one
 // `gomobile` cannot bind, and nothing here is worth a field the phone's bind
 // silently drops.
 const (
 	TierExplicit = "explicit"
-	TierTailnet  = "tailnet"
-	TierPrivate  = "private"
+	TierLocal    = "local"
 	TierLoopback = "loopback"
 	TierNone     = "none"
 )
@@ -151,7 +156,8 @@ func ResolveBindAddresses(spec string, allowPublic bool) ([]string, error) {
 // host is a port for the automatic policy to use, so `7373` and
 // `auto,192.168.1.5` both mean something sensible and can be combined.
 //
-// The automatic policy is decision AH, and it is a cascade rather than a sweep:
+// The automatic policy is decisions AH and AR, and it is a filter followed by
+// one choice rather than a sweep:
 //
 //   - an interface that is up but not running is skipped, which is what takes
 //     out the bridge a container runtime left behind when the last container
@@ -159,20 +165,28 @@ func ResolveBindAddresses(spec string, allowPublic bool) ([]string, error) {
 //   - an interface whose name belongs to a container runtime or a virtual
 //     machine is skipped whether or not it is running, because a bridge with a
 //     container on it is running and still reaches nobody who could pair;
-//   - what is left is grouped into tailnet, other private, and loopback, and
-//     **only the best group present is bound**. A machine on a tailnet binds
-//     its tailnet addresses and nothing else: the tailnet reaches the peer from
-//     wherever it is, the LAN address reaches it only from the same building,
-//     and binding both meant every peer holding a list of both spent its
-//     reconnection attempts on the address that could not work.
+//   - what is left is grouped into tailnet, other private, and loopback. The
+//     tailnet and the local network are bound **together**, tailnet first, and
+//     loopback only when the machine has neither.
 //
 // Before 2026-08-21 it bound every private and tailnet address the machine had,
 // and loopback besides. On a desktop with Docker and libvirt on it that was
 // fourteen sockets, eleven of which no peer could ever connect to, and the list
 // was also what got advertised — so a peer's stored addresses were mostly
 // unreachable, its reconnections mostly failed, and the error it reported was
-// whichever address happened to be last. Do not go back to binding a tier that
-// a better one is already covering; add an address on purpose instead.
+// whichever address happened to be last. The interface rules above are what
+// fixed that, and they stay.
+//
+// Between then and 2026-09-04 the tailnet, when there was one, was bound alone,
+// on the argument that it reaches the peer from anywhere and the LAN address
+// only from the same building. That made a flaky tailnet a machine nobody could
+// pair with from the next room: the LAN address was there, was reachable, and
+// was neither bound nor advertised. A peer holding both now spends one dial
+// timeout on the LAN address per sweep when it is away, which the dialler's
+// preference for the address that last worked keeps rare (§8). Do not go back
+// to leaving the local network out when a tailnet is present; and do not go
+// back to binding loopback beside either of them, which is the half of the
+// 2026-08-21 list that told peers to dial themselves.
 func Select(spec string, allowPublic bool) (*Selection, error) {
 	elements, err := splitSpec(spec)
 	if err != nil {
@@ -376,8 +390,8 @@ func virtualInterface(name string) bool {
 	return false
 }
 
-// automaticAddresses is the policy of decision AH: one tier, and a note of
-// everything it went past.
+// automaticAddresses is the policy of decisions AH and AR: the tailnet and the
+// local network, else loopback, and a note of everything it went past.
 func automaticAddresses(port string) (*Selection, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -449,40 +463,37 @@ func automaticAddresses(port string) (*Selection, error) {
 	return chooseTier(port, tailnet, private, loopback, skipped), nil
 }
 
-// chooseTier takes the best group that has anything in it, and writes down why
-// the others were left.
+// chooseTier binds the tailnet and the local network together, tailnet first
+// so that the advertised list leads with the address that reaches the peer from
+// anywhere, and falls back to loopback when the machine has neither. Loopback
+// is the only address a better tier writes down as passed over: the tailnet and
+// the LAN are not alternatives to each other any more (decision AR).
 func chooseTier(
 	port string,
 	tailnet, private, loopback []string,
 	skipped []SkippedAddress,
 ) *Selection {
-	tiers := []struct {
-		tier      string
-		addresses []string
-		because   string
-	}{
-		{TierTailnet, tailnet, "a tailnet address is bound instead"},
-		{TierPrivate, private, "a local network address is bound instead"},
-		{TierLoopback, loopback, ""},
-	}
+	local := append(append([]string(nil), tailnet...), private...)
 
-	for i, candidate := range tiers {
-		if len(candidate.addresses) == 0 {
-			continue
-		}
-
-		for _, worse := range tiers[i+1:] {
-			for _, address := range worse.addresses {
-				skipped = append(skipped, SkippedAddress{
-					Address: address,
-					Reason:  candidate.because,
-				})
-			}
+	if len(local) > 0 {
+		for _, address := range loopback {
+			skipped = append(skipped, SkippedAddress{
+				Address: address,
+				Reason:  "a tailnet or local network address is bound instead",
+			})
 		}
 
 		return &Selection{
-			Tier:    candidate.tier,
-			Bind:    candidate.addresses,
+			Tier:    TierLocal,
+			Bind:    local,
+			Skipped: skipped,
+		}
+	}
+
+	if len(loopback) > 0 {
+		return &Selection{
+			Tier:    TierLoopback,
+			Bind:    loopback,
 			Skipped: skipped,
 		}
 	}

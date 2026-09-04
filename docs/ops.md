@@ -129,7 +129,7 @@ calls a normal state.
 |---|---|---|
 | Agent socket | `$XDG_RUNTIME_DIR/ladulas/agent.sock` | The SSH agent. `SSH_AUTH_SOCK` points here. 0600 in a 0700 directory, plus a peer-uid check |
 | Control socket | `$XDG_RUNTIME_DIR/ladulas/control.sock` | `SigningService` (`ladulas-sign`) and `ControlService` (the CLI). Same gate |
-| Peer channel | TCP 7373, on **one tier** of addresses: the tailnet if there is one, else other private ones, else loopback | Pinned-TLS connect RPCs from paired instances. `ladulas listen` says what was chosen and what was passed over; public binds need `--peer-listen-public` |
+| Peer channel | TCP 7373, on the tailnet **and** the local network, whichever the machine has; loopback only when it has neither | Pinned-TLS connect RPCs from paired instances. `ladulas listen` says what was chosen and what was passed over; public binds need `--peer-listen-public` |
 | Daemon debug | **off** | Prometheus metrics and pprof, when `LADULAS_DEBUG_ADDR` names an address |
 | Relay API | TCP 8443 (guppy's tailnet address) | `RelayService`, cleartext HTTP/2 by design — WireGuard is the transport security |
 | Relay debug | `127.0.0.1:8444` | Prometheus metrics and pprof |

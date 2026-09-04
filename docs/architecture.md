@@ -854,11 +854,12 @@ hook exists and admits everything until the WhoIs half is built:
   the same sense as everything else here, because the identity key is what a
   pairing is checked against and an address list that has been lied to costs
   a failed connection rather than a wrong peer.
-* **Bind policy** (built, decisions H and AH): the listener binds where the
-  user says, and where nobody has said it chooses one tier of addresses
-  rather than every address it can find. Binding to public interfaces is an
-  explicit opt-in — listening on the open internet is supported (the channel
-  doesn't trust the network), but it should never happen by accident.
+* **Bind policy** (built, decisions H, AH and AR): the listener binds where
+  the user says, and where nobody has said it binds the tailnet and the
+  local network together rather than every address it can find. Binding to
+  public interfaces is an explicit opt-in — listening on the open internet
+  is supported (the channel doesn't trust the network), but it should never
+  happen by accident.
 
 App-level identity keys stay authoritative in all cases: a compromised
 Tailscale control plane can insert a node that WhoIs vouches for, which is
@@ -917,14 +918,36 @@ were one until 2026-08-21, and one list cannot be both: what a socket is
 opened on is a fact about this machine, and what a peer is told to dial is
 an instruction to another one.
 
-The automatic policy picks **one tier**: the machine's tailnet addresses if
-it has any, otherwise its other private addresses, otherwise loopback —
-having first passed over every interface that is up but not running, and
-every interface whose name belongs to a container runtime or a virtual
-machine. It used to bind all of them at once. On a desktop with Docker and
-libvirt installed that was fourteen listeners, eleven of which no peer could
-reach, and the same fourteen addresses were handed to every peer that paired
-with it.
+The automatic policy binds **the tailnet and the local network together**,
+tailnet first, and loopback only on a machine that has neither — having
+first passed over every interface that is up but not running, and every
+interface whose name belongs to a container runtime or a virtual machine
+(decisions AH and AR). It used to bind all of them at once. On a desktop
+with Docker and libvirt installed that was fourteen listeners, eleven of
+which no peer could reach, and the same fourteen addresses were handed to
+every peer that paired with it. The interface rules are what fixed that,
+and they are the part of decision AH that stands unchanged.
+
+**Between 2026-08-21 and 2026-09-04 the tailnet was bound alone when there
+was one.** The argument was sound as far as it went: the tailnet reaches
+the peer from anywhere and the LAN address only from the same building, so
+a peer holding both spent reconnection attempts on the one that could not
+work. What it cost was the bootstrap. A tailnet that is down, or that
+NetworkManager and tailscaled are still arguing over, is a machine that
+cannot be paired with from the next room, although its LAN address is up,
+reachable and typed into the phone — because that address was neither
+bound nor advertised, and `ladulas listen set` was the only way to it. The
+tailnet here has been flaky enough for that to be the ordinary case rather
+than the exception, and a default that needs the flaky component to work
+before anything can be set up is the wrong default. So both are bound. The
+cost that was the reason for one tier has meanwhile been paid down on the
+dialling side: the address that last worked is tried alone until it has
+failed three times, so a phone away from home does not sweep the LAN
+address on every round, and when it does the failure reported is the most
+informative rather than the last (below). What must not come back is
+loopback beside them: that is the half of the 2026-08-21 list that told
+every peer to dial itself, and it is still advertised only by an instance
+that has nothing else.
 
 What gets advertised is that list with two changes. A tailnet address is
 advertised under its **node name** first — `horatio.tailnet.ts.net:7373`
@@ -3517,7 +3540,7 @@ and only linked by the two server binaries.
 | E | 1Password key migration | **support import and fresh keys; recommend rotation** |
 | F | Project publication model | **snapshot + live refresh** |
 | G | Wake-up modes | **publisher-hosted FCM/APNs relay + opt-in Android foreground-service live connection**, on the always-present poll-on-open baseline; UnifiedPush deferred |
-| H | Listener bind default | **private/tailnet by default, public interfaces opt-in** — which of them, and what gets advertised, is decision AH |
+| H | Listener bind default | **private/tailnet by default, public interfaces opt-in** — which of them, and what gets advertised, is decision AH, revised by AR |
 
 Added 2026-08-09:
 
@@ -3627,6 +3650,7 @@ Added 2026-09-04:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
+| AR | Whether a tailnet takes the local network out of the default bind | **it does not: the tailnet and the local network are bound and advertised together, tailnet first, and loopback only by a machine that has neither.** Decision AH made them two tiers and bound only the better one present, because a peer holding both addresses spent its reconnections on the one that could not work from where it was. That was right about the reconnections and wrong about what a default is for. The default is what a machine does before anybody has configured anything, which is to say during bootstrap — and a tailnet is the component most likely to be absent at exactly that moment: down, or half up while NetworkManager and tailscaled settle the link, or not installed yet on the machine being paired. With the tailnet alone bound, such a machine advertised nothing a phone on the same Wi-Fi could reach, although the LAN address was up and typed in, and the way out was `ladulas listen set`, which is configuration in the way of the step that exists to avoid it. The flakiness was observed here often enough to count as the normal case. Meanwhile the cost AH was paying for has been paid on the dialling side: the address that last worked is tried alone for three consecutive failures before the rest of the record gets a turn (§8), so a phone away from home does not charge a dial timeout for the LAN address on every round, and a sweep that does reach it reports the most informative failure rather than the last. The `tier` field's `tailnet` and `private` values are gone rather than aliased, since either would read as a claim that the other kind was left out; the one value is `local`, and `ladulas listen` says which of the two the bound list actually holds. Rejected: keeping one tier and asking people to add the LAN address by hand, which is what this replaces; binding both and advertising the tailnet only, which leaves the bootstrap exactly where it was because pairing works off the advertised list; and bringing loopback back beside them, which is the part of the pre-AH list that made peers dial themselves and is the part of AH that stands. Qualifies decision AH; the interface rules and the two-list rule are unchanged. Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-// TestOneTierIsChosen is decision AH: the best group of addresses present is
-// bound, and the others are reported rather than dropped.
-func TestOneTierIsChosen(t *testing.T) {
+// TestTheTailnetAndTheLocalNetworkAreBoundTogether is decision AR on top of
+// decision AH: the tailnet and the local network are bound side by side, tailnet
+// first, loopback is bound only by a machine that has neither, and whatever is
+// not bound is reported rather than dropped.
+func TestTheTailnetAndTheLocalNetworkAreBoundTogether(t *testing.T) {
 	tailnet := []string{"100.74.235.31:7373"}
 	private := []string{"192.168.1.201:7373"}
 	loopback := []string{"127.0.0.1:7373"}
@@ -23,20 +25,28 @@ func TestOneTierIsChosen(t *testing.T) {
 		skipped []string
 	}{
 		{
-			name: "a tailnet takes everything else out",
+			name: "a tailnet does not take the local network out",
 			in:   [3][]string{tailnet, private, loopback},
-			tier: TierTailnet,
-			bind: tailnet,
-			// Both of the others, and each with a reason: an address that is
-			// missing from the listener has to be findable with an explanation
-			// attached.
-			skipped: []string{"192.168.1.201:7373", "127.0.0.1:7373"},
+			tier: TierLocal,
+			// Tailnet first, because the advertised list follows the bound one
+			// and should lead with the address that works from anywhere.
+			bind: []string{"100.74.235.31:7373", "192.168.1.201:7373"},
+			// Loopback with a reason: an address that is missing from the
+			// listener has to be findable with an explanation attached.
+			skipped: []string{"127.0.0.1:7373"},
 		},
 		{
 			name:    "no tailnet leaves the local network",
 			in:      [3][]string{nil, private, loopback},
-			tier:    TierPrivate,
+			tier:    TierLocal,
 			bind:    private,
+			skipped: []string{"127.0.0.1:7373"},
+		},
+		{
+			name:    "no local network leaves the tailnet",
+			in:      [3][]string{tailnet, nil, loopback},
+			tier:    TierLocal,
+			bind:    tailnet,
 			skipped: []string{"127.0.0.1:7373"},
 		},
 		{

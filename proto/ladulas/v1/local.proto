@@ -702,7 +702,8 @@ message PeerListenState {
   // loopback is advertised only by an instance that has nothing else (§8).
   repeated string bound = 6;
   repeated string advertised = 7;
-  // Which tier the automatic policy chose: tailnet, private, loopback, or
+  // Which tier the automatic policy chose: local — the tailnet and the local
+  // network together, whichever the machine has (decision AR) — loopback, or
   // explicit for a specification that named its own addresses.
   string tier = 8;
   repeated SkippedListenAddress skipped = 9;

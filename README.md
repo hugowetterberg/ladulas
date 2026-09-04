@@ -290,13 +290,15 @@ ladulas listen set off                  # stop listening; still dials out
 ladulas listen clear                    # forget the setting
 ```
 
-With nobody having said, the automatic policy takes **one tier** of
-addresses: the machine's tailnet addresses if it has any, otherwise its
-other private ones, otherwise loopback — having skipped every interface
-that is up but not running, and every interface whose name belongs to a
-container runtime or a virtual machine (decision AH). On a desktop with
-Docker and libvirt on it that is the difference between two listeners and
-fourteen, eleven of which no peer could reach.
+With nobody having said, the automatic policy binds the machine's tailnet
+addresses **and** its other private ones, tailnet first, and loopback only
+when it has neither — having skipped every interface that is up but not
+running, and every interface whose name belongs to a container runtime or a
+virtual machine (decisions AH and AR). On a desktop with Docker and libvirt
+on it that is the difference between three listeners and fourteen, eleven
+of which no peer could reach. The tailnet used to take the local network
+out; it no longer does, because a tailnet that is down is what a machine
+being set up most often has, and the LAN address was the one that worked.
 
 What peers are told to dial is a second list, printed as **Peers dial**. A
 tailnet address is advertised under its node name first —
@@ -686,7 +688,7 @@ APNS_KEY_FILE=AuthKey_XXXX.p8 APNS_KEY_ID=… APNS_TEAM_ID=… \
 | `--socket` | `LADULAS_AGENT_SOCK` | `$XDG_RUNTIME_DIR/ladulas/agent.sock` | Where the SSH agent listens. `SSH_AUTH_SOCK` points here |
 | `--control-socket` | `LADULAS_SOCK` | `$XDG_RUNTIME_DIR/ladulas/control.sock` | The signing and control services. The CLI and `ladulas-sign` both find the instance here |
 | `--no-keyring` | `LADULAS_NO_KEYRING` | off | Ignore the platform keychain entirely, so an instance that enrolled "unlock at login" can still be started without it |
-| `--peer-listen` | `LADULAS_PEER_LISTEN` | port 7373 on one tier of addresses — see `ladulas listen` | A port, a `host:port`, a comma-separated list of either, `auto`, or `off`. Set, it **overrides** what `ladulas listen set` stored, which is what makes it the way back into a machine whose stored address no longer exists |
+| `--peer-listen` | `LADULAS_PEER_LISTEN` | port 7373 on the tailnet and the local network — see `ladulas listen` | A port, a `host:port`, a comma-separated list of either, `auto`, or `off`. Set, it **overrides** what `ladulas listen set` stored, which is what makes it the way back into a machine whose stored address no longer exists |
 | `--peer-listen-public` | `LADULAS_PEER_LISTEN_PUBLIC` | off | Allow binding addresses reachable from outside. The channel does not trust the network either way; this exists so it never happens by accident |
 | `--log-level` | `LADULAS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 

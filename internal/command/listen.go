@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/hugowetterberg/ladulas/internal/localapi"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 )
 
 // `ladulas listen` is where the peer channel's addresses are managed, and it
@@ -234,12 +236,14 @@ func sourceWord(source ladulasv1.ListenSource) string {
 
 // tierWord says what was chosen and, for the tiers that mean something is
 // missing, what that costs.
+//
+// The local tier is one tier covering two kinds of address (decision AR), and
+// which kinds this machine actually has is the thing worth reading, so the
+// bound list is looked at rather than the tier name repeated.
 func tierWord(tier string, bound []string) string {
 	switch tier {
-	case "tailnet":
-		return "the tailnet addresses; nothing else is bound"
-	case "private":
-		return "the local network addresses; there is no tailnet here"
+	case "local":
+		return localTierWord(bound)
 	case "loopback":
 		if len(bound) == 0 {
 			return "loopback"
@@ -254,6 +258,41 @@ func tierWord(tier string, bound []string) string {
 	}
 
 	return tier
+}
+
+// localTierWord says which of the tailnet and the local network the bound list
+// actually holds, since the tier is the same word whether it holds both or one.
+func localTierWord(bound []string) string {
+	var tailnet, lan bool
+
+	for _, address := range bound {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			continue
+		}
+
+		ip := net.ParseIP(host)
+
+		switch {
+		case ip == nil:
+			continue
+		case transport.IsTailnetIP(ip):
+			tailnet = true
+		default:
+			lan = true
+		}
+	}
+
+	switch {
+	case tailnet && lan:
+		return "the tailnet and the local network addresses"
+	case tailnet:
+		return "the tailnet addresses; there is no local network address here"
+	case lan:
+		return "the local network addresses; there is no tailnet here"
+	}
+
+	return "the tailnet and local network addresses"
 }
 
 // capitalise makes a sentence of a clause the daemon wrote lower case, since

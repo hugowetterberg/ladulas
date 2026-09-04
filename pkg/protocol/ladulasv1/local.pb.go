@@ -2110,7 +2110,8 @@ type PeerListenState struct {
 	// loopback is advertised only by an instance that has nothing else (§8).
 	Bound      []string `protobuf:"bytes,6,rep,name=bound,proto3" json:"bound,omitempty"`
 	Advertised []string `protobuf:"bytes,7,rep,name=advertised,proto3" json:"advertised,omitempty"`
-	// Which tier the automatic policy chose: tailnet, private, loopback, or
+	// Which tier the automatic policy chose: local — the tailnet and the local
+	// network together, whichever the machine has (decision AR) — loopback, or
 	// explicit for a specification that named its own addresses.
 	Tier    string                  `protobuf:"bytes,8,opt,name=tier,proto3" json:"tier,omitempty"`
 	Skipped []*SkippedListenAddress `protobuf:"bytes,9,rep,name=skipped,proto3" json:"skipped,omitempty"`
