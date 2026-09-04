@@ -2705,6 +2705,24 @@ display rather than spending a second one. What arrives when the other
 machine uses it is an ordinary approval card, drawn by the renderer that
 draws every other one.
 
+The screen has had the other end since 2026-09-04: under the question, a
+box for a code another machine is showing. The full code carries the address
+and the identity key and needs nothing beside it; a short one takes the
+address in the second field. The screen said "paste this into the other
+machine's own Add a machine screen" for two weeks before that screen could
+take a paste, which is the kind of promise a sweep finds. Joining asks
+nothing about what the pairing is for, because the side showing the code
+decided (decision AD), and the dial is a streamed control call whose
+lifetime is *not* the pairing's — the daemon writes the pending pairing down
+as soon as the handshake succeeds and reconciles it whether or not anybody
+is listening (core §7) — so the window holds the stream only until the other
+machine has answered the dial or refused it, tells the person to look for
+the card, and follows the rest on its own. The card is the confirmation, on
+the approval stream like every other request, and the join's answer carries
+its request id and no fingerprint: the fingerprints are compared on the card
+beside the other side's, which is the only place comparing them means
+anything (§7).
+
 *Make a key* is a name, a comment and a button behind the **+** in the Keys
 screen's title bar (decision AF), and generation only: importing one is a
 file to pick and a passphrase to type into a webview, and `ladulas keys

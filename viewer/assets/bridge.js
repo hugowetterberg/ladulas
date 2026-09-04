@@ -100,6 +100,9 @@ export const bridge = {
   invitation: () => call("GET", "/pairings/invitation"),
   invite: (intent) => call("POST", "/pairings/invite", { intent }),
   stopPairing: () => call("POST", "/pairings/stop"),
+  // The other end: a code another machine is showing, pasted here. The
+  // address is only for a short code; the full one carries its own.
+  join: (code, address) => call("POST", "/pairings/join", { code, address }),
 
   // Making a key in the instance's store. Importing one is `ladulas keys
   // import`: a key file is a file to pick and its passphrase is a secret to

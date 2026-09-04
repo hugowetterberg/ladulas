@@ -155,6 +155,7 @@ func New(opts Options) (*Frontend, error) {
 		Pairings:           front.pairings,
 		Withdraw:           front.withdrawPairing,
 		Pairing:            &pairingControl{front: front},
+		Join:               front.join,
 		Projects:           &projects{front: front},
 		FetchDiff:          front.fetchDiff,
 		History:            front.history,

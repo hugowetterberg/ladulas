@@ -380,6 +380,15 @@ type Options struct {
 	// without it lists what is under way and cannot open a new one, which is
 	// what every host did until there was a screen for it.
 	Pairing Pairing
+	// Join is the other end of a pairing: a code displayed elsewhere, pasted
+	// here (§7). The full code carries the address and the identity key; a
+	// short one needs the address beside it. It returns once the other machine
+	// has answered the dial and the confirmation is on its way as a card, or
+	// with why it did not — it does not wait for anybody to answer the card,
+	// because the pairing is on disk on both sides by then and outlives every
+	// screen (§14). Optional, like Pairing; the phones join by camera and have
+	// their own path.
+	Join func(ctx context.Context, code, address string) (JoinView, error)
 	// Projects is the documentation paired instances have published here (§6).
 	// Optional.
 	Projects Projects
@@ -976,6 +985,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/pairings/invitation", s.handleInvitation)
 	mux.HandleFunc("POST /api/v1/pairings/invite", s.handleInvite)
 	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
+	mux.HandleFunc("POST /api/v1/pairings/join", s.handleJoin)
 	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
 	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
 	// The key is named in the body for the same reason the peer is: a
@@ -1833,6 +1843,50 @@ func (s *Session) handleInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, invitationView(invitation))
+}
+
+// handleJoin dials a machine that is displaying a code. What comes back is
+// only that the dial worked and a card is on its way: the card is where the
+// two fingerprints are compared, and it reaches the screen the way every other
+// request does.
+func (s *Session) handleJoin(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Join == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot join a pairing")
+
+		return
+	}
+
+	var body struct {
+		Code    string `json:"code"`
+		Address string `json:"address"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 16384)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	body.Code = strings.TrimSpace(body.Code)
+	body.Address = strings.TrimSpace(body.Address)
+
+	if body.Code == "" {
+		writeError(w, http.StatusBadRequest,
+			"paste the code the other machine is showing")
+
+		return
+	}
+
+	joined, err := s.opts.Join(r.Context(), body.Code, body.Address)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, joined)
 }
 
 // handleStopInviting takes the code off display, which is what leaving the

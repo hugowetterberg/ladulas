@@ -28,6 +28,24 @@ type pairingHost struct {
 	live    *bridge.Invitation
 	stopped int
 	asked   []trust.Intent
+	joined  [][2]string
+}
+
+// Join is the dial. A code the host does not know is the far end declining,
+// which is what a real dial answers with too.
+func (h *pairingHost) Join(
+	_ context.Context, code, address string,
+) (bridge.JoinView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if code != "k7n41-9qra0" && code != "ladulas-pair-v1.AAAA" {
+		return bridge.JoinView{}, errors.New("the other side declined")
+	}
+
+	h.joined = append(h.joined, [2]string{code, address})
+
+	return bridge.JoinView{RequestID: "req-pair-1", Message: "answered"}, nil
 }
 
 func (h *pairingHost) Invite(
@@ -82,6 +100,7 @@ func newPairingFixture(t *testing.T) (*httptest.Server, *pairingHost) {
 	session := bridge.NewSession(bridge.Options{
 		Name:    "workstation",
 		Pairing: host,
+		Join:    host.Join,
 		GenerateKey: func(
 			_ context.Context, label, comment string,
 		) (*ladulasv1.KeyInfo, error) {
@@ -244,6 +263,46 @@ func TestAPairingWithoutAnIntentIsRefused(t *testing.T) {
 
 	if len(host.asked) != 0 {
 		t.Errorf("a code was spent anyway: %v", host.asked)
+	}
+}
+
+// TestJoiningAPastedCodeReportsTheCard: the join answers with the confirmation
+// to look for, refuses an empty code without dialling, and hands the far end's
+// refusal back as one.
+func TestJoiningAPastedCodeReportsTheCard(t *testing.T) {
+	server, host := newPairingFixture(t)
+
+	status, out := send(t, server, http.MethodPost,
+		"/api/v1/pairings/join", `{"code":"  "}`)
+	if status != http.StatusBadRequest {
+		t.Errorf("an empty code said %d: %s", status, out)
+	}
+
+	status, out = send(t, server, http.MethodPost,
+		"/api/v1/pairings/join", `{"code":"wrong-code","address":"guppy:7373"}`)
+	if status != http.StatusBadGateway ||
+		!strings.Contains(string(out), "declined") {
+		t.Errorf("a refused code said %d: %s", status, out)
+	}
+
+	status, out = send(t, server, http.MethodPost,
+		"/api/v1/pairings/join", `{"code":" ladulas-pair-v1.AAAA "}`)
+	if status != http.StatusOK {
+		t.Fatalf("joining said %d: %s", status, out)
+	}
+
+	var view bridge.JoinView
+
+	if err := json.Unmarshal(out, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if view.RequestID != "req-pair-1" {
+		t.Errorf("the join answered %+v", view)
+	}
+
+	if len(host.joined) != 1 || host.joined[0] != [2]string{"ladulas-pair-v1.AAAA", ""} {
+		t.Errorf("the host was asked to join %v", host.joined)
 	}
 }
 

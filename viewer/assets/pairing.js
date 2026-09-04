@@ -121,7 +121,69 @@ function chooser(show, state) {
       });
   };
 
+  nodes.push(ui.heading("Or join a code another machine is showing"));
+  nodes.push(joinCard(state));
+
   return nodes;
+}
+
+// joinCard is the other end of the screen above: the code from a machine that
+// has already answered the question, pasted here. It asks nothing about what
+// the pairing is for, because that side decided (decision AD) — what this side
+// agreed to is on the card that follows, beside the fingerprint to compare.
+function joinCard(state) {
+  const code = field("Code", "ladulas-pair-v1… or the short code", "text");
+  const address = field("Address", "only for a short code: host:port", "text");
+  const join = el("button", "primary", "Join");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  join.onclick = () => {
+    join.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .join(code.input.value, address.input.value)
+      .then((joined) => {
+        // The card is the confirmation, and it arrives the way every request
+        // does; this only says to look for it. The fields are left as they
+        // were, because a dial that worked is not a code to spend again.
+        said.textContent = (joined && joined.message)
+          || "The other machine answered. Compare the fingerprints on the card.";
+        said.hidden = false;
+        state.refresh();
+      })
+      .catch((error) => {
+        join.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    code.root,
+    address.root,
+    ui.note("The full code — the long string under \"From another Ladulås "
+      + "window\" on the other machine — carries its address and identity, "
+      + "so there is nothing else to type. A short code needs the address "
+      + "beside it. Either way both machines then show the same two "
+      + "fingerprints, and somebody at each has to agree they match."),
+    append(el("div", "card-actions"), join),
+    said);
+}
+
+// field is a labelled input, the shape screens.js draws its sheets with.
+function field(text, placeholder, type) {
+  const root = el("label", "field");
+  const input = document.createElement("input");
+
+  input.type = type;
+  input.placeholder = placeholder;
+
+  append(root, el("span", "field-label", text), input);
+
+  return { root, input };
 }
 
 // displayed is the code on screen, with the three ways to use it under it.
@@ -149,8 +211,9 @@ function displayed(invitation, stopped) {
 
   nodes.push(ui.heading("From another Ladulås window"));
   nodes.push(ui.card(null,
-    ui.note("Paste this into the other machine's own Add a machine screen. It "
-      + "carries this instance's identity, so that side has nothing left to "
+    ui.note("Paste this into the join box at the bottom of the other "
+      + "machine's own Add a machine screen. It carries this instance's "
+      + "identity and address, so that side has nothing left to type or to "
       + "compare by hand."),
     ui.copyable(invitation.fullCode)));
 

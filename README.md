@@ -273,7 +273,9 @@ and is shown the sentence on its confirmation. It is required, because the
 alternative was two independent guesses that routinely disagreed; changing
 it later means removing the peer and pairing again. On a desktop the same
 question, the same code and a QR are the **Add a machine** screen in the
-window.
+window, and the bottom of that screen is the other end: a box that takes the
+full code pasted from another window, or a short code with the address
+beside it, and then says to look for the confirmation card.
 
 Pairing grants **directions**, never keys; `peers allow` is the separate
 decision that lends one, and its flags describe the state wanted rather

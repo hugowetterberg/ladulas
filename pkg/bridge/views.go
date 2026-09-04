@@ -769,6 +769,16 @@ func localTierWord(bound []string) string {
 	return "the tailnet and local network addresses"
 }
 
+// JoinView is what a screen is told when a pasted code reached the machine
+// that displayed it: which confirmation to look for, when one was raised, and
+// the daemon's own sentence about where things stand. The fingerprints are not
+// here on purpose — they are on the card, beside the other side's, which is the
+// only place comparing them means anything (§7).
+type JoinView struct {
+	RequestID string `json:"requestId,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
 // PublishingView is what this instance publishes to its approvers (decision
 // Q): whether projects it asks for signatures in are published automatically,
 // and what is published now, whichever way it got there.
