@@ -143,7 +143,7 @@ function displayed(invitation, stopped) {
 
   nodes.push(ui.heading("From a terminal"));
   nodes.push(ui.card(null,
-    copyable(invitation.join),
+    ui.copyable(invitation.join),
     ui.note("The address is the one this machine thinks is most likely to "
       + "work; the rest are below.")));
 
@@ -152,7 +152,7 @@ function displayed(invitation, stopped) {
     ui.note("Paste this into the other machine's own Add a machine screen. It "
       + "carries this instance's identity, so that side has nothing left to "
       + "compare by hand."),
-    copyable(invitation.fullCode)));
+    ui.copyable(invitation.fullCode)));
 
   if (invitation.qr) {
     nodes.push(ui.heading("From a phone"));
@@ -192,30 +192,6 @@ function displayed(invitation, stopped) {
   nodes.push(append(el("div", "card-actions"), stop));
 
   return nodes;
-}
-
-// copyable is a string somebody has to get onto another machine: selectable,
-// and with a button for the case where the window is not where they are typing.
-function copyable(text) {
-  const root = el("div", "copyable");
-  const button = el("button", "small", "Copy");
-
-  button.onclick = () => {
-    navigator.clipboard.writeText(text).then(
-      () => {
-        button.textContent = "Copied";
-      },
-      () => {
-        // Some hosts have no clipboard to write to. The text is selectable
-        // either way, which is what the button was a shortcut for.
-        button.textContent = "Select it instead";
-      },
-    );
-  };
-
-  append(root, el("code", "mono", text), button);
-
-  return root;
 }
 
 // clockTime is when a code stops working, in the reader's own locale. It is the

@@ -259,14 +259,5 @@ func (f *Frontend) generateKey(
 		return nil, fmt.Errorf("generate the key: %w", err)
 	}
 
-	key := resp.Msg.GetKey()
-
-	return &ladulasv1.KeyRef{
-		Fingerprint: key.GetFingerprint(),
-		Algorithm:   key.GetAlgorithm(),
-		PublicKey:   key.GetPublicKey(),
-		Comment:     key.GetComment(),
-		Label:       key.GetLabel(),
-		AgentUse:    key.AgentUse,
-	}, nil
+	return keyRef(resp.Msg.GetKey()), nil
 }

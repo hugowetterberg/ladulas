@@ -2,13 +2,16 @@ package bridge
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 	"github.com/hugowetterberg/ladulas/pkg/trust"
+	"golang.org/x/crypto/ssh"
 )
 
 // The view types are the bridge contract. They are hand-written rather than
@@ -104,12 +107,60 @@ type GrantTrust struct {
 	Detail string `json:"detail"`
 }
 
-// KeyView is the key a request wants to use.
+// KeyView is a key: the one a request wants to use, or one the instance holds.
+//
+// The last two fields are only filled for a key the instance holds. Public is
+// the authorized_keys line, which is what the public half is for — it goes into
+// GitHub, an authorized_keys file, an allowed_signers file — and a screen that
+// showed a key without a way to get that line out was a screen somebody had to
+// leave for a terminal. AgentUse is whether the agent offers the key (decision
+// T); a key a request names has already been offered, so the question does not
+// arise there.
 type KeyView struct {
 	Label       string `json:"label"`
 	Fingerprint string `json:"fingerprint"`
 	Algorithm   string `json:"algorithm,omitempty"`
 	Comment     string `json:"comment,omitempty"`
+	Public      string `json:"public,omitempty"`
+	AgentUse    bool   `json:"agentUse,omitempty"`
+}
+
+// storedKeyView is a key the instance holds, with the public half rendered.
+//
+// The line is rendered here rather than by the host because every host hands
+// over the same wire-format bytes and none of them should have to know what
+// an authorized_keys line looks like. A public half that does not parse is
+// left out rather than reported: the key still signs, and the fingerprint
+// beside it is the store's, not this function's.
+func storedKeyView(key *ladulasv1.KeyRef) KeyView {
+	view := KeyView{
+		Label:       key.GetLabel(),
+		Fingerprint: key.GetFingerprint(),
+		Algorithm:   key.GetAlgorithm(),
+		Comment:     key.GetComment(),
+		// Unset means offered, as it does in the store (decision T).
+		AgentUse: key.AgentUse == nil || key.GetAgentUse(),
+	}
+
+	if pub, err := ssh.ParsePublicKey(key.GetPublicKey()); err == nil {
+		line := strings.TrimRight(string(ssh.MarshalAuthorizedKey(pub)), "\r\n")
+
+		// The comment is what an authorized_keys line says the key is, and
+		// the label is the next best name when nobody gave it one — the same
+		// choice `ladulas keys public` makes.
+		comment := key.GetComment()
+		if comment == "" {
+			comment = key.GetLabel()
+		}
+
+		if comment != "" {
+			line += " " + comment
+		}
+
+		view.Public = line
+	}
+
+	return view
 }
 
 // RequesterView says who is asking.
@@ -500,7 +551,186 @@ type InstanceView struct {
 	// Settings is the part of the policy a surface may show and change, when
 	// the host offers one (§9).
 	Settings *SettingsView `json:"settings,omitempty"`
-	Error    string        `json:"error,omitempty"`
+	// Listen is where the peer channel listens, when the host can say (§8,
+	// decision AH). Publishing and UnlockAtLogin are the other two per-instance
+	// settings a surface may change (decisions Q and I); each is present only
+	// on a host that offers it, so a screen draws the sections it has and no
+	// heading over a control that would answer 501.
+	Listen        *ListenView        `json:"listen,omitempty"`
+	Publishing    *PublishingView    `json:"publishing,omitempty"`
+	UnlockAtLogin *UnlockAtLoginView `json:"unlockAtLogin,omitempty"`
+	Error         string             `json:"error,omitempty"`
+}
+
+// ListenView is where the peer channel listens, as the process that bound it
+// sees things (§8): the specification in force and what decided it, what is
+// bound, what a peer is told to dial, and every address the automatic policy
+// passed over with the reason it did (decision AH).
+//
+// It is the control socket's PeerListenState with the words already chosen,
+// because the words are the point of the screen — "the tailnet and the local
+// network addresses" is what somebody wants to read, not `local`, and the tier
+// name is the same whether the machine has both kinds or one (decision AR).
+type ListenView struct {
+	Spec string `json:"spec"`
+	// Source is what decided the specification: "flag", "stored" or
+	// "automatic". SourceNote is the same fact as a sentence.
+	Source      string `json:"source"`
+	SourceNote  string `json:"sourceNote"`
+	AllowPublic bool   `json:"allowPublic,omitempty"`
+	// StoredSpec is the stored setting when there is one, in force or not. A
+	// flag overriding a stored setting is the thing worth being able to see:
+	// the two together are why a change somebody made yesterday does nothing.
+	StoredSpec        string `json:"storedSpec,omitempty"`
+	StoredAllowPublic bool   `json:"storedAllowPublic,omitempty"`
+	// Bound is what is bound right now and Advertised what a peer is told to
+	// dial. They differ by design (§8), and both are drawn.
+	Bound      []string `json:"bound,omitempty"`
+	Advertised []string `json:"advertised,omitempty"`
+	// Tier is the automatic policy's choice as the daemon names it, and Chose
+	// the same choice as a sentence, with what it costs when it costs something.
+	Tier    string               `json:"tier,omitempty"`
+	Chose   string               `json:"chose,omitempty"`
+	Skipped []SkippedAddressView `json:"skipped,omitempty"`
+	// Detail is why nothing is bound, when nothing is. Empty when the listener
+	// is up.
+	Detail string `json:"detail,omitempty"`
+}
+
+// SkippedAddressView is one address the automatic policy did not bind.
+type SkippedAddressView struct {
+	Address string `json:"address"`
+	// Interface is the interface it was found on, empty when the address was
+	// skipped for being in a tier a better one covered.
+	Interface string `json:"interface,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+// ListenChangeView is what changing the listener answers with: the state as
+// it now is, and what happened in a sentence — including the words "the
+// previous addresses are back" when the new ones could not be bound, which is
+// the half a screen has to show rather than the state alone.
+type ListenChangeView struct {
+	Listen ListenView `json:"listen"`
+	Detail string     `json:"detail"`
+}
+
+// listenView chooses the words for a PeerListenState.
+func listenView(state *ladulasv1.PeerListenState) ListenView {
+	view := ListenView{
+		Spec:              state.GetSpec(),
+		AllowPublic:       state.GetAllowPublic(),
+		StoredSpec:        state.GetStoredSpec(),
+		StoredAllowPublic: state.GetStoredAllowPublic(),
+		Bound:             state.GetBound(),
+		Advertised:        state.GetAdvertised(),
+		Tier:              state.GetTier(),
+		Detail:            state.GetDetail(),
+	}
+
+	switch state.GetSource() {
+	case ladulasv1.ListenSource_LISTEN_SOURCE_FLAG:
+		view.Source = "flag"
+		view.SourceNote = "Set by --peer-listen on the daemon, which beats " +
+			"anything stored here."
+	case ladulasv1.ListenSource_LISTEN_SOURCE_STORED:
+		view.Source = "stored"
+		view.SourceNote = "Set here, and kept in the store across restarts."
+	case ladulasv1.ListenSource_LISTEN_SOURCE_AUTOMATIC,
+		ladulasv1.ListenSource_LISTEN_SOURCE_UNSPECIFIED:
+		view.Source = "automatic"
+		view.SourceNote = "Nobody has said, so the policy decides."
+	}
+
+	if tier := state.GetTier(); tier != "" {
+		view.Chose = tierWord(tier, state.GetBound())
+	}
+
+	for _, one := range state.GetSkipped() {
+		view.Skipped = append(view.Skipped, SkippedAddressView{
+			Address:   one.GetAddress(),
+			Interface: one.GetInterface(),
+			Reason:    one.GetReason(),
+		})
+	}
+
+	return view
+}
+
+// tierWord says what the automatic policy chose and, for the tiers that mean
+// something is missing, what that costs.
+//
+// The local tier is one tier covering two kinds of address (decision AR), and
+// which kinds this machine actually has is the thing worth reading, so the
+// bound list is looked at rather than the tier name repeated. The same words
+// `ladulas listen` prints.
+func tierWord(tier string, bound []string) string {
+	switch tier {
+	case transport.TierLocal:
+		return localTierWord(bound)
+	case transport.TierLoopback:
+		if len(bound) == 0 {
+			return "loopback"
+		}
+
+		return "loopback only — no peer on another machine can reach this " +
+			"instance"
+	case transport.TierExplicit:
+		return "the addresses given"
+	case transport.TierNone:
+		return "nothing"
+	}
+
+	return tier
+}
+
+func localTierWord(bound []string) string {
+	var tailnet, lan bool
+
+	for _, address := range bound {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			continue
+		}
+
+		ip := net.ParseIP(host)
+
+		switch {
+		case ip == nil:
+			continue
+		case transport.IsTailnetIP(ip):
+			tailnet = true
+		default:
+			lan = true
+		}
+	}
+
+	switch {
+	case tailnet && lan:
+		return "the tailnet and the local network addresses"
+	case tailnet:
+		return "the tailnet addresses; there is no local network address here"
+	case lan:
+		return "the local network addresses; there is no tailnet here"
+	}
+
+	return "the tailnet and local network addresses"
+}
+
+// PublishingView is whether projects this instance asks for signatures in are
+// published to its approvers automatically (decision Q).
+type PublishingView struct {
+	AutoPublish bool `json:"autoPublish"`
+}
+
+// UnlockAtLoginView is whether this instance unlocks from the platform
+// keychain at login, and whether the passphrase is still there behind it
+// (decision I). It always should be: the keychain is enrolled beside a
+// passphrase, never instead of one, and a screen that could not show the
+// second fact could not honestly offer the first.
+type UnlockAtLoginView struct {
+	Enrolled           bool `json:"enrolled"`
+	PassphraseWrapping bool `json:"passphraseWrapping"`
 }
 
 // SettingsView is the policy a settings screen draws: the signing budget in

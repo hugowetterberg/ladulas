@@ -1164,9 +1164,9 @@ is still waiting, which is the case the hour exists for. And the approval
 wait histogram's last bucket is the budget, so a request that ran the clock
 out is a bucket rather than an overflow ([observability.md](observability.md)).
 
-**The budget is the one thing a surface may change.** `Settings` and
-`SetSignTimeout` on the control socket read it and write it; the desktop
-window's Settings screen and any other host draw it from the instance view,
+**The budget is the one thing in the policy a surface may change.**
+`Settings` and `SetSignTimeout` on the control socket read it and write it;
+the desktop window's Settings screen and any other host draw it from the instance view,
 with the bounds the instance will accept — at least 30 s, at most a day —
 the way a grant offer carries its `max_ttl` (decision V). Writing it goes
 through the daemon, which is the only process that touches the policy
@@ -1183,7 +1183,11 @@ process running as this user. A number that decides how long somebody has
 to answer cannot approve anything by itself. Adding a second setting here
 is deliberate work, and that is the point. The bounds are on the surfaces
 rather than on the document: a hand-edited `policy.json` stays unbounded,
-because somebody editing the file has said what they mean.
+because somebody editing the file has said what they mean. The other
+settings the desktop's screen changes — where the peer channel listens,
+whether projects are published automatically, whether the store opens from
+the keychain at login — are the daemon's stored settings and not the
+policy's, and none of them decides an approval (decision AS).
 
 **An answer settles one card, and the others are withdrawn** (decision AM).
 The engine cancels the losers the moment a decision arrives, and each
@@ -2744,6 +2748,47 @@ cannot be reached, and once ever, when a phone is lost — which is the
 definition of what belongs behind a cog rather than in front of one
 (decision AF).
 
+**A key has a cog too**, since 2026-09-04, and behind it is everything
+`ladulas keys` does to a key the store holds that a webview can be trusted
+with. The public key, as the authorized_keys line — the one thing people
+came to the Keys screen for most often and could not get, and the reason
+`ladulas keys public` was a command they had to remember. The bridge derives
+the line from the key the store hands over rather than asking the host for
+it, so the phones get it at their next bump without their bound methods
+changing (decision T's `agent_use` travels the same way). Whether the agent
+offers the key, a toggle that redraws from the daemon's answer. Handing the
+key to a paired machine, which is decision S's sending half and asks for
+the store passphrase in the sheet although the window already typed it to
+unlock: unlocking says the store may be used from here, and sending is the
+one thing done from here that cannot be taken back, so it is a question of
+its own — and the daemon checks the passphrase, not the window, because a
+client that decided for itself would be a client anybody could replace with
+one that always said yes. The passphrase goes to the daemon as bytes and is
+wiped on both sides once it has answered (§14). And removing the key, which
+asks twice for the reason revoking a peer does. Importing a key is still
+`ladulas keys import` and stays there (decision AF).
+
+**The Settings screen changes what the daemon stores and nothing it was
+started with** (decision AS). Beside the signing budget it has, since
+2026-09-04, where the peer channel listens: the card draws what `ladulas
+listen` prints — the setting and where it came from, what was bound, what
+peers are told to dial, and every address the policy passed over with the
+reason, because "why can't my other machine reach this one" is the question
+that brings somebody here — and the sheet behind *Change* offers the
+automatic policy, off, typed addresses with the public-address consent
+beside them, and forgetting the stored setting, which is not the same as
+asking for `auto` (§14). The daemon's own sentence about what happened stays
+on the sheet, since a bind that failed and fell back *is* a success as far
+as the state can tell. The peer channel's addresses left the "where things
+are" list the same day: a list of paths is not the place to explain why an
+address was chosen. Whether projects are published automatically (decision
+Q) and whether the store unlocks from the keychain at login (decision I)
+are a card each, and the second says what enrolling gives up before the
+button is pressed, since it is a screen anybody logged in as this user can
+reach. Every one of these is a body the bridge refuses when it does not say
+which way — a missing boolean reads as *off* in JSON, and one of them is a
+store that stops opening at login because a field was misspelled.
+
 **Three rules the sidebar screens follow, all three learned on the phone.**
 A poll that found nothing new redraws nothing: the instance is re-read every
 few seconds to keep a countdown honest, and a pane rebuilt under somebody's
@@ -3651,6 +3696,7 @@ Added 2026-09-04:
 |---|----------|------------|
 | AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
 | AR | Whether a tailnet takes the local network out of the default bind | **it does not: the tailnet and the local network are bound and advertised together, tailnet first, and loopback only by a machine that has neither.** Decision AH made them two tiers and bound only the better one present, because a peer holding both addresses spent its reconnections on the one that could not work from where it was. That was right about the reconnections and wrong about what a default is for. The default is what a machine does before anybody has configured anything, which is to say during bootstrap — and a tailnet is the component most likely to be absent at exactly that moment: down, or half up while NetworkManager and tailscaled settle the link, or not installed yet on the machine being paired. With the tailnet alone bound, such a machine advertised nothing a phone on the same Wi-Fi could reach, although the LAN address was up and typed in, and the way out was `ladulas listen set`, which is configuration in the way of the step that exists to avoid it. The flakiness was observed here often enough to count as the normal case. Meanwhile the cost AH was paying for has been paid on the dialling side: the address that last worked is tried alone for three consecutive failures before the rest of the record gets a turn (§8), so a phone away from home does not charge a dial timeout for the LAN address on every round, and a sweep that does reach it reports the most informative failure rather than the last. The `tier` field's `tailnet` and `private` values are gone rather than aliased, since either would read as a claim that the other kind was left out; the one value is `local`, and `ladulas listen` says which of the two the bound list actually holds. Rejected: keeping one tier and asking people to add the LAN address by hand, which is what this replaces; binding both and advertising the tailnet only, which leaves the bootstrap exactly where it was because pairing works off the advertised list; and bringing loopback back beside them, which is the part of the pre-AH list that made peers dial themselves and is the part of AH that stands. Qualifies decision AH; the interface rules and the two-list rule are unchanged. Rationale in §8 |
+| AS | Which of the daemon's settings a window may change, and which stay command lines | **anything the daemon stores and already serves a write RPC for, and nothing it was started with.** The settings screen had one number on it (decision AJ) and the CLI had `listen set`, `publish --auto`, `unlock-at-login` and half of `keys` — on a daemon whose whole premise is that somebody is sitting in front of the window, and where the case for each was the same: the tailnet is down and the phone on the Wi-Fi cannot reach this machine, and the way out was a command to remember. The line is drawn by *who owns the value*. A setting kept in the store and changed through the control socket — where the channel listens, whether documentation is published unasked, whether the keychain opens the store at login, the signing budget, what the agent offers — is the daemon's, is already validated by the daemon, and takes effect without a restart; a screen for it is a form over a call that exists. A startup flag — `--data-dir`, `--socket`, `--log-level`, `--no-keyring`, the suspend and idle hooks — is the process's, is read once, and belongs to whatever starts the process; a screen that appeared to change one would be writing a unit file it does not own, or lying. The policy document stays out on decision AJ's grounds, which this does not reopen: none of the settings here decides an approval. Two of them cost something the screen has to say before the button: enrolling the keychain hands an unsealed store to anybody logged in as this user (decision I), and a public bind is a consent the flag already required. Importing a key stays a command line for decision AF's reason — a file to pick and a passphrase to type into a webview — and so does anything that takes a policy rule as input. Rejected: a settings screen that mirrors `ladulasd --help`, which is a screen full of fields that do nothing until a restart nobody is told about; and leaving the stored settings on the CLI because the CLI is where they were, which is the state this replaces. The phones inherit the routes through the bridge and wire them when their shells have a settings screen to put them on. Rationale in §12 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

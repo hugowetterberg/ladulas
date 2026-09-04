@@ -315,7 +315,11 @@ it is advertised.
 `ladulas listen set` remembers the change in the store and rebinds at once;
 if the new addresses cannot be bound the previous ones come back and it says
 so. It cannot lock you out of the CLI, which reaches the daemon over a unix
-socket, only out of peering.
+socket, only out of peering. The desktop window's Settings screen shows the
+same three lists and changes the setting the same way, alongside automatic
+publishing and unlocking at login (decision AS); a key's cog on its Keys
+screen copies the public key, toggles what the agent offers, hands the key
+to a paired machine and removes it.
 
 ### Asking for permission before the login needs it
 
@@ -593,6 +597,24 @@ machine, the name it takes here, and what each answer costs. Accepting puts the
 private half in this store, where it signs like any other key; refusing keeps
 nothing, and the sender is not told and still holds it. `ladulas keys offers`,
 `keys accept` and `keys refuse` are the same thing at a terminal.
+
+**The sending end is the cog on a key**, which opens the key's own sheet: the
+public key as the `authorized_keys` line, ready to copy; whether the agent
+offers it (decision T); *Hand to a paired machine*, which asks for the store
+passphrase again because sending is the one thing done from the window that
+cannot be taken back, and presses twice; and *Remove*, which also presses
+twice. `keys public`, `keys agent`, `keys send` and `keys remove` are the same
+four at a terminal, and `keys import` is the one that stays there.
+
+**Where the peer channel listens** is on Settings too, drawn as `ladulas
+listen` prints it — the setting and its source, what is bound, what peers
+dial, and what the policy passed over with the reason — and `Change` opens the
+sheet: the automatic policy, off, typed addresses with the public-address
+consent beside them, or forgetting the stored setting. The daemon's sentence
+about what happened stays on the sheet, since a bind that fell back to the old
+addresses looks like a success from the state alone. Whether projects are
+published automatically (decision Q) and whether the store opens from the
+keychain at login (decision I) are a card each beside it.
 
 **A popup per request**, small, centred and above the others, the way 1Password
 and OpenSnitch ask. Only one is on screen at a time: the rest queue, and the

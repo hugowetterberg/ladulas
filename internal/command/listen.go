@@ -21,12 +21,12 @@ import (
 // process's, and the setting is in the store the process owns (decisions K, AH).
 //
 // It exists because the automatic policy is a policy and will sometimes be
-// wrong. A machine on a tailnet binds its tailnet addresses and nothing else,
-// which is right almost always and wrong on the box whose LAN is how a phone
-// reaches it; a bridge called something this code has never heard of is skipped
-// as a container's; an address that only exists on Tuesdays is nobody's to
-// guess. The answer to all three is the same one, and it is one command rather
-// than a unit file to edit and a daemon to restart.
+// wrong. A machine binds its tailnet and local network addresses together
+// (decision AR), which is right almost always and wrong on the box whose LAN
+// is shared with strangers; a bridge called something this code has never
+// heard of is skipped as a container's; an address that only exists on
+// Tuesdays is nobody's to guess. The answer to all three is the same one, and
+// it is one command rather than a unit file to edit and a daemon to restart.
 
 func listenCommand() *cli.Command {
 	return &cli.Command{
@@ -51,9 +51,10 @@ func listenSetCommand() *cli.Command {
 		Description: "An address is a host, a host:port, or a bare port. " +
 			"Several are taken together, and so is a comma-separated list. " +
 			"`auto` asks for the automatic policy: the machine's tailnet " +
-			"addresses if it has any, otherwise its local network ones, " +
-			"otherwise loopback — skipping container and virtual machine " +
-			"interfaces. `off` switches peering off entirely.\n\n" +
+			"and local network addresses together, whichever it has, and " +
+			"loopback only when it has neither — skipping container and " +
+			"virtual machine interfaces. `off` switches peering off " +
+			"entirely.\n\n" +
 			"The change takes effect at once: the channel is rebound, and if " +
 			"the new addresses cannot be bound the previous ones come back " +
 			"and this says so. It is remembered in the store and survives a " +

@@ -93,6 +93,22 @@ export const bridge = {
   // type, and neither belongs in a webview.
   generateKey: (label, comment) =>
     call("POST", "/keys", { label, comment: comment || "" }),
+  // The three things that can be done to a key the store holds, none of them
+  // the import that stays a command line. Removing is the Keys screen's one
+  // destructive action and the screen asks twice; handing one over needs the
+  // store passphrase typed again, because it is the one thing done from this
+  // window that cannot be taken back (decision S); and the agent toggle
+  // answers with the key as it now is (decision T). The key is named in the
+  // body because a fingerprint carries slashes.
+  removeKey: (key) => call("POST", "/keys/remove", { key }),
+  setKeyAgentUse: (key, agentUse) =>
+    call("POST", "/keys/agent", { key, agentUse: Boolean(agentUse) }),
+  sendKey: (key, peer, passphrase) =>
+    call("POST", "/keys/send", {
+      key,
+      peer,
+      passphrase: encodePassphrase(passphrase),
+    }),
   // Answering a key a paired machine handed this one (decision S). Accepting
   // takes it into the store under the name given here, and refusing forgets it
   // — the sender is not told either way, and still holds the key.
@@ -119,6 +135,25 @@ export const bridge = {
   // polling to find out whether its own write took.
   setSignTimeout: (seconds) =>
     call("POST", "/settings/sign-timeout", { seconds }),
+  // Where the peer channel listens (§8, §14). The read rides on the instance
+  // view too; this one is for a screen that wants the answer straight after a
+  // change. The write is a specification — `auto`, `off`, or addresses — or a
+  // clear, and answers with the state and the daemon's sentence about what
+  // happened, which is where "the previous addresses are back" shows up.
+  listen: () => call("GET", "/settings/listen"),
+  setListen: (spec, allowPublic) =>
+    call("POST", "/settings/listen", {
+      spec,
+      allowPublic: Boolean(allowPublic),
+    }),
+  clearListen: () => call("POST", "/settings/listen", { clear: true }),
+  // Whether projects this instance asks for signatures in are published to
+  // its approvers automatically (decision Q).
+  setAutoPublish: (enabled) =>
+    call("POST", "/settings/auto-publish", { enabled: Boolean(enabled) }),
+  // Whether the store opens from the platform keychain at login (decision I).
+  setUnlockAtLogin: (enrol) =>
+    call("POST", "/settings/unlock-at-login", { enrol: Boolean(enrol) }),
 
   // The two things that can be done to a promise already made (decision P):
   // take it back, or give it longer. Revoking a delegated grant stops it when

@@ -287,11 +287,12 @@ function delegationCard(item) {
 
 // grouped is the locations with a repeated label said once.
 //
-// The peer channel binds every private address it finds, and each of them is a
-// row of its own with the same label on it — fifteen lines reading "Peer channel"
-// on a machine with a tailnet and a few docker bridges, which is most of them.
-// The label belongs to the group and the addresses under it, the way the peer
-// screen already lists a machine's addresses.
+// A host may hand over several paths under one label, and each of them is a
+// row of its own: the label belongs to the group and the paths under it, the
+// way the peer screen already lists a machine's addresses. The peer channel's
+// addresses used to be the case that needed this — fifteen lines reading
+// "Peer channel" on a machine with a tailnet and a few docker bridges — and
+// they are the listen card's now, which also says why each was chosen.
 function grouped(locations) {
   const rows = [];
   let last = "";
@@ -341,6 +342,11 @@ export function keys(state) {
       + "and never holds one."));
   }
 
+  // Each key carries a cog, the way a machine does (decision AF): behind it
+  // are the public half to copy out, whether the agent offers the key, and
+  // the two things that cannot be undone — handing it to a paired machine
+  // and removing it. None of that is what somebody opening Keys came to
+  // read, and all of it used to be a command line.
   for (const key of held) {
     body.push(ui.card("key-card",
       append(el("div", "card-head"),
@@ -348,7 +354,9 @@ export function keys(state) {
         ui.stack(
           ui.title(key.label),
           key.comment ? ui.sub(key.comment) : null),
-        key.algorithm ? el("span", "algorithm", key.algorithm) : null),
+        key.algorithm ? el("span", "algorithm", key.algorithm) : null,
+        key.agentUse ? null : ui.pill("not offered"),
+        ui.action("gear", "This key", () => keySheet(key, state))),
       ui.fingerprint(key.fingerprint, true)));
   }
 
@@ -666,6 +674,259 @@ function offerSheet(offer, state) {
   name.input.focus();
 }
 
+// keySheet is what the cog on a key opens (decision AF): the public half, the
+// agent toggle, and the two things that cannot be undone.
+//
+// The public half comes first because it is the thing done most: a key is made
+// here and then has to get into GitHub, an authorized_keys file or an
+// allowed_signers file, and until this sheet existed that was `ladulas keys
+// public` in a terminal beside a window that was showing the key. Handing the
+// key over and removing it are below, each behind a second press, for the
+// reason revoking a pairing is (§12): the first press turns the button into the
+// sentence it would carry out, and only the second calls anything.
+function keySheet(key, state) {
+  const body = [];
+
+  body.push(ui.card("key-card",
+    append(el("div", "card-head"),
+      ui.icon("key", "kind"),
+      ui.stack(
+        ui.title(key.label),
+        key.comment ? ui.sub(key.comment) : null),
+      key.algorithm ? el("span", "algorithm", key.algorithm) : null),
+    ui.fingerprint(key.fingerprint, true)));
+
+  if (key.public) {
+    body.push(ui.heading("Public key"));
+    body.push(ui.card(null,
+      ui.copyable(key.public),
+      ui.note("The half that goes into GitHub, an authorized_keys file or an "
+        + "allowed_signers file. It is nobody's secret; the private half "
+        + "never leaves the daemon's store.")));
+  }
+
+  body.push(ui.heading("The agent"));
+  body.push(agentUseCard(key, state));
+
+  const peers = state.instance.peers || [];
+
+  body.push(ui.heading("Hand to a paired machine"));
+
+  if (peers.length) {
+    body.push(sendKeyCard(key, peers, state));
+  } else {
+    body.push(ui.card(null,
+      ui.note("No machine is paired with this one. Pairing is under Add a "
+        + "machine on the home screen; a key can be handed to a machine "
+        + "once it is.")));
+  }
+
+  body.push(ui.heading("Remove"));
+  body.push(removeKeyCard(key, state));
+
+  return ui.sheet(key.label, ...body);
+}
+
+// agentUseCard is whether the agent offers the key (decision T), and the way
+// to change it. The button says what it would do, and the card redraws from
+// the answer rather than waiting for the poll — which cannot reach into a
+// sheet anyway.
+function agentUseCard(key, state) {
+  const root = ui.card(null);
+
+  const draw = (offered) => {
+    const change = el("button", null,
+      offered ? "Stop offering it" : "Offer it to the agent");
+    const said = ui.note("");
+
+    said.hidden = true;
+
+    change.onclick = () => {
+      change.disabled = true;
+
+      bridge
+        .setKeyAgentUse(key.fingerprint, !offered)
+        .then((now) => {
+          state.refresh();
+          draw(Boolean(now && now.agentUse));
+        })
+        .catch((error) => {
+          change.disabled = false;
+          said.textContent = error.message;
+          said.hidden = false;
+        });
+    };
+
+    root.replaceChildren(
+      el("div", "row-title", offered
+        ? "Offered to the agent"
+        : "Not offered to the agent"),
+      ui.note(offered
+        ? "ssh tries it, in the order the agent lists keys. A key that is "
+          + "only ever used from one host, or only for signing commits, can "
+          + "be taken out of the list so logins elsewhere stop offering it."
+        : "ssh does not try it. It still signs when asked for by name, and "
+          + "a paired machine that borrows it still can."),
+      append(el("div", "card-actions"), change),
+      said);
+  };
+
+  draw(Boolean(key.agentUse));
+
+  return root;
+}
+
+// sendKeyCard hands a portable key to a paired machine (decision S), and asks
+// for the store passphrase again before it does.
+//
+// The passphrase was typed into this window once already, to unlock the
+// store, and asking for it a second time is deliberate: unlocking says the
+// store may be used from here, and sending is the one thing done from here
+// that cannot be taken back. The daemon checks it — a window that decided for
+// itself would be a window anybody could replace with one that always said
+// yes. Then a second press, for the same reason removing takes one: the first
+// press turns the button into the sentence it would carry out.
+function sendKeyCard(key, peers, state) {
+  const choose = el("label", "field");
+  const select = document.createElement("select");
+
+  for (const peer of peers) {
+    const option = document.createElement("option");
+
+    option.value = peer.fingerprint;
+    option.textContent = peer.name
+      + (peer.dialable ? "" : " — not reachable now");
+    select.append(option);
+  }
+
+  append(choose, el("span", "field-label", "Machine"), select);
+
+  const passphrase = field("Store passphrase to confirm", "", "password");
+  const send = el("button", "danger", "Hand the key over");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  let asked = false;
+
+  const chosen = () =>
+    peers.find((peer) => peer.fingerprint === select.value) || peers[0];
+
+  // Changing the machine after the first press is a new question.
+  select.onchange = () => {
+    asked = false;
+    send.textContent = "Hand the key over";
+    said.hidden = true;
+  };
+
+  send.onclick = () => {
+    const peer = chosen();
+
+    if (!passphrase.input.value) {
+      said.textContent = "The store passphrase is needed to confirm this.";
+      said.hidden = false;
+      passphrase.input.focus();
+
+      return;
+    }
+
+    if (!asked) {
+      asked = true;
+      send.textContent = "Send " + key.label + " to " + peer.name
+        + " — this cannot be undone";
+      said.textContent = "Press again to send it. The key will exist on both "
+        + "machines, and the only way back is to rotate it everywhere it is "
+        + "known, exactly as if it had leaked.";
+      said.hidden = false;
+
+      return;
+    }
+
+    send.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .sendKey(key.fingerprint, peer.fingerprint, passphrase.input.value)
+      .then((sent) => {
+        passphrase.input.value = "";
+        send.textContent = "Sent to " + ((sent && sent.peer) || peer.name);
+        said.textContent = "It is waiting to be accepted there. A machine "
+          + "that could not be reached keeps it queued and gets it when it "
+          + "is next around.";
+        said.hidden = false;
+        state.refresh();
+      })
+      .catch((error) => {
+        asked = false;
+        send.disabled = false;
+        send.textContent = "Hand the key over";
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    ui.note("The private half is copied to that machine, where somebody has "
+      + "to accept it before it is a key there. Afterwards it exists on both "
+      + "and nothing can take it back. A key in a secure element cannot be "
+      + "sent at all, and the daemon says so."),
+    choose,
+    passphrase.root,
+    append(el("div", "card-actions"), send),
+    said);
+}
+
+// removeKeyCard forgets a key, and asks twice before it does.
+//
+// Twice for the reason revoking a pairing does (§12): the store forgets it,
+// every agent stops offering it and every paired machine that borrowed it loses
+// it, and the public half is still in authorized_keys files and on GitHub,
+// where it now names nothing. The second press is what a stray click cannot
+// produce.
+function removeKeyCard(key, state) {
+  const remove = el("button", "danger", "Remove this key");
+  const sure = ui.note("");
+
+  sure.hidden = true;
+
+  let asked = false;
+
+  remove.onclick = () => {
+    if (!asked) {
+      asked = true;
+      remove.textContent = "Forget " + key.label + " — this cannot be undone";
+      sure.textContent = "Press again to remove it. Nothing here keeps a "
+        + "copy; a key that is still wanted somewhere has to be handed to "
+        + "that machine first.";
+      sure.hidden = false;
+
+      return;
+    }
+
+    remove.disabled = true;
+
+    bridge
+      .removeKey(key.fingerprint)
+      .then(() => {
+        state.refresh();
+        // The sheet was about a key that no longer exists.
+        remove.closest("dialog").close();
+      })
+      .catch((error) => {
+        remove.disabled = false;
+        sure.textContent = error.message;
+        sure.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    ui.note("Removing takes the key out of the daemon's store. Every agent "
+      + "stops offering it and every paired machine that borrowed it loses "
+      + "it; the public half stays wherever it was put and names nothing."),
+    append(el("div", "card-actions"), remove),
+    sure);
+}
+
 // newKeySheet makes a key in the daemon's store, behind the + in the title bar
 // (decision AF).
 //
@@ -841,6 +1102,283 @@ function signTimeoutSheet(state, settings) {
 
   refresh();
   clock.focus();
+}
+
+// unlockAtLoginCard is whether the store opens from the platform keychain at
+// login (decision I), and the way to change it.
+//
+// It is a fact with a button, like the signing budget, and the button says
+// what it costs before doing it: enrolling copies the key that opens the store
+// into the login keychain, so anybody logged in as this user has an unsealed
+// store without typing anything. The passphrase stays either way — the
+// keychain is enrolled beside it, never instead of it — and the card says
+// whether that is still true, since a screen that could not would not be one
+// to trust with the first fact.
+function unlockAtLoginCard(state, keyring) {
+  const change = el("button", null,
+    keyring.enrolled ? "Stop unlocking at login" : "Unlock at login");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  change.onclick = () => {
+    change.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .setUnlockAtLogin(!keyring.enrolled)
+      .then(() => state.refresh())
+      .catch((error) => {
+        change.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    el("div", "row-title", keyring.enrolled
+      ? "Unlocks from the keychain at login"
+      : "Asks for the passphrase after every restart"),
+    ui.note(keyring.enrolled
+      ? "The key that opens the store is in the login keychain, so the daemon "
+        + "comes up unsealed with nothing typed. Anybody logged in as this "
+        + "user has that; the passphrase still works beside it."
+      : "Enrolling copies the key that opens the store into the login "
+        + "keychain. The daemon then comes up unsealed with nothing typed — "
+        + "and so does anybody logged in as this user. The passphrase keeps "
+        + "working beside it."),
+    keyring.passphraseWrapping
+      ? null
+      : ui.warning("The passphrase no longer opens this store, which should "
+        + "not be possible. Do not unenrol the keychain until it does."),
+    append(el("div", "card-actions"), change),
+    said);
+}
+
+// autoPublishCard is whether projects this instance asks for signatures in are
+// published to its approvers automatically (decision Q).
+function autoPublishCard(state, publishing) {
+  const change = el("button", null,
+    publishing.autoPublish ? "Stop publishing automatically" : "Publish automatically");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  change.onclick = () => {
+    change.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .setAutoPublish(!publishing.autoPublish)
+      .then(() => state.refresh())
+      .catch((error) => {
+        change.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    el("div", "row-title", publishing.autoPublish
+      ? "Projects are published to approvers automatically"
+      : "Nothing is published unless somebody says so"),
+    ui.note("A machine that asks another to approve a commit can let that "
+      + "machine read the repository's documentation, so the person "
+      + "approving knows what they are signing. Automatically means every "
+      + "project this machine asks for a signature in; off means only what "
+      + "`ladulas projects publish` names."),
+    append(el("div", "card-actions"), change),
+    said);
+}
+
+// listenCard is where the peer channel listens (§8), and the way to change it
+// (§14).
+//
+// It draws what `ladulas listen` prints: what is bound, what a peer is told to
+// dial — which is not the same list, by design — and every address the
+// automatic policy passed over with the reason it did (decision AH). The
+// passed-over list is the half that answers the question somebody comes here
+// with, which is "why can't my other machine reach this one": an address that
+// was skipped for being on a container bridge, or public, is an address they
+// can choose to bind anyway.
+function listenCard(state, listen) {
+  const change = el("button", null, "Change");
+
+  change.onclick = () => listenSheet(state, listen);
+
+  const rows = [];
+
+  rows.push({ label: "Setting", value: listen.spec });
+
+  if (listen.storedSpec && listen.source !== "stored") {
+    rows.push({
+      label: "Stored",
+      value: listen.storedSpec + " — not in force; the daemon's flag wins",
+    });
+  }
+
+  if (listen.allowPublic) {
+    rows.push({ label: "Public", value: "allowed" });
+  }
+
+  if (listen.chose) {
+    rows.push({ label: "Chose", value: listen.chose });
+  }
+
+  for (const [index, address] of (listen.bound || []).entries()) {
+    rows.push({ label: index ? "" : "Bound", value: address, mono: true });
+  }
+
+  for (const [index, address] of (listen.advertised || []).entries()) {
+    rows.push({ label: index ? "" : "Peers dial", value: address, mono: true });
+  }
+
+  if (listen.detail) {
+    rows.push({ label: "Not bound", value: listen.detail });
+  }
+
+  const card = ui.card(null,
+    el("div", "row-title", listenTitle(listen)),
+    ui.note(listen.sourceNote),
+    facts(rows));
+
+  const skipped = listen.skipped || [];
+
+  if (skipped.length) {
+    card.append(ui.note("Passed over:"));
+
+    for (const one of skipped) {
+      card.append(ui.row("passed-over", null,
+        ui.stack(
+          el("div", "row-title mono", one.address),
+          ui.sub(one.interface
+            ? one.interface + " — " + one.reason
+            : one.reason))));
+    }
+  }
+
+  card.append(append(el("div", "card-actions"), change));
+
+  return card;
+}
+
+function listenTitle(listen) {
+  if (listen.detail && !(listen.bound || []).length) {
+    return "Not listening — " + listen.detail;
+  }
+
+  const count = (listen.bound || []).length;
+
+  if (!count) {
+    return "Not listening";
+  }
+
+  return "Listening on " + count + (count === 1 ? " address" : " addresses");
+}
+
+// listenSheet is the form: the automatic policy, off, or addresses typed in,
+// and the way to forget a stored setting, which is not the same as asking for
+// the automatic policy — a stored `auto` outranks a daemon started with no
+// flag, while a cleared setting leaves the decision where it was.
+//
+// The change takes effect at once: the daemon rebinds, and if the new
+// addresses cannot be bound the old ones come back and the daemon's own
+// sentence says so — which is why the sentence is shown rather than the sheet
+// simply closing on success. A bind that fell back *is* a success as far as
+// the state can tell.
+function listenSheet(state, listen) {
+  const addresses = field("Addresses",
+    "0.0.0.0:7443, or a host, a host:port, or a bare port", "text");
+  const isPublic = document.createElement("input");
+  const publicRow = el("label", "check");
+
+  isPublic.type = "checkbox";
+  isPublic.checked = Boolean(listen.allowPublic);
+  append(publicRow, isPublic,
+    el("span", null, "Allow an address reachable from outside the local "
+      + "network"));
+
+  if (listen.source === "stored" && listen.tier === "explicit") {
+    addresses.input.value = listen.spec;
+  }
+
+  const auto = el("button", null, "Use the automatic policy");
+  const off = el("button", null, "Switch peering off");
+  const set = el("button", "primary", "Listen on these addresses");
+  const clear = el("button", null, "Forget the stored setting");
+  const said = ui.note("");
+
+  said.hidden = true;
+
+  const sheet = ui.sheet("Where the peer channel listens",
+    ui.note("The automatic policy binds the tailnet and the local network "
+      + "together, whichever the machine has, and passes over container and "
+      + "virtual machine interfaces. Addresses typed here are bound instead, "
+      + "and remembered across restarts. A --peer-listen flag on the daemon "
+      + "still wins, and the screen says so when it does."),
+    append(el("div", "card-actions"), auto, off),
+    addresses.root,
+    publicRow,
+    append(el("div", "card-actions"), set),
+    ui.heading("The stored setting"),
+    ui.note(listen.storedSpec
+      ? "Stored: " + listen.storedSpec + ". Forgetting it leaves the decision "
+        + "to the daemon's flag, or to the policy when there is none."
+      : "Nothing is stored; the daemon's flag or the policy decides."),
+    append(el("div", "card-actions"), clear),
+    said);
+
+  const buttons = [auto, off, set, clear];
+
+  const apply = (promise) => {
+    for (const button of buttons) {
+      button.disabled = true;
+    }
+
+    said.hidden = true;
+
+    promise
+      .then((answer) => {
+        // The daemon's sentence is the result, and it stays on screen: it is
+        // the one place "the previous addresses are back" is said.
+        for (const button of buttons) {
+          button.disabled = false;
+        }
+
+        said.textContent = capitalise(answer.detail || "done") + ".";
+        said.hidden = false;
+        state.refresh();
+      })
+      .catch((error) => {
+        for (const button of buttons) {
+          button.disabled = false;
+        }
+
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  auto.onclick = () => apply(bridge.setListen("auto", false));
+  off.onclick = () => apply(bridge.setListen("off", false));
+  clear.onclick = () => apply(bridge.clearListen());
+  set.onclick = () => {
+    const spec = addresses.input.value.trim();
+
+    if (!spec) {
+      said.textContent = "Type an address, or use one of the buttons above.";
+      said.hidden = false;
+      addresses.input.focus();
+
+      return;
+    }
+
+    apply(bridge.setListen(spec, isPublic.checked));
+  };
+
+  addresses.input.focus();
+
+  return sheet;
 }
 
 // field is a labelled input. The label is a real one rather than a placeholder:
@@ -1147,8 +1685,8 @@ function revokeCard(peer, state, done) {
   return ui.card(null,
     ui.note("Revoking takes back everything this pairing granted: the "
       + "direction, any keys it lends, any promise made under it, and the "
-      + "connection it is holding. What it is for cannot be changed — pairing "
-      + "again is how that is done."),
+      + "connection it is holding. What this side lets it do is changed "
+      + "without revoking, with `ladulas peers allow`."),
     append(el("div", "card-actions"), revoke),
     sure);
 }
@@ -1213,6 +1751,15 @@ export function settings(state) {
       + "key from memory: the agent offers nothing until it is unlocked."),
     state.lockControls()));
 
+  if (instance.unlockAtLogin) {
+    body.push(unlockAtLoginCard(state, instance.unlockAtLogin));
+  }
+
+  if (instance.listen) {
+    body.push(ui.heading("The peer channel"));
+    body.push(listenCard(state, instance.listen));
+  }
+
   const locations = instance.locations || [];
 
   if (locations.length) {
@@ -1223,6 +1770,11 @@ export function settings(state) {
   if (instance.settings) {
     body.push(ui.heading("Approvals"));
     body.push(signTimeoutCard(state, instance.settings));
+  }
+
+  if (instance.publishing) {
+    body.push(ui.heading("Documents"));
+    body.push(autoPublishCard(state, instance.publishing));
   }
 
   body.push(ui.heading("The daemon"));

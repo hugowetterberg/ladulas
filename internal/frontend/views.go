@@ -86,19 +86,16 @@ func locations(status *ladulasv1.StatusResponse) []bridge.Location {
 		return nil
 	}
 
-	out := []bridge.Location{
+	// The peer channel's addresses are not here: they are the listen
+	// view's, which says what was bound, what peers are told to dial and
+	// what was passed over, and lets it be changed.
+	return []bridge.Location{
 		{Label: "Agent socket", Path: where.GetAgentSocket()},
 		{Label: "Signing socket", Path: where.GetControlSocket()},
 		{Label: "Policy", Path: where.GetPolicy()},
 		{Label: "Audit log", Path: where.GetAuditLog()},
 		{Label: "Published docs", Path: where.GetProjectsDir()},
 	}
-
-	for _, address := range status.GetListenAddresses() {
-		out = append(out, bridge.Location{Label: "Peer channel", Path: address})
-	}
-
-	return out
 }
 
 func (f *Frontend) keys() []*ladulasv1.KeyRef {
@@ -116,14 +113,7 @@ func (f *Frontend) keys() []*ladulasv1.KeyRef {
 	out := make([]*ladulasv1.KeyRef, 0, len(resp.Msg.GetKeys()))
 
 	for _, key := range resp.Msg.GetKeys() {
-		out = append(out, &ladulasv1.KeyRef{
-			Fingerprint: key.GetFingerprint(),
-			Algorithm:   key.GetAlgorithm(),
-			PublicKey:   key.GetPublicKey(),
-			Comment:     key.GetComment(),
-			Label:       key.GetLabel(),
-			AgentUse:    key.AgentUse,
-		})
+		out = append(out, keyRef(key))
 	}
 
 	return out

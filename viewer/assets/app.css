@@ -1455,7 +1455,7 @@ button.danger:hover:not(:disabled) {
   margin-bottom: 3px;
 }
 
-.field input {
+.field input, .field select {
   font: inherit;
   width: 100%;
   padding: 7px 9px;
@@ -1465,7 +1465,21 @@ button.danger:hover:not(:disabled) {
   color: var(--text);
 }
 
-.field input:focus { outline: 2px solid var(--border-strong); }
+.field input:focus, .field select:focus {
+  outline: 2px solid var(--border-strong);
+}
+
+/* A checkbox with its sentence beside it, sized like a field label. */
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 9px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.check input { margin: 0; flex: none; }
 
 button.primary {
   border-color: var(--accent);

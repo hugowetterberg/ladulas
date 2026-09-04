@@ -225,6 +225,33 @@ type Options struct {
 	GenerateKey func(
 		ctx context.Context, label, comment string,
 	) (*ladulasv1.KeyRef, error)
+	// RemoveKey forgets a key the instance holds, by label or fingerprint.
+	// Optional and separate from Keys, and it is the one thing on the Keys
+	// screen that cannot be undone by doing it again: what leaves the store
+	// leaves it, and the surface asks twice for the reason it does before
+	// revoking a pairing (§12).
+	RemoveKey func(ctx context.Context, key string) error
+	// SetKeyAgentUse says whether a key is in the agent's identity list
+	// (decision T). Optional; without it a surface draws the fact and no way
+	// to change it. The key handed back is the key as it now is, so a surface
+	// redraws from the answer rather than polling to see whether its write
+	// took.
+	SetKeyAgentUse func(
+		ctx context.Context, key string, use bool,
+	) (*ladulasv1.KeyRef, error)
+	// SendKey hands a portable key to a paired machine (decision S), where
+	// somebody has to accept it before it is a key there. Optional.
+	//
+	// It takes the store passphrase because the daemon demands it: sending
+	// cannot be undone, and the one thing that distinguishes the owner sitting
+	// at this window from anybody who found it unlocked is knowing the
+	// passphrase. The buffer is the host's to wipe once the daemon has had it.
+	// A key that cannot be handed over — one in a secure element — is refused
+	// by the instance, not filtered out here: the answer belongs to the store
+	// that holds the key.
+	SendKey func(
+		ctx context.Context, key, peer string, passphrase []byte,
+	) (peerName string, err error)
 	// Borrowed lists the keys paired instances offer, reachable or not (§10,
 	// decision N). Optional: an instance with peering off borrows nothing.
 	Borrowed func() []*ladulasv1.BorrowedKeyStatus
@@ -342,6 +369,33 @@ type Options struct {
 	// host that can read the policy and not write it.
 	Settings       func() (SettingsView, error)
 	SetSignTimeout func(d time.Duration) error
+	// Listen is where the peer channel listens and SetListen changes it (§8,
+	// §14). Both optional and offered together, the way Settings and
+	// SetSignTimeout are. A host whose instance has no peer channel — a phone
+	// — leaves both unset and the screen draws no section.
+	//
+	// SetListen takes the specification `ladulas listen set` takes: `auto`,
+	// `off`, or a comma-separated list of addresses, with clear meaning forget
+	// the stored setting — which is not the same as `auto`, and is a flag
+	// rather than an empty spec so that a caller cannot clear one by leaving a
+	// field out. The instance rebinds at once and reports what happened,
+	// including that the previous addresses are back when the new ones could
+	// not be bound.
+	Listen    func() (*ladulasv1.PeerListenState, error)
+	SetListen func(
+		ctx context.Context, spec string, allowPublic, clear bool,
+	) (*ladulasv1.SetPeerListenResponse, error)
+	// AutoPublish is whether projects this instance asks for signatures in are
+	// published to its approvers automatically, and SetAutoPublish changes it
+	// (decision Q). Both optional and offered together.
+	AutoPublish    func() (bool, error)
+	SetAutoPublish func(ctx context.Context, enabled bool) error
+	// UnlockAtLogin is whether this instance unlocks from the platform keychain
+	// at login, and SetUnlockAtLogin enrols it or forgets it (decision I). Both
+	// optional and offered together. Enrolling copies the data encryption key
+	// into the keychain, so it is the instance's to do, not the host's.
+	UnlockAtLogin    func() (UnlockAtLoginView, error)
+	SetUnlockAtLogin func(ctx context.Context, enrol bool) error
 	// Presenter is the host. Without one the session answers nothing, which is
 	// the right behaviour for a host that has not started yet.
 	Presenter Presenter
@@ -845,6 +899,11 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/reload", s.handleReload)
 	mux.HandleFunc("GET /api/v1/settings", s.handleSettings)
 	mux.HandleFunc("POST /api/v1/settings/sign-timeout", s.handleSetSignTimeout)
+	mux.HandleFunc("GET /api/v1/settings/listen", s.handleListen)
+	mux.HandleFunc("POST /api/v1/settings/listen", s.handleSetListen)
+	mux.HandleFunc("POST /api/v1/settings/auto-publish", s.handleSetAutoPublish)
+	mux.HandleFunc("POST /api/v1/settings/unlock-at-login",
+		s.handleSetUnlockAtLogin)
 	mux.HandleFunc("GET /api/v1/lock", s.handleLockState)
 	mux.HandleFunc("POST /api/v1/lock/unlock", s.handleUnlock)
 	mux.HandleFunc("POST /api/v1/lock/lock", s.handleLock)
@@ -861,6 +920,11 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
 	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
 	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
+	// The key is named in the body for the same reason the peer is: a
+	// fingerprint carries slashes.
+	mux.HandleFunc("POST /api/v1/keys/remove", s.handleRemoveKey)
+	mux.HandleFunc("POST /api/v1/keys/agent", s.handleSetKeyAgentUse)
+	mux.HandleFunc("POST /api/v1/keys/send", s.handleSendKey)
 	mux.HandleFunc("POST /api/v1/keys/offers/{id}/answer", s.handleAnswerKeyOffer)
 	mux.HandleFunc("POST /api/v1/endorsements/retract", s.handleRetractEndorsement)
 	// {session} is last of the /pairings/ routes by convention rather than by
@@ -1078,18 +1142,41 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	// The other three settings are left out rather than reported when the
+	// instance cannot answer for them: a sealed store has no publications and
+	// no keychain to speak of, and a screen drawn over an error for every
+	// section would be an error screen. What is bound is answerable sealed,
+	// so a failure there is worth a line in the log.
+	if s.opts.Listen != nil {
+		state, err := s.opts.Listen()
+		if err != nil {
+			s.log.Debug("could not read where the peer channel listens",
+				"error", err.Error())
+		} else {
+			listen := listenView(state)
+			view.Listen = &listen
+		}
+	}
+
+	if s.opts.AutoPublish != nil {
+		if enabled, err := s.opts.AutoPublish(); err == nil {
+			view.Publishing = &PublishingView{AutoPublish: enabled}
+		}
+	}
+
+	if s.opts.UnlockAtLogin != nil {
+		if keyring, err := s.opts.UnlockAtLogin(); err == nil {
+			view.UnlockAtLogin = &keyring
+		}
+	}
+
 	for _, location := range s.locationList() {
 		view.Locations = append(view.Locations, LocationView(location))
 	}
 
 	if s.opts.Keys != nil {
 		for _, key := range s.opts.Keys() {
-			view.Keys = append(view.Keys, KeyView{
-				Label:       key.GetLabel(),
-				Fingerprint: key.GetFingerprint(),
-				Algorithm:   key.GetAlgorithm(),
-				Comment:     key.GetComment(),
-			})
+			view.Keys = append(view.Keys, storedKeyView(key))
 		}
 	}
 
@@ -1222,6 +1309,166 @@ func (s *Session) handleSetSignTimeout(w http.ResponseWriter, r *http.Request) {
 	// The answer is what a read would now say, so a screen redraws from the
 	// reply rather than polling to find out whether its own write took.
 	s.handleSettings(w, r)
+}
+
+// handleListen is where the peer channel listens (§8), for a screen that wants
+// it fresh after a change rather than on the next poll.
+func (s *Session) handleListen(w http.ResponseWriter, _ *http.Request) {
+	if s.opts.Listen == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host has no peer channel to show")
+
+		return
+	}
+
+	state, err := s.opts.Listen()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, listenView(state))
+}
+
+// handleSetListen changes where the peer channel listens, or clears the stored
+// setting (§14).
+//
+// The body is either clear or a specification, never both and never neither:
+// an empty specification with clear unset is a request that says nothing, and
+// is refused rather than read as one of the two things it could have meant.
+// The answer is the state as it now is plus the daemon's sentence about what
+// happened, because a bind that failed and fell back is a success as far as
+// the state can tell and the sentence is where that shows.
+func (s *Session) handleSetListen(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetListen == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change where the peer channel listens")
+
+		return
+	}
+
+	var body struct {
+		Spec        string `json:"spec"`
+		AllowPublic bool   `json:"allowPublic"`
+		Clear       bool   `json:"clear"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the setting could not be read")
+
+		return
+	}
+
+	spec := strings.TrimSpace(body.Spec)
+
+	switch {
+	case body.Clear && spec != "":
+		writeError(w, http.StatusBadRequest,
+			"clearing the setting and giving one are two different requests")
+
+		return
+	case !body.Clear && spec == "":
+		writeError(w, http.StatusBadRequest,
+			"say where to listen: addresses, auto, or off")
+
+		return
+	}
+
+	resp, err := s.opts.SetListen(r.Context(), spec, body.AllowPublic, body.Clear)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ListenChangeView{
+		Listen: listenView(resp.GetState()),
+		Detail: resp.GetDetail(),
+	})
+}
+
+// handleSetAutoPublish turns automatic publishing on or off (decision Q). The
+// field is a pointer for the reason the signing budget's is: a missing one and
+// a deliberate off read alike in JSON.
+func (s *Session) handleSetAutoPublish(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetAutoPublish == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change what is published")
+
+		return
+	}
+
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the setting could not be read")
+
+		return
+	}
+
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether to publish automatically")
+
+		return
+	}
+
+	if err := s.opts.SetAutoPublish(r.Context(), *body.Enabled); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, PublishingView{AutoPublish: *body.Enabled})
+}
+
+// handleSetUnlockAtLogin enrols the platform keychain or forgets it (decision
+// I), and answers with what a read would now say.
+func (s *Session) handleSetUnlockAtLogin(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetUnlockAtLogin == nil || s.opts.UnlockAtLogin == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change how the store is unlocked at login")
+
+		return
+	}
+
+	var body struct {
+		Enrol *bool `json:"enrol"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the setting could not be read")
+
+		return
+	}
+
+	if body.Enrol == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether to unlock at login")
+
+		return
+	}
+
+	if err := s.opts.SetUnlockAtLogin(r.Context(), *body.Enrol); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	keyring, err := s.opts.UnlockAtLogin()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, keyring)
 }
 
 // handleRevokePeer forgets a paired machine.
@@ -1378,11 +1625,168 @@ func (s *Session) handleGenerateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, KeyView{
-		Label:       key.GetLabel(),
-		Fingerprint: key.GetFingerprint(),
-		Algorithm:   key.GetAlgorithm(),
-		Comment:     key.GetComment(),
+	writeJSON(w, http.StatusOK, storedKeyView(key))
+}
+
+// handleRemoveKey forgets a key the instance holds.
+//
+// It is the Keys screen's one destructive action and the window asks twice
+// before it gets here (§12), the way it does before revoking a pairing: a key
+// that leaves the store is gone from every agent and every paired machine that
+// borrowed it, and the public half is still in authorized_keys files and on
+// GitHub, where it now names nothing.
+func (s *Session) handleRemoveKey(w http.ResponseWriter, r *http.Request) {
+	if s.opts.RemoveKey == nil {
+		writeError(w, http.StatusNotImplemented, "this host cannot remove a key")
+
+		return
+	}
+
+	var body struct {
+		Key string `json:"key"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Key) == "" {
+		writeError(w, http.StatusBadRequest, "no key to remove")
+
+		return
+	}
+
+	if err := s.opts.RemoveKey(r.Context(), body.Key); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetKeyAgentUse puts a key into the agent's identity list or takes it
+// out (decision T).
+//
+// It answers with the key as it now is, for the reason the signing budget
+// does: a screen redraws from the reply rather than polling to find out
+// whether its own write took. The field is a pointer so that a missing one is
+// refused rather than read as "take it out" — the two look alike in JSON and
+// one of them is a key nobody meant to hide.
+func (s *Session) handleSetKeyAgentUse(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetKeyAgentUse == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change what the agent offers")
+
+		return
+	}
+
+	var body struct {
+		Key      string `json:"key"`
+		AgentUse *bool  `json:"agentUse"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Key) == "" {
+		writeError(w, http.StatusBadRequest, "no key was named")
+
+		return
+	}
+
+	if body.AgentUse == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether the agent should offer the key")
+
+		return
+	}
+
+	key, err := s.opts.SetKeyAgentUse(r.Context(), body.Key, *body.AgentUse)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, storedKeyView(key))
+}
+
+// SentKeyView is what handing a key over answers with: which key went where.
+// The offer is waiting at the other end, and a peer that could not be reached
+// keeps it queued, so there is nothing to poll for here — the screen says the
+// key is on its way and the other machine says the rest.
+type SentKeyView struct {
+	Fingerprint string `json:"fingerprint"`
+	Peer        string `json:"peer"`
+}
+
+// handleSendKey hands a portable key to a paired machine (decision S).
+//
+// The passphrase arrives in the body the way the unlock panel's does, and is
+// wiped once the host has had it (§14). It is asked for again although the
+// window already typed it to unlock the store, because the two are not the
+// same question: unlocking says the store may be used from this window, and
+// sending is the one thing done from it that cannot be taken back. The daemon
+// checks it, not this — a client that decided for itself whether the right
+// passphrase was typed would be a client anybody could replace with one that
+// always said yes.
+func (s *Session) handleSendKey(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SendKey == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot hand a key to another machine")
+
+		return
+	}
+
+	var body struct {
+		Key        string `json:"key"`
+		Peer       string `json:"peer"`
+		Passphrase []byte `json:"passphrase"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	defer wipe(body.Passphrase)
+
+	switch {
+	case strings.TrimSpace(body.Key) == "":
+		writeError(w, http.StatusBadRequest, "no key to send")
+
+		return
+	case strings.TrimSpace(body.Peer) == "":
+		writeError(w, http.StatusBadRequest, "no machine to send it to")
+
+		return
+	case len(body.Passphrase) == 0:
+		writeError(w, http.StatusBadRequest,
+			"sending a key needs the store passphrase")
+
+		return
+	}
+
+	peer, err := s.opts.SendKey(r.Context(), body.Key, body.Peer, body.Passphrase)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, SentKeyView{
+		Fingerprint: body.Key,
+		Peer:        peer,
 	})
 }
 

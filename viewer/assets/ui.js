@@ -354,6 +354,31 @@ export function empty(what, why) {
 
 // note is a line of explanation under something, in the core's words where there
 // are any.
+// copyable is a string somebody has to get onto another machine — a pairing
+// code, a public key — selectable, and with a button for the case where the
+// window is not where they are typing.
+export function copyable(text) {
+  const root = el("div", "copyable");
+  const button = el("button", "small", "Copy");
+
+  button.onclick = () => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        button.textContent = "Copied";
+      },
+      () => {
+        // Some hosts have no clipboard to write to. The text is selectable
+        // either way, which is what the button was a shortcut for.
+        button.textContent = "Select it instead";
+      },
+    );
+  };
+
+  append(root, el("code", "mono", text), button);
+
+  return root;
+}
+
 export function note(text) {
   return el("p", "hint", text);
 }
