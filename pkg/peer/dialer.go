@@ -168,3 +168,52 @@ func (n *Node) closeDialers() {
 		held.close()
 	}
 }
+
+// CloseIdle drops every pooled connection to every peer and keeps everything
+// else: the clients, the remembered addresses, the links.
+//
+// It is for the moment a host knows its network has changed under it and the
+// pool does not. A phone coming back to the foreground is the case it was
+// written for: the connection that carried an approval a few minutes ago is
+// still in the pool, iOS has since suspended the process and the tailnet has
+// moved on, and the first request written to it fails on the read — and HTTP/2
+// multiplexes, so the listing, the poll and the sync manifest all fail on it
+// together, every time the app comes back. Waiting for IdleConnTimeout would
+// have caught the long absences and missed exactly the short ones a person
+// notices.
+//
+// The remembered address is deliberately kept: the network may have moved, but
+// the address that worked is still the best first guess, and losing it would
+// cost a race on every return. What is dropped is only the claim that the old
+// connection to it is still alive, which is the one claim known to be doubtful.
+func (n *Node) CloseIdle() {
+	n.dialMu.Lock()
+	dialers := make([]*dialer, 0, len(n.dialers))
+
+	for _, held := range n.dialers {
+		dialers = append(dialers, held)
+	}
+
+	n.dialMu.Unlock()
+
+	for _, held := range dialers {
+		held.close()
+	}
+
+	n.mu.Lock()
+	links := make([]*link, 0, len(n.links))
+
+	for _, existing := range n.links {
+		links = append(links, existing)
+	}
+
+	n.mu.Unlock()
+
+	// A link's presence stream is a live request, not an idle connection, so
+	// this leaves a stream that is still up alone and only drops the pooled
+	// connection beside it. A stream that died with the network is found by
+	// the watch loop's own read failing, which is what its backoff is for.
+	for _, existing := range links {
+		existing.client.CloseIdle()
+	}
+}

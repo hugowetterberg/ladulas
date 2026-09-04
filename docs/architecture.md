@@ -979,6 +979,30 @@ genuinely moved is found inside the minute the backoff ceiling promises.
 The call paths do not ration it — a signature somebody is waiting for tries
 everything it has, because it is not on a timer and there is no next round.
 
+**A pooled connection is a claim about the network, and a host that knows the
+network changed says so.** A call with no link keeps one client per peer and
+remembers the address that reached it, so the second page costs no handshake
+and no race; and the connection under that client is HTTP/2, so the listing,
+the poll and the sync manifest all ride on it together. That is also how it
+fails: a phone that was woken for an approval opened a connection to the
+address that won the race, iOS suspended the process, and four minutes later
+the app came back and wrote its first request into a connection the tailnet
+had long since forgotten — every project row on the screen said "could not be
+reached" with the same `read tcp` error, while the peer pill beside them said
+"reached", because the fresh probe found the machine that the stale
+connection could not. Two things answer it. `transport.IdleConnTimeout`
+(90 s) is the general rule: a connection nothing has used for that long is
+not reused, which catches the long absences — a lid closed overnight, a
+laptop moved between networks — on every kind of host. `Node.CloseIdle` is
+for the host that knows better than a timer: a phone coming to the
+foreground calls it before anything else is dialled, and it drops every
+pooled connection while keeping the client, the links and the remembered
+address, because the network moving says nothing against the address that
+worked and everything against the socket that was open to it. The link's
+presence stream is left alone — it is a live request, not an idle
+connection, and one that died with the network is found by its own read
+failing, which is what the backoff is for.
+
 The protocol (sketch — to be specified precisely in a follow-up):
 
 * `Pair` — pairing handshake, direction declaration.

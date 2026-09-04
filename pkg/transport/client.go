@@ -95,6 +95,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 				Timeout: DialTimeout,
 			}).DialContext,
 			TLSHandshakeTimeout: DialTimeout,
+			IdleConnTimeout:     IdleConnTimeout,
 			// A custom TLS configuration switches HTTP/2 off unless it is asked
 			// for, and the approval stream needs it (see cert.go).
 			ForceAttemptHTTP2: true,
@@ -114,6 +115,20 @@ func NewClient(opts ClientOptions) (*Client, error) {
 // timeout to admit defeat would turn a peer being switched off into a minute
 // and a half of nothing happening.
 const DialTimeout = 10 * time.Second
+
+// IdleConnTimeout is how long a connection nothing is using stays in the pool.
+//
+// A pooled connection is a claim that the network it was opened on is still
+// there, and the claim goes stale without anything on this side noticing: a
+// phone suspended for a few minutes, a laptop lid closed, a tailnet route that
+// moved. The first request on such a connection is written into the void and
+// fails on the read, and HTTP/2 multiplexes, so it is every call in flight that
+// fails together, not one. Ninety seconds is longer than any pause between two
+// pages somebody is reading and shorter than the pause that means they have
+// put the thing down. It is not the whole answer for a phone — a foreground
+// that arrives inside the window still reaches the stale connection first —
+// which is what peer.Node.CloseIdle is for.
+const IdleConnTimeout = 90 * time.Second
 
 // Handshake connects, authenticates, and hangs up.
 //
