@@ -760,7 +760,8 @@ be told is told through the environment.
 | `LADULAS_SSH_KEYGEN` | `ssh-keygen` on `$PATH` | The program the command lines this one does not answer are handed to |
 
 The hour is the instance's setting rather than this program's: `ladulas policy
-show` prints it, the desktop's Settings screen changes it, and it lands in
+sign-timeout` prints it and `ladulas policy sign-timeout 2h` changes it, the
+desktop's Settings screen does both, and it lands in
 `policy.json` as `signTimeout` (architecture §9, decision AJ). It is meant to
 be long — a request that gives up costs the commit, and the person answering
 may be in another room. SSH authentication keeps its own much shorter budget,

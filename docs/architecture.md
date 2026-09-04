@@ -1166,6 +1166,7 @@ out is a bucket rather than an overflow ([observability.md](observability.md)).
 
 **The budget is the one thing in the policy a surface may change.**
 `Settings` and `SetSignTimeout` on the control socket read it and write it;
+`ladulas policy sign-timeout` is the terminal on the same two calls, and
 the desktop window's Settings screen and any other host draw it from the instance view,
 with the bounds the instance will accept — at least 30 s, at most a day —
 the way a grant offer carries its `max_ttl` (decision V). Writing it goes
@@ -3160,7 +3161,11 @@ The surface (existing pieces from M2/M3 plus planned):
   ask a person, and the process holding the wrapping is the only thing that
   can say whether the answer was right. Refusing keeps nothing, so there is
   no list of keys this instance turned down;
-* grants — list, revoke; policy — show, path;
+* grants — list, extend, revoke; policy — show, path, and `sign-timeout
+  [duration]`, which reads the budget in force from the daemon and, given a
+  length, writes it through the daemon the way the window does (§9). It was
+  the one setting a window could change and a terminal could not, on the
+  surface a box reached over SSH has;
 * tui — attach as an approver and answer requests in this terminal
   (decision AK, §12). It is a client of a running daemon rather than a
   command that does something and exits, and it is on this surface rather

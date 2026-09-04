@@ -732,8 +732,79 @@ func policyCommand() *cli.Command {
 					return nil
 				},
 			},
+			{
+				Name:      "sign-timeout",
+				Usage:     "show or set how long a signing request waits for an answer",
+				ArgsUsage: "[duration]",
+				Description: "With no argument it shows the budget in force, " +
+					"which is the running daemon's and not necessarily the " +
+					"file's. With one, as in 45m or 2h, it writes the budget " +
+					"through the daemon and puts it into effect at once, with " +
+					"no reload and no restart (decision AJ). The daemon " +
+					"accepts between 30s and 24h from here; a hand-edited " +
+					"policy is not bounded. Requests already waiting keep the " +
+					"length they started with.",
+				Action: runPolicySignTimeout,
+			},
 		},
 	}
+}
+
+// runPolicySignTimeout is the terminal's half of the one policy setting a
+// surface may change (§9). It goes through the daemon rather than editing the
+// file, for the reason the window does: the daemon is the only process that
+// touches the document (decision L), and it re-reads the file before writing
+// so a hand edit waiting for a reload is adopted rather than reverted.
+func runPolicySignTimeout(ctx context.Context, cmd *cli.Command) error {
+	spell := cmd.Args().First()
+
+	var (
+		resp *connect.Response[ladulasv1.SettingsResponse]
+		err  error
+	)
+
+	if spell == "" {
+		resp, err = control(cmd).Control().Settings(ctx,
+			connect.NewRequest(&ladulasv1.SettingsRequest{}))
+	} else {
+		budget, parseErr := time.ParseDuration(spell)
+		if parseErr != nil {
+			return cli.Exit(fmt.Sprintf(
+				"%q is not a length of time. Try 15m, or 2h.", spell), 1)
+		}
+
+		resp, err = control(cmd).Control().SetSignTimeout(ctx,
+			connect.NewRequest(&ladulasv1.SetSignTimeoutRequest{
+				SignTimeout: durationpb.New(budget),
+			}))
+	}
+
+	if err != nil {
+		return requireInstance(cmd, err)
+	}
+
+	settings := resp.Msg
+
+	fmt.Printf("Signing requests wait up to %s",
+		approval.HumanDuration(settings.GetSignTimeout().AsDuration()))
+
+	if settings.GetSignTimeout().AsDuration() ==
+		settings.GetDefaultSignTimeout().AsDuration() {
+		fmt.Print(" (the default)")
+	}
+
+	fmt.Println()
+
+	if spell != "" {
+		fmt.Println("Requests already waiting keep the length they started with.")
+	}
+
+	fmt.Printf("Written to %s; %s to %s may be set from here.\n",
+		settings.GetPolicyPath(),
+		approval.HumanDuration(settings.GetMinSignTimeout().AsDuration()),
+		approval.HumanDuration(settings.GetMaxSignTimeout().AsDuration()))
+
+	return nil
 }
 
 func actionName(action ladulasv1.Action) string {
