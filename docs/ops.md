@@ -450,6 +450,31 @@ exactly what this record becomes, plus the one address this machine is
 actually reaching it on. `ladulas peers forget` and pairing again is no
 longer needed for this.
 
+### A peer on the same LAN cannot reach this machine on the address it advertises
+
+**Signal:** a peer shows this instance as unreachable while `ladulas listen`
+here says the channel is bound and advertising a LAN address, other peers on
+the tailnet reach it fine, and a plain `nc -vz <lan-address> 7373` from the
+peer's machine says `No route to host` or `Connection refused` at once
+rather than timing out.
+**Action:** the host firewall. On a Fedora or Arch box running firewalld
+the LAN interface sits in a zone (`home`, `public`) that allows ssh and
+whatever else was added by hand, and nothing adds 7373 for it:
+`sudo firewall-cmd --get-active-zones` says which zone the interface is in,
+`sudo firewall-cmd --zone=<zone> --list-all` shows the ports, and
+`sudo firewall-cmd --zone=<zone> --add-port=7373/tcp --permanent && sudo
+firewall-cmd --reload` opens it. The tailnet interface is usually in
+`trusted`, which is why the same daemon is reachable over the tailnet and
+not over the LAN. Check the other machine as well: the pairing works one
+way and then every call in the other direction fails the same way.
+
+**The daemon cannot detect this, and does not try.** Its own connection to
+its own LAN address traverses the loopback interface, which every firewall
+trusts, so a self check would pass on exactly the machine that is blocked.
+The peer sees the rejection; this machine sees nothing at all, because the
+packet never reached a socket. A daemon that says its channel is up is
+reporting a bind, not a route, and the report is honest as far as it goes.
+
 ### A pairing never completes
 
 **Signal:** `ladulas_pending_pairings` non-zero and staying there.
