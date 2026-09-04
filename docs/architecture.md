@@ -532,6 +532,28 @@ hits its cap, a publisher too old to have heard of it — because a browser
 that hides on true then shows a folder it should not rather than hiding
 every folder there is.
 
+**What is held here is drawn before anybody is asked, and says that it
+was.** A screen listing a peer's projects, or one directory of one, asks
+the bridge twice: once with `kept=1` (`kept_only` over the control
+socket), which answers from the disk and dials nobody, and then the
+ordinary way, whose answer replaces the first. Every host does this — the
+viewer bundle's peer screen and both phone shells — because the failure it
+removes was the same on all of them: the list was one call to the
+publisher, and the pages a phone had already read sat unreadable behind a
+spinner until that call came back, or for twenty seconds until it did not.
+Decision Q's whole promise is that what has been read once stays readable
+with no signal, and a screen that would not draw it without a signal was
+breaking the promise at the last step. The rows drawn first carry
+`unasked`, and their sentence is "Read from *X* before. *N* pages readable
+with no signal." — not "*X* could not be reached", because nothing has
+been tried, and not the live wording either, because nothing has answered.
+A phone that paraphrased either would be claiming to know which. The first
+draw is skipped when it would be empty, so a peer nothing has been read
+from still shows that it is being asked. What must not be reintroduced is
+the single call: a screen whose only source of rows is the publisher's
+answer is a screen that goes blank whenever the publisher is slow, and a
+publisher on the other side of a laptop lid is slow most of the time.
+
 Signing requests reference the project they belong to — by an identifier both
 ends derive from the origin URL and the repository path, so nothing has to be
 carried — and an approval prompt links straight to the docs. The link is

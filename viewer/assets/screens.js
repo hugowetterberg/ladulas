@@ -1012,28 +1012,50 @@ export async function peer(state, fingerprint, go) {
 
   body.push(projects);
 
-  // The list arrives after the screen does. A pane that waited on a sleeping
-  // build box before drawing anything is a pane that looks broken, which is the
-  // lesson the phone's reader already learned (§12).
+  const draw = (list) => {
+    projects.replaceChildren();
+
+    if (!(list || []).length) {
+      projects.append(ui.empty(found.name + " publishes nothing readable",
+        "On that machine, run `ladulas projects publish` in a project "
+        + "directory — or let it publish the projects it asks for signatures "
+        + "in, which it does by default."));
+
+      return;
+    }
+
+    for (const project of list) {
+      projects.append(projectRow(project));
+    }
+  };
+
+  // The list arrives after the screen does, and in two parts (§6). What is
+  // held here is a disk read and goes up at once, each row saying it is what
+  // was read before and that nobody has been asked; the publisher's answer
+  // replaces it when it comes. A pane that waited on a sleeping build box
+  // before drawing anything is a pane that looks broken, which is the lesson
+  // the phone's reader already learned (§12) — and the first draw is skipped
+  // when it would say nothing, so the "asking" line stays for a peer nothing
+  // has been read from.
+  let answered = false;
+
+  bridge
+    .projects(found.fingerprint, true)
+    .then((list) => {
+      if (!answered && (list || []).length) {
+        draw(list);
+      }
+    })
+    .catch(() => {});
+
   bridge
     .projects(found.fingerprint)
     .then((list) => {
-      projects.replaceChildren();
-
-      if (!(list || []).length) {
-        projects.append(ui.empty(found.name + " publishes nothing readable",
-          "On that machine, run `ladulas projects publish` in a project "
-          + "directory — or let it publish the projects it asks for signatures "
-          + "in, which it does by default."));
-
-        return;
-      }
-
-      for (const project of list) {
-        projects.append(projectRow(project));
-      }
+      answered = true;
+      draw(list);
     })
     .catch((error) => {
+      answered = true;
       projects.replaceChildren(
         ui.empty("Could not ask " + found.name, error.message));
     });

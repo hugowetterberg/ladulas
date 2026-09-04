@@ -608,6 +608,29 @@ func (p *projects) List(
 	return out, nil
 }
 
+// Kept is what is held here, drawn before the daemon has asked anybody. The
+// context is the socket round trip's: the daemon does not dial for this.
+func (p *projects) Kept(
+	ctx context.Context, fingerprint string,
+) ([]*project.Overview, error) {
+	resp, err := p.front.client.ListPeerProjects(ctx, connect.NewRequest(
+		&ladulasv1.ListPeerProjectsRequest{
+			Fingerprint: fingerprint,
+			KeptOnly:    true,
+		}))
+	if err != nil {
+		return nil, fmt.Errorf("list what is held of the peers' projects: %w", err)
+	}
+
+	out := make([]*project.Overview, 0, len(resp.Msg.GetProjects()))
+
+	for _, wire := range resp.Msg.GetProjects() {
+		out = append(out, project.OverviewFromWire(wire))
+	}
+
+	return out, nil
+}
+
 func (p *projects) Open(
 	ctx context.Context, fingerprint, projectID string,
 ) (*project.Overview, error) {
@@ -638,6 +661,24 @@ func (p *projects) Directory(
 		}))
 	if err != nil {
 		return nil, fmt.Errorf("read the directory: %w", err)
+	}
+
+	return project.ListingFromWire(resp.Msg.GetListing()), nil
+}
+
+func (p *projects) KeptDirectory(
+	ctx context.Context, fingerprint, projectID, path, filter string,
+) (*project.Listing, error) {
+	resp, err := p.front.client.ListPeerDirectory(ctx, connect.NewRequest(
+		&ladulasv1.ListPeerDirectoryRequest{
+			Fingerprint: fingerprint,
+			ProjectId:   projectID,
+			Path:        path,
+			Filter:      filter,
+			KeptOnly:    true,
+		}))
+	if err != nil {
+		return nil, fmt.Errorf("read what is held of the directory: %w", err)
 	}
 
 	return project.ListingFromWire(resp.Msg.GetListing()), nil

@@ -149,13 +149,22 @@ export const bridge = {
   // publishes it and the identifier both ends derive, in the query rather than
   // the path: a fingerprint carries slashes, and a path segment that has to be
   // escaped to hold one is a trap for whichever host forgets to.
-  projects: (fingerprint) =>
-    call("GET", "/projects" + (fingerprint ? where({ peer: fingerprint }) : "")),
-  projectDirectory: (fingerprint, projectID, path, token) =>
+  //
+  // kept asks for what is held here and asks no publisher: the answer a screen
+  // draws first, and the ordinary call's answer replaces (§6).
+  projects: (fingerprint, kept) =>
+    call("GET", "/projects" + where({ peer: fingerprint, kept: kept ? "1" : "" })),
+  projectDirectory: (fingerprint, projectID, path, token, kept) =>
     call(
       "GET",
       "/projects/directory" +
-        where({ peer: fingerprint, project: projectID, path, token }),
+        where({
+          peer: fingerprint,
+          project: projectID,
+          path,
+          token,
+          kept: kept ? "1" : "",
+        }),
     ),
   projectSearch: (fingerprint, projectID, query, token) =>
     call(

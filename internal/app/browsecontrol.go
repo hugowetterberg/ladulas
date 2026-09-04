@@ -41,7 +41,14 @@ func (s *controlService) ListPeerProjects(
 		return nil, err
 	}
 
-	found, err := browser.List(ctx, req.Msg.GetFingerprint())
+	// Kept is the list a screen draws first, without asking anybody; List is
+	// the publishers' answer that replaces it (§6).
+	list := browser.List
+	if req.Msg.GetKeptOnly() {
+		list = browser.Kept
+	}
+
+	found, err := list(ctx, req.Msg.GetFingerprint())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -95,9 +102,18 @@ func (s *controlService) ListPeerDirectory(
 		return nil, err
 	}
 
-	listing, err := browser.Directory(ctx,
-		req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetPath(),
-		req.Msg.GetFilter(), req.Msg.GetToken(), int(req.Msg.GetSize()))
+	var listing *project.Listing
+
+	if req.Msg.GetKeptOnly() {
+		listing, err = browser.KeptDirectory(
+			ctx, req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetPath(),
+			req.Msg.GetFilter())
+	} else {
+		listing, err = browser.Directory(ctx,
+			req.Msg.GetFingerprint(), req.Msg.GetProjectId(), req.Msg.GetPath(),
+			req.Msg.GetFilter(), req.Msg.GetToken(), int(req.Msg.GetSize()))
+	}
+
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}

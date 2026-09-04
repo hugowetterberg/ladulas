@@ -66,6 +66,12 @@ type Overview struct {
 	Read time.Time
 	// Err is why the publisher could not be asked, in the words to show.
 	Err string
+	// Unasked says nobody was asked: this is what is held here, drawn before
+	// the publisher has answered, and it says nothing about whether the
+	// publisher can be reached. It is the third thing a row can mean beside
+	// "answered" and "could not be asked", and a surface that drew it as
+	// either of those would be reporting on a network nobody tried.
+	Unasked bool
 }
 
 // Listing is one directory, or one search, as a browser shows it.
@@ -81,6 +87,9 @@ type Listing struct {
 	// about it.
 	Live bool
 	Err  string
+	// Unasked is the listing's half of Overview.Unasked: what is held here,
+	// before anybody has been asked, and not a report on the publisher.
+	Unasked bool
 	// Publisher is the publishing machine's account of itself, taken in the same
 	// exchange as the entries, and nil when they did not come from it.
 	//
@@ -183,6 +192,15 @@ func (b *Browser) List(
 		out = append(out, fromCache(item, false))
 	}
 
+	sortOverviews(out)
+
+	return out, nil
+}
+
+// sortOverviews is the one order a project list has, by machine and then by
+// name, so that a list drawn from the cache and the list that replaces it
+// from the publishers put the same project in the same place.
+func sortOverviews(out []*Overview) {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Peer != out[j].Peer {
 			return out[i].Peer < out[j].Peer
@@ -190,8 +208,70 @@ func (b *Browser) List(
 
 		return out[i].Project.GetName() < out[j].Project.GetName()
 	})
+}
+
+// Kept is every project something is held of, without asking anybody.
+//
+// It is the list a screen draws first. List asks every publisher and waits
+// for the slowest of them, and under decision Q that was the honest thing: a
+// project nobody had opened was nothing this instance could say anything
+// about. The sync (decision AP) changed what is held here from "the pages
+// somebody read" into the documentation itself, and a screen that waited on
+// a dial timeout before drawing what was already on the disk was waiting for
+// permission to show something true. So a surface draws this at once, marked
+// as what it is, and asks List for the publisher's answer to replace it with.
+//
+// The rows say they are unasked rather than unreachable, because nothing has
+// been tried. The sort is List's, so the rows do not reorder under a finger
+// when the live answer arrives.
+//
+// The context is the bridge.Projects shape and nothing here waits on it: the
+// answer is a disk read.
+func (b *Browser) Kept(_ context.Context, fingerprint string) ([]*Overview, error) {
+	cached, err := b.cache.List()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*Overview, 0, len(cached))
+
+	for _, item := range cached {
+		if fingerprint != "" && item.GetPeerFingerprint() != fingerprint {
+			continue
+		}
+
+		view := fromCache(item, false)
+		view.Unasked = true
+
+		out = append(out, view)
+	}
+
+	sortOverviews(out)
 
 	return out, nil
+}
+
+// KeptDirectory is one directory as what is held here describes it, without
+// asking anybody: Kept's answer for the screen one level in.
+//
+// After a sync it is the readable directory, because the sync holds every
+// document the publisher pushes (decision AP); before one, or for a kind that
+// is pull-only, it is the pages somebody read, and either way the listing
+// says which machine has not been asked rather than dressing itself up as the
+// publisher's answer.
+func (b *Browser) KeptDirectory(
+	_ context.Context, fingerprint, projectID, dir, filter string,
+) (*Listing, error) {
+	if dir != "" {
+		if err := CheckPath(dir); err != nil {
+			return nil, err
+		}
+	}
+
+	listing := b.keptListing(fingerprint, projectID, dir, filter, "")
+	listing.Unasked = true
+
+	return listing, nil
 }
 
 // merge turns one publisher's answer, or its silence, into rows.

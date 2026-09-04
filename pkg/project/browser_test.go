@@ -324,6 +324,67 @@ func TestOfflineListingsAreWhatWasRead(t *testing.T) {
 	}
 }
 
+// TestKeptAsksNobody is the first of the two draws a screen makes (§6): what
+// is held here comes back without an exchange reaching the publisher, marked
+// as unasked rather than as the publisher's silence, and a project nothing
+// has been read of is not in it at all.
+func TestKeptAsksNobody(t *testing.T) {
+	ctx := context.Background()
+	browsing, source := browser(t)
+
+	kept, err := browsing.Kept(ctx, "")
+	if err != nil {
+		t.Fatalf("kept, before anything was read: %v", err)
+	}
+
+	if len(kept) != 0 {
+		t.Errorf("nothing was read and kept lists %+v", kept)
+	}
+
+	if _, err := browsing.File(
+		ctx, source.fingerprint, "abcdefghij", "docs/deployment.md"); err != nil {
+		t.Fatalf("read a page: %v", err)
+	}
+
+	asked := source.asked
+	source.offline = true
+
+	kept, err = browsing.Kept(ctx, source.fingerprint)
+	if err != nil {
+		t.Fatalf("kept: %v", err)
+	}
+
+	if len(kept) != 1 || !kept[0].Unasked || kept[0].Live ||
+		kept[0].Err != "" || kept[0].Kept != 1 {
+		t.Errorf("kept listed %+v", kept)
+	}
+
+	if kept, err := browsing.Kept(ctx, "SHA256:somebody-else"); err != nil ||
+		len(kept) != 0 {
+		t.Errorf("kept for another peer is %+v, %v", kept, err)
+	}
+
+	dir, err := browsing.KeptDirectory(
+		ctx, source.fingerprint, "abcdefghij", "docs", "")
+	if err != nil {
+		t.Fatalf("kept directory: %v", err)
+	}
+
+	if !dir.Unasked || dir.Live || len(dir.Entries) != 1 ||
+		dir.Entries[0].GetPath() != "docs/deployment.md" {
+		t.Errorf("the kept directory is %+v", dir)
+	}
+
+	if _, err := browsing.KeptDirectory(
+		ctx, source.fingerprint, "abcdefghij", "../etc", ""); err == nil {
+		t.Error("a path out of the project was listed")
+	}
+
+	if source.asked != asked {
+		t.Errorf("kept reached the publisher %d times", source.asked-asked)
+	}
+}
+
 // TestWithdrawnProjectsSaySo: a publisher that answers and does not name a
 // project has stopped publishing it, which is a different thing from being
 // asleep and is worth saying.

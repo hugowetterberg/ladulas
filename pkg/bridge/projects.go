@@ -36,6 +36,9 @@ import (
 type Projects interface {
 	// List is what the peers publish. An empty fingerprint is all of them.
 	List(ctx context.Context, fingerprint string) ([]*project.Overview, error)
+	// Kept is what is held here of what they publish, without asking anybody.
+	// It is what a screen draws first, and List is what replaces it (§6).
+	Kept(ctx context.Context, fingerprint string) ([]*project.Overview, error)
 	// Open is one project's identity.
 	Open(ctx context.Context, fingerprint, projectID string) (*project.Overview, error)
 	// Directory and Search are the two ways through a project, both paged.
@@ -45,6 +48,11 @@ type Projects interface {
 	) (*project.Listing, error)
 	Search(
 		ctx context.Context, fingerprint, projectID, query, token string, size int,
+	) (*project.Listing, error)
+	// KeptDirectory is Directory's answer from what is held here, without
+	// asking the publisher, and in one page.
+	KeptDirectory(
+		ctx context.Context, fingerprint, projectID, path, filter string,
 	) (*project.Listing, error)
 	// File reads one page and keeps it.
 	File(ctx context.Context, fingerprint, projectID, path string) (*project.Page, error)
@@ -82,6 +90,10 @@ type ProjectView struct {
 	// Kept is how many pages have been read here and are readable with no
 	// signal.
 	Kept int `json:"kept"`
+	// Unasked says this row was drawn from what is held here before anybody
+	// was asked, so a shell knows to keep waiting for the answer that replaces
+	// it rather than reading the row as the publisher's silence.
+	Unasked bool `json:"unasked,omitempty"`
 	// State is the sentence to put under the name: where this came from, and
 	// what is readable right now.
 	State string `json:"state"`
@@ -125,6 +137,10 @@ type ProjectListingView struct {
 	// Note is what to say about where this listing came from, which matters
 	// most when it did not come from the publisher.
 	Note string `json:"note,omitempty"`
+	// Unasked says the entries are what is held here, drawn before the
+	// publisher was asked; the shell that asked for it this way is about to
+	// ask the ordinary way and draw that answer over this one.
+	Unasked bool `json:"unasked,omitempty"`
 }
 
 // ProjectPageView is a rendered document.
@@ -219,6 +235,18 @@ func where(r *http.Request) (string, string) {
 	return r.URL.Query().Get("peer"), r.URL.Query().Get("project")
 }
 
+// wantsKept is the `kept` query parameter: answer from what is held here and
+// ask nobody. A screen asks this way first and the ordinary way second, and
+// draws the second over the first (§6).
+func wantsKept(query url.Values) bool {
+	switch query.Get("kept") {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Session) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Projects == nil {
 		writeJSON(w, http.StatusOK, []ProjectView{})
@@ -229,7 +257,12 @@ func (s *Session) handleProjects(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), BrowseTimeout)
 	defer cancel()
 
-	listed, err := s.opts.Projects.List(ctx, r.URL.Query().Get("peer"))
+	list := s.opts.Projects.List
+	if wantsKept(r.URL.Query()) {
+		list = s.opts.Projects.Kept
+	}
+
+	listed, err := list(ctx, r.URL.Query().Get("peer"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 
@@ -275,6 +308,22 @@ func (s *Session) handleProjectDirectory(w http.ResponseWriter, r *http.Request)
 
 	fingerprint, id := where(r)
 	query := r.URL.Query()
+
+	// What is held here is one page and all of it readable, so neither the
+	// paging nor the readable-only walk applies to it.
+	if wantsKept(query) {
+		listing, err := s.opts.Projects.KeptDirectory(ctx,
+			fingerprint, id, query.Get("path"), query.Get("filter"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+
+			return
+		}
+
+		s.writeListing(w, fingerprint, id, listing)
+
+		return
+	}
 
 	read := func(ctx context.Context, token string) (*project.Listing, error) {
 		return s.opts.Projects.Directory(ctx,
@@ -671,7 +720,6 @@ func (s *Session) writeListing(
 		Next:      listing.Next,
 		Total:     listing.Total,
 		Truncated: listing.Truncated,
-		Note:      listingNote(listing),
 	}
 
 	for _, entry := range listing.Entries {
@@ -689,6 +737,8 @@ func (s *Session) writeListing(
 
 	view.Live = listing.Live
 	view.Error = listing.Err
+	view.Unasked = listing.Unasked
+	view.Note = listingNote(listing, view.Peer)
 
 	writeJSON(w, http.StatusOK, view)
 }
@@ -802,6 +852,7 @@ func projectView(overview *project.Overview) ProjectView {
 		Commit:      shortCommit(publication.GetCommit()),
 		Live:        overview.Live,
 		Kept:        overview.Kept,
+		Unasked:     overview.Unasked,
 		Error:       overview.Err,
 	}
 
@@ -814,6 +865,12 @@ func projectView(overview *project.Overview) ProjectView {
 // difference decision Q made has to be said out loud.
 func projectState(overview *project.Overview) string {
 	switch {
+	case overview.Unasked && overview.Kept > 0:
+		return fmt.Sprintf("Read from %s before. %s readable with no signal.",
+			overview.Peer, pages(overview.Kept))
+	case overview.Unasked:
+		return fmt.Sprintf("Read from %s before. Nothing of it is held here.",
+			overview.Peer)
 	case overview.Live && overview.Kept > 0:
 		return fmt.Sprintf("Read from %s. %s also readable with no signal.",
 			overview.Peer, pages(overview.Kept))
@@ -858,7 +915,7 @@ func entryView(entry *ladulasv1.ProjectEntry) ProjectEntryView {
 	return view
 }
 
-func listingNote(listing *project.Listing) string {
+func listingNote(listing *project.Listing, peer string) string {
 	if listing.Live {
 		if listing.Truncated {
 			return "The project was too large to search all of it; " +
@@ -866,6 +923,18 @@ func listingNote(listing *project.Listing) string {
 		}
 
 		return ""
+	}
+
+	// Nobody was asked, so there is nothing to apologise for and nothing to
+	// claim about the publisher: what is here is what is held here.
+	if listing.Unasked {
+		if peer == "" {
+			return "These are the documents held here; the publisher has not " +
+				"been asked."
+		}
+
+		return fmt.Sprintf(
+			"These are the documents held here; %s has not been asked.", peer)
 	}
 
 	note := "These are the pages that have been read here, not the directory."

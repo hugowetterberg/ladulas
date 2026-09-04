@@ -1524,6 +1524,9 @@ message PeerProject {
   // Why the publisher could not be asked, in the words to show. A project with
   // this set is still listed: what has been read of it is still readable.
   string error = 8;
+  // Nobody was asked: this is what is held here, drawn before the publisher
+  // has answered, and it says nothing about whether it can be reached.
+  bool unasked = 9;
 }
 
 // PeerListing is one directory, or one search.
@@ -1545,6 +1548,9 @@ message PeerListing {
   // assembled out of the pages somebody read once would put the commit those
   // were read at over a directory the publisher answered just now (§6).
   PeerProject publisher = 8;
+  // Nobody was asked: the entries are what is held here, drawn before the
+  // publisher has answered.
+  bool unasked = 9;
 }
 
 // PeerPage is one document.
@@ -1565,6 +1571,9 @@ message PeerPage {
 message ListPeerProjectsRequest {
   // One publisher, or empty for all of them.
   string fingerprint = 1;
+  // Answer from what is held here without asking anybody, which is what a
+  // screen draws first: the publishers' answer replaces it when it arrives.
+  bool kept_only = 2;
 }
 
 message ListPeerProjectsResponse {
@@ -1594,6 +1603,9 @@ message ListPeerDirectoryRequest {
   string filter = 4;
   string token = 5;
   int32 size = 6;
+  // Answer from what is held here without asking the publisher. The token and
+  // the size are ignored: what is held here is one page.
+  bool kept_only = 7;
 }
 
 message ListPeerDirectoryResponse {

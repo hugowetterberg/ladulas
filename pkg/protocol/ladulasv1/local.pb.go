@@ -7062,7 +7062,10 @@ type PeerProject struct {
 	Read *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=read,proto3" json:"read,omitempty"`
 	// Why the publisher could not be asked, in the words to show. A project with
 	// this set is still listed: what has been read of it is still readable.
-	Error         string `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	// Nobody was asked: this is what is held here, drawn before the publisher
+	// has answered, and it says nothing about whether it can be reached.
+	Unasked       bool `protobuf:"varint,9,opt,name=unasked,proto3" json:"unasked,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7153,6 +7156,13 @@ func (x *PeerProject) GetError() string {
 	return ""
 }
 
+func (x *PeerProject) GetUnasked() bool {
+	if x != nil {
+		return x.Unasked
+	}
+	return false
+}
+
 // PeerListing is one directory, or one search.
 type PeerListing struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
@@ -7172,7 +7182,10 @@ type PeerListing struct {
 	// a browser puts above a listing have their own provenance, and a header
 	// assembled out of the pages somebody read once would put the commit those
 	// were read at over a directory the publisher answered just now (§6).
-	Publisher     *PeerProject `protobuf:"bytes,8,opt,name=publisher,proto3" json:"publisher,omitempty"`
+	Publisher *PeerProject `protobuf:"bytes,8,opt,name=publisher,proto3" json:"publisher,omitempty"`
+	// Nobody was asked: the entries are what is held here, drawn before the
+	// publisher has answered.
+	Unasked       bool `protobuf:"varint,9,opt,name=unasked,proto3" json:"unasked,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7261,6 +7274,13 @@ func (x *PeerListing) GetPublisher() *PeerProject {
 		return x.Publisher
 	}
 	return nil
+}
+
+func (x *PeerListing) GetUnasked() bool {
+	if x != nil {
+		return x.Unasked
+	}
+	return false
 }
 
 // PeerPage is one document.
@@ -7370,7 +7390,10 @@ func (x *PeerPage) GetFullSize() int64 {
 type ListPeerProjectsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// One publisher, or empty for all of them.
-	Fingerprint   string `protobuf:"bytes,1,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	Fingerprint string `protobuf:"bytes,1,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	// Answer from what is held here without asking anybody, which is what a
+	// screen draws first: the publishers' answer replaces it when it arrives.
+	KeptOnly      bool `protobuf:"varint,2,opt,name=kept_only,json=keptOnly,proto3" json:"kept_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7410,6 +7433,13 @@ func (x *ListPeerProjectsRequest) GetFingerprint() string {
 		return x.Fingerprint
 	}
 	return ""
+}
+
+func (x *ListPeerProjectsRequest) GetKeptOnly() bool {
+	if x != nil {
+		return x.KeptOnly
+	}
+	return false
 }
 
 type ListPeerProjectsResponse struct {
@@ -7578,9 +7608,12 @@ type ListPeerDirectoryRequest struct {
 	Path        string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
 	// A filename filter applied by the publisher, so a directory of ten thousand
 	// files costs one page either way.
-	Filter        string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
-	Token         string `protobuf:"bytes,5,opt,name=token,proto3" json:"token,omitempty"`
-	Size          int32  `protobuf:"varint,6,opt,name=size,proto3" json:"size,omitempty"`
+	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	Token  string `protobuf:"bytes,5,opt,name=token,proto3" json:"token,omitempty"`
+	Size   int32  `protobuf:"varint,6,opt,name=size,proto3" json:"size,omitempty"`
+	// Answer from what is held here without asking the publisher. The token and
+	// the size are ignored: what is held here is one page.
+	KeptOnly      bool `protobuf:"varint,7,opt,name=kept_only,json=keptOnly,proto3" json:"kept_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7655,6 +7688,13 @@ func (x *ListPeerDirectoryRequest) GetSize() int32 {
 		return x.Size
 	}
 	return 0
+}
+
+func (x *ListPeerDirectoryRequest) GetKeptOnly() bool {
+	if x != nil {
+		return x.KeptOnly
+	}
+	return false
 }
 
 type ListPeerDirectoryResponse struct {
@@ -8686,7 +8726,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"C\n" +
 	"\x18FetchRequestDiffResponse\x12'\n" +
-	"\x04diff\x18\x01 \x01(\v2\x13.ladulas.v1.GitDiffR\x04diff\"\x82\x02\n" +
+	"\x04diff\x18\x01 \x01(\v2\x13.ladulas.v1.GitDiffR\x04diff\"\x9c\x02\n" +
 	"\vPeerProject\x12 \n" +
 	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\x12\x12\n" +
 	"\x04peer\x18\x02 \x01(\tR\x04peer\x121\n" +
@@ -8695,7 +8735,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\twithdrawn\x18\x05 \x01(\bR\twithdrawn\x12\x12\n" +
 	"\x04kept\x18\x06 \x01(\x05R\x04kept\x12.\n" +
 	"\x04read\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x04read\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error\"\xfe\x01\n" +
+	"\x05error\x18\b \x01(\tR\x05error\x12\x18\n" +
+	"\aunasked\x18\t \x01(\bR\aunasked\"\x98\x02\n" +
 	"\vPeerListing\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x122\n" +
 	"\aentries\x18\x02 \x03(\v2\x18.ladulas.v1.ProjectEntryR\aentries\x12\x12\n" +
@@ -8704,7 +8745,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\ttruncated\x18\x05 \x01(\bR\ttruncated\x12\x12\n" +
 	"\x04live\x18\x06 \x01(\bR\x04live\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x125\n" +
-	"\tpublisher\x18\b \x01(\v2\x17.ladulas.v1.PeerProjectR\tpublisher\"\x84\x02\n" +
+	"\tpublisher\x18\b \x01(\v2\x17.ladulas.v1.PeerProjectR\tpublisher\x12\x18\n" +
+	"\aunasked\x18\t \x01(\bR\aunasked\"\x84\x02\n" +
 	"\bPeerPage\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x126\n" +
@@ -8713,9 +8755,10 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\x06commit\x18\x05 \x01(\tR\x06commit\x12\x12\n" +
 	"\x04live\x18\x06 \x01(\bR\x04live\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12\x1b\n" +
-	"\tfull_size\x18\b \x01(\x03R\bfullSize\";\n" +
+	"\tfull_size\x18\b \x01(\x03R\bfullSize\"X\n" +
 	"\x17ListPeerProjectsRequest\x12 \n" +
-	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"O\n" +
+	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\x12\x1b\n" +
+	"\tkept_only\x18\x02 \x01(\bR\bkeptOnly\"O\n" +
 	"\x18ListPeerProjectsResponse\x123\n" +
 	"\bprojects\x18\x01 \x03(\v2\x17.ladulas.v1.PeerProjectR\bprojects\"z\n" +
 	"\x16OpenPeerProjectRequest\x12 \n" +
@@ -8726,7 +8769,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"cachedOnly\"b\n" +
 	"\x17OpenPeerProjectResponse\x121\n" +
 	"\aproject\x18\x01 \x01(\v2\x17.ladulas.v1.PeerProjectR\aproject\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found\"\xb1\x01\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"\xce\x01\n" +
 	"\x18ListPeerDirectoryRequest\x12 \n" +
 	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\x12\x1d\n" +
 	"\n" +
@@ -8734,7 +8777,8 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\x04path\x18\x03 \x01(\tR\x04path\x12\x16\n" +
 	"\x06filter\x18\x04 \x01(\tR\x06filter\x12\x14\n" +
 	"\x05token\x18\x05 \x01(\tR\x05token\x12\x12\n" +
-	"\x04size\x18\x06 \x01(\x05R\x04size\"N\n" +
+	"\x04size\x18\x06 \x01(\x05R\x04size\x12\x1b\n" +
+	"\tkept_only\x18\a \x01(\bR\bkeptOnly\"N\n" +
 	"\x19ListPeerDirectoryResponse\x121\n" +
 	"\alisting\x18\x01 \x01(\v2\x17.ladulas.v1.PeerListingR\alisting\"\x9b\x01\n" +
 	"\x18SearchPeerProjectRequest\x12 \n" +

@@ -218,6 +218,45 @@ func (b *browsedProjects) File(
 	}, nil
 }
 
+// Kept and KeptDirectory are the first draw (§6): what has been read, asked of
+// nobody. The fake counts the calls that would have reached the publisher so
+// the test can say that neither of these did.
+func (b *browsedProjects) Kept(
+	_ context.Context, _ string,
+) ([]*project.Overview, error) {
+	if len(b.read) == 0 {
+		return nil, nil
+	}
+
+	view := b.overview()
+	view.Live = false
+	view.Unasked = true
+
+	return []*project.Overview{view}, nil
+}
+
+func (b *browsedProjects) KeptDirectory(
+	ctx context.Context, fingerprint, projectID, dir, filter string,
+) (*project.Listing, error) {
+	// The offline directory is exactly the kept one; borrow it and relabel.
+	was := b.offline
+	b.offline = true
+
+	listing, err := b.Directory(ctx, fingerprint, projectID, dir, filter, "", 0)
+
+	b.offline = was
+
+	if err != nil {
+		return nil, err
+	}
+
+	listing.Err = ""
+	listing.Publisher = nil
+	listing.Unasked = true
+
+	return listing, nil
+}
+
 func (b *browsedProjects) Cached(
 	_, projectID string,
 ) (*project.Overview, bool) {
@@ -559,6 +598,83 @@ func TestAnUnreachablePublisherShowsWhatWasRead(t *testing.T) {
 	}
 }
 
+// TestWhatIsHeldHereIsDrawnBeforeAnybodyIsAsked is the `kept=1` half of the
+// two draws a screen makes (§6). The rows come from the disk, say they are
+// what was read before rather than that the publisher could not be reached —
+// the publisher is offline here and nothing notices, because nothing asked —
+// and a peer nothing has been read from has no rows at all.
+func TestWhatIsHeldHereIsDrawnBeforeAnybodyIsAsked(t *testing.T) {
+	f := newProjectFixture(t)
+
+	var listed []bridge.ProjectView
+
+	status, body := f.get(t, "/api/v1/projects?kept=1")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatalf("decode: %v\n%s", err, body)
+	}
+
+	if len(listed) != 0 {
+		t.Errorf("nothing was read and the kept list is %+v", listed)
+	}
+
+	status, body = f.get(t, browse("file", map[string]string{"path": "docs/design.md"}))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+
+	f.projects.offline = true
+
+	status, body = f.get(t, "/api/v1/projects?kept=1&peer="+url.QueryEscape(publisher))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+
+	if err := json.Unmarshal(body, &listed); err != nil {
+		t.Fatalf("decode: %v\n%s", err, body)
+	}
+
+	if len(listed) != 1 {
+		t.Fatalf("the kept list is %+v", listed)
+	}
+
+	row := listed[0]
+
+	if !row.Unasked || row.Live || row.Error != "" || row.Kept != 1 {
+		t.Errorf("the kept row is %+v", row)
+	}
+
+	if row.State != "Read from headless before. 1 page readable with no signal." {
+		t.Errorf("the kept row says %q", row.State)
+	}
+
+	status, body = f.get(t, browse("directory", map[string]string{"kept": "1"}))
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+
+	var listing bridge.ProjectListingView
+
+	if err := json.Unmarshal(body, &listing); err != nil {
+		t.Fatalf("decode: %v\n%s", err, body)
+	}
+
+	if !listing.Unasked || listing.Live || listing.Error != "" {
+		t.Errorf("the kept listing is %+v", listing)
+	}
+
+	if listing.Note != "These are the documents held here; headless has not been asked." {
+		t.Errorf("the kept listing says %q", listing.Note)
+	}
+
+	if len(listing.Entries) != 1 || listing.Entries[0].Name != "docs" {
+		t.Errorf("the kept root lists %+v", listing.Entries)
+	}
+}
+
 // pagedProjects is a publisher that answers a directory in pages, most of them
 // full of files it will not hand over. It is the shape the filter has to survive
 // (§6): the paging is the publisher's, so dropping entries here can empty a page
@@ -640,6 +756,18 @@ func (p *pagedProjects) File(
 	_ context.Context, _, _, _ string,
 ) (*project.Page, error) {
 	return nil, project.ErrNoSuchFile
+}
+
+func (p *pagedProjects) Kept(
+	_ context.Context, _ string,
+) ([]*project.Overview, error) {
+	return nil, nil
+}
+
+func (p *pagedProjects) KeptDirectory(
+	_ context.Context, _, _, dir, _ string,
+) (*project.Listing, error) {
+	return &project.Listing{Path: dir, Unasked: true}, nil
 }
 
 func (p *pagedProjects) Cached(_, _ string) (*project.Overview, bool) {

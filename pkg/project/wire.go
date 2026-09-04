@@ -32,6 +32,7 @@ func OverviewWire(overview *Overview) *ladulasv1.PeerProject {
 		Withdrawn:   overview.Withdrawn,
 		Kept:        int32(overview.Kept), //nolint:gosec // a page count
 		Error:       overview.Err,
+		Unasked:     overview.Unasked,
 	}
 
 	if !overview.Read.IsZero() {
@@ -56,6 +57,7 @@ func OverviewFromWire(wire *ladulasv1.PeerProject) *Overview {
 		Kept:        int(wire.GetKept()),
 		Read:        wireTime(wire.GetRead()),
 		Err:         wire.GetError(),
+		Unasked:     wire.GetUnasked(),
 	}
 }
 
@@ -73,6 +75,7 @@ func ListingWire(listing *Listing) *ladulasv1.PeerListing {
 		Truncated: listing.Truncated,
 		Live:      listing.Live,
 		Error:     listing.Err,
+		Unasked:   listing.Unasked,
 		Publisher: OverviewWire(listing.Publisher),
 	}
 }
@@ -91,6 +94,7 @@ func ListingFromWire(wire *ladulasv1.PeerListing) *Listing {
 		Truncated: wire.GetTruncated(),
 		Live:      wire.GetLive(),
 		Err:       wire.GetError(),
+		Unasked:   wire.GetUnasked(),
 		Publisher: OverviewFromWire(wire.GetPublisher()),
 	}
 }
