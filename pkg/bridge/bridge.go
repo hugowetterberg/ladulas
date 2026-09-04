@@ -214,7 +214,14 @@ type Options struct {
 	// Locations are the paths worth showing: the sockets, the policy, the log.
 	Locations []Location
 	// Keys lists the keys the instance holds. Optional.
-	Keys func() []*ladulasv1.KeyRef
+	//
+	// It is KeyInfo and not KeyRef, on purpose: a KeyRef is what a signer
+	// needs, and this screen is where the store is managed. Whether a key is
+	// off, whether it sits in a secure element, and which other machines hold
+	// a copy of it are what somebody deciding what to do with a key is
+	// deciding from, and a surface that could not show them was a surface that
+	// sent people to `ladulas keys list` to find out.
+	Keys func() []*ladulasv1.KeyInfo
 	// GenerateKey makes a new one. Optional and separate from Keys: a host can
 	// show what an instance holds without being a place a key is made.
 	//
@@ -224,7 +231,7 @@ type Options struct {
 	// import` is where that belongs, and it says so on the screen.
 	GenerateKey func(
 		ctx context.Context, label, comment string,
-	) (*ladulasv1.KeyRef, error)
+	) (*ladulasv1.KeyInfo, error)
 	// RemoveKey forgets a key the instance holds, by label or fingerprint.
 	// Optional and separate from Keys, and it is the one thing on the Keys
 	// screen that cannot be undone by doing it again: what leaves the store
@@ -238,7 +245,18 @@ type Options struct {
 	// took.
 	SetKeyAgentUse func(
 		ctx context.Context, key string, use bool,
-	) (*ladulasv1.KeyRef, error)
+	) (*ladulasv1.KeyInfo, error)
+	// SetKeyEnabled turns a key off without removing it, or back on. Optional.
+	//
+	// It is the stronger switch, and the two are kept apart the way `ladulas
+	// keys disable` and `ladulas keys agent --off` are: a key the agent does
+	// not offer still signs when named, and a disabled key signs nothing for
+	// anybody — not this instance's agent, not a paired machine that borrowed
+	// it — while staying in the store, so the day it is wanted again it is a
+	// press away rather than a rotation. Answers with the key as it now is.
+	SetKeyEnabled func(
+		ctx context.Context, key string, enabled bool,
+	) (*ladulasv1.KeyInfo, error)
 	// SendKey hands a portable key to a paired machine (decision S), where
 	// somebody has to accept it before it is a key there. Optional.
 	//
@@ -924,6 +942,7 @@ func (s *Session) Handler() http.Handler {
 	// fingerprint carries slashes.
 	mux.HandleFunc("POST /api/v1/keys/remove", s.handleRemoveKey)
 	mux.HandleFunc("POST /api/v1/keys/agent", s.handleSetKeyAgentUse)
+	mux.HandleFunc("POST /api/v1/keys/enabled", s.handleSetKeyEnabled)
 	mux.HandleFunc("POST /api/v1/keys/send", s.handleSendKey)
 	mux.HandleFunc("POST /api/v1/keys/offers/{id}/answer", s.handleAnswerKeyOffer)
 	mux.HandleFunc("POST /api/v1/endorsements/retract", s.handleRetractEndorsement)
@@ -1710,6 +1729,55 @@ func (s *Session) handleSetKeyAgentUse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key, err := s.opts.SetKeyAgentUse(r.Context(), body.Key, *body.AgentUse)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, storedKeyView(key))
+}
+
+// handleSetKeyEnabled turns a key off, or back on.
+//
+// The same shape as the agent switch, for the same reasons: the answer is the
+// key as it now is, and a body without the boolean is refused rather than read
+// as "off". What differs is what the switch reaches — a disabled key signs for
+// nobody, which is the sentence the screen carries beside the button.
+func (s *Session) handleSetKeyEnabled(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetKeyEnabled == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot turn a key off or on")
+
+		return
+	}
+
+	var body struct {
+		Key     string `json:"key"`
+		Enabled *bool  `json:"enabled"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Key) == "" {
+		writeError(w, http.StatusBadRequest, "no key was named")
+
+		return
+	}
+
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether the key should be on or off")
+
+		return
+	}
+
+	key, err := s.opts.SetKeyEnabled(r.Context(), body.Key, *body.Enabled)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 

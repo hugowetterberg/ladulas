@@ -93,16 +93,19 @@ export const bridge = {
   // type, and neither belongs in a webview.
   generateKey: (label, comment) =>
     call("POST", "/keys", { label, comment: comment || "" }),
-  // The three things that can be done to a key the store holds, none of them
+  // The four things that can be done to a key the store holds, none of them
   // the import that stays a command line. Removing is the Keys screen's one
   // destructive action and the screen asks twice; handing one over needs the
   // store passphrase typed again, because it is the one thing done from this
-  // window that cannot be taken back (decision S); and the agent toggle
-  // answers with the key as it now is (decision T). The key is named in the
+  // window that cannot be taken back (decision S); and the two switches — the
+  // agent's (decision T), and the stronger one that turns the key off for
+  // everybody — answer with the key as it now is. The key is named in the
   // body because a fingerprint carries slashes.
   removeKey: (key) => call("POST", "/keys/remove", { key }),
   setKeyAgentUse: (key, agentUse) =>
     call("POST", "/keys/agent", { key, agentUse: Boolean(agentUse) }),
+  setKeyEnabled: (key, enabled) =>
+    call("POST", "/keys/enabled", { key, enabled: Boolean(enabled) }),
   sendKey: (key, peer, passphrase) =>
     call("POST", "/keys/send", {
       key,

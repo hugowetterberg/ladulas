@@ -600,11 +600,17 @@ nothing, and the sender is not told and still holds it. `ladulas keys offers`,
 
 **The sending end is the cog on a key**, which opens the key's own sheet: the
 public key as the `authorized_keys` line, ready to copy; whether the agent
-offers it (decision T); *Hand to a paired machine*, which asks for the store
-passphrase again because sending is the one thing done from the window that
-cannot be taken back, and presses twice; and *Remove*, which also presses
-twice. `keys public`, `keys agent`, `keys send` and `keys remove` are the same
-four at a terminal, and `keys import` is the one that stays there.
+offers it (decision T); *On or off*, the stronger switch that keeps the key
+in the store and stops every use of it; *Hand to a paired machine*, which
+asks for the store passphrase again because sending is the one thing done
+from the window that cannot be taken back, and presses twice; and *Remove*,
+which also presses twice. The sheet's head lists the other machines that
+hold a copy — received from, handed to, and when — and says so when the
+private half is in a secure element and cannot leave. `keys public`, `keys
+agent`, `keys disable`/`enable`, `keys send`, `keys remove` and the copies
+under `keys list` are the same at a terminal, and `keys import` is the one
+that stays there. On the Keys screen itself a key wears *off*, *not offered*,
+*copied* or *secure element* as a pill.
 
 **Where the peer channel listens** is on Settings too, drawn as `ladulas
 listen` prints it — the setting and its source, what is bound, what peers

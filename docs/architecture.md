@@ -2774,6 +2774,19 @@ wiped on both sides once it has answered (§14). And removing the key, which
 asks twice for the reason revoking a peer does. Importing a key is still
 `ladulas keys import` and stays there (decision AF).
 
+The same day the bridge's key type became `KeyInfo` rather than `KeyRef`,
+and the sheet grew the two things that type carries and a `KeyRef` cannot:
+the *off* switch (`SetKeyEnabled`), kept apart from the agent's toggle the
+way `keys disable` is from `keys agent --off` because one stops ssh being
+handed the key and the other stops every use of it, and where else the key
+is — handed to, received from, when, and that a private half in a secure
+element cannot be handed anywhere (decision S). A `KeyRef` is what a signer
+needs to know; a screen where the store is managed needs the rest, and a
+host lists its keys once, with the wider type, rather than through two
+functions that disagree about what a key is. The phones' `mobilecore`
+builds the same `KeyInfo` from the vault with `keystore.KeyInfo`, so what a
+phone's webview says about a key is what the desktop says.
+
 **The Settings screen changes what the daemon stores and nothing it was
 started with** (decision AS). Beside the signing budget it has, since
 2026-09-04, where the peer channel listens: the card draws what `ladulas

@@ -84,12 +84,12 @@ func newPairingFixture(t *testing.T) (*httptest.Server, *pairingHost) {
 		Pairing: host,
 		GenerateKey: func(
 			_ context.Context, label, comment string,
-		) (*ladulasv1.KeyRef, error) {
+		) (*ladulasv1.KeyInfo, error) {
 			if label == "" {
 				return nil, errors.New("a key needs a name")
 			}
 
-			return &ladulasv1.KeyRef{
+			return &ladulasv1.KeyInfo{
 				Label:       label,
 				Comment:     comment,
 				Fingerprint: "SHA256:made",

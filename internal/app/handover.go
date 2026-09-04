@@ -129,6 +129,6 @@ func (s *controlService) AnswerKeyOffer(
 		key.GetReceivedFrom().GetPeerName()), key.GetFingerprint())
 
 	return connect.NewResponse(&ladulasv1.AnswerKeyOfferResponse{
-		Key: KeyInfo(key),
+		Key: keystore.KeyInfo(key),
 	}), nil
 }

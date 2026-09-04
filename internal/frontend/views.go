@@ -98,7 +98,7 @@ func locations(status *ladulasv1.StatusResponse) []bridge.Location {
 	}
 }
 
-func (f *Frontend) keys() []*ladulasv1.KeyRef {
+func (f *Frontend) keys() []*ladulasv1.KeyInfo {
 	ctx, cancel := call()
 	defer cancel()
 
@@ -110,13 +110,7 @@ func (f *Frontend) keys() []*ladulasv1.KeyRef {
 		return nil
 	}
 
-	out := make([]*ladulasv1.KeyRef, 0, len(resp.Msg.GetKeys()))
-
-	for _, key := range resp.Msg.GetKeys() {
-		out = append(out, keyRef(key))
-	}
-
-	return out
+	return resp.Msg.GetKeys()
 }
 
 func (f *Frontend) borrowed() []*ladulasv1.BorrowedKeyStatus {

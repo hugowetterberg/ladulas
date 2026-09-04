@@ -224,6 +224,65 @@ func KeyRef(k *storepb.StoredKey) *ladulasv1.KeyRef {
 	}
 }
 
+// KeyInfo is a stored key with the private half left behind, which is what the
+// management surface reports. It is the wider projection: KeyRef is what a
+// signer needs to know, KeyInfo what somebody managing the store does — where
+// the key came from, whether it is off, and which machines hold a copy.
+func KeyInfo(key *storepb.StoredKey) *ladulasv1.KeyInfo {
+	agentUse := AgentUse(key)
+
+	return &ladulasv1.KeyInfo{
+		AgentUse:     &agentUse,
+		Label:        key.GetLabel(),
+		Fingerprint:  key.GetFingerprint(),
+		Algorithm:    key.GetAlgorithm(),
+		Comment:      key.GetComment(),
+		PublicKey:    key.GetPublicKey(),
+		Origin:       keyOrigin(key.GetOrigin()),
+		Disabled:     key.GetDisabled(),
+		AddedAt:      key.GetAddedAt(),
+		Hardware:     key.GetHardwareHandle() != "",
+		HandedTo:     keyTransfers(key.GetHandedTo()),
+		ReceivedFrom: keyTransfer(key.GetReceivedFrom()),
+	}
+}
+
+func keyTransfers(transfers []*storepb.KeyTransfer) []*ladulasv1.KeyTransferInfo {
+	out := make([]*ladulasv1.KeyTransferInfo, 0, len(transfers))
+	for _, transfer := range transfers {
+		out = append(out, keyTransfer(transfer))
+	}
+
+	return out
+}
+
+func keyTransfer(transfer *storepb.KeyTransfer) *ladulasv1.KeyTransferInfo {
+	if transfer == nil {
+		return nil
+	}
+
+	return &ladulasv1.KeyTransferInfo{
+		PeerFingerprint: transfer.GetPeerFingerprint(),
+		PeerName:        transfer.GetPeerName(),
+		At:              transfer.GetAt(),
+	}
+}
+
+func keyOrigin(origin storepb.KeyOrigin) ladulasv1.KeyOrigin {
+	switch origin {
+	case storepb.KeyOrigin_KEY_ORIGIN_IMPORTED:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_IMPORTED
+	case storepb.KeyOrigin_KEY_ORIGIN_GENERATED:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_GENERATED
+	case storepb.KeyOrigin_KEY_ORIGIN_RECEIVED:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_RECEIVED
+	case storepb.KeyOrigin_KEY_ORIGIN_UNSPECIFIED:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_UNSPECIFIED
+	default:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_UNSPECIFIED
+	}
+}
+
 // AgentUse reports whether a key belongs in an agent's identity list
 // (decision T).
 //

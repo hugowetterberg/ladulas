@@ -109,20 +109,57 @@ type GrantTrust struct {
 
 // KeyView is a key: the one a request wants to use, or one the instance holds.
 //
-// The last two fields are only filled for a key the instance holds. Public is
-// the authorized_keys line, which is what the public half is for — it goes into
-// GitHub, an authorized_keys file, an allowed_signers file — and a screen that
-// showed a key without a way to get that line out was a screen somebody had to
-// leave for a terminal. AgentUse is whether the agent offers the key (decision
-// T); a key a request names has already been offered, so the question does not
-// arise there.
+// Everything after Comment is only filled for a key the instance holds. Public
+// is the authorized_keys line, which is what the public half is for — it goes
+// into GitHub, an authorized_keys file, an allowed_signers file — and a screen
+// that showed a key without a way to get that line out was a screen somebody
+// had to leave for a terminal. AgentUse is whether the agent offers the key
+// (decision T); a key a request names has already been offered, so the
+// question does not arise there. Disabled is the stronger switch: a disabled
+// key signs for nobody until it is turned back on. Hardware says the private
+// half is in a secure element, which is what decides that the key cannot be
+// handed to another machine (decision S). HandedTo and ReceivedFrom are the
+// other machines that hold a copy — the list somebody needs after losing one
+// of them, because those are the ends the key has to be rotated at.
 type KeyView struct {
-	Label       string `json:"label"`
-	Fingerprint string `json:"fingerprint"`
-	Algorithm   string `json:"algorithm,omitempty"`
-	Comment     string `json:"comment,omitempty"`
-	Public      string `json:"public,omitempty"`
-	AgentUse    bool   `json:"agentUse,omitempty"`
+	Label        string            `json:"label"`
+	Fingerprint  string            `json:"fingerprint"`
+	Algorithm    string            `json:"algorithm,omitempty"`
+	Comment      string            `json:"comment,omitempty"`
+	Public       string            `json:"public,omitempty"`
+	AgentUse     bool              `json:"agentUse,omitempty"`
+	Disabled     bool              `json:"disabled,omitempty"`
+	Hardware     bool              `json:"hardware,omitempty"`
+	HandedTo     []KeyTransferView `json:"handedTo,omitempty"`
+	ReceivedFrom *KeyTransferView  `json:"receivedFrom,omitempty"`
+}
+
+// KeyTransferView is one machine a key was copied to or from, and when.
+type KeyTransferView struct {
+	// Peer is the machine's name, or its fingerprint when the name is gone
+	// with the pairing.
+	Peer        string `json:"peer"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// At is when, rendered for the screen the way an offer's arrival is;
+	// empty when the store did not record it.
+	At string `json:"at,omitempty"`
+}
+
+func keyTransferView(transfer *ladulasv1.KeyTransferInfo) KeyTransferView {
+	view := KeyTransferView{
+		Peer:        transfer.GetPeerName(),
+		Fingerprint: transfer.GetPeerFingerprint(),
+	}
+
+	if view.Peer == "" {
+		view.Peer = view.Fingerprint
+	}
+
+	if at := transfer.GetAt(); at != nil {
+		view.At = at.AsTime().Local().Format(time.RFC1123)
+	}
+
+	return view
 }
 
 // storedKeyView is a key the instance holds, with the public half rendered.
@@ -132,7 +169,7 @@ type KeyView struct {
 // an authorized_keys line looks like. A public half that does not parse is
 // left out rather than reported: the key still signs, and the fingerprint
 // beside it is the store's, not this function's.
-func storedKeyView(key *ladulasv1.KeyRef) KeyView {
+func storedKeyView(key *ladulasv1.KeyInfo) KeyView {
 	view := KeyView{
 		Label:       key.GetLabel(),
 		Fingerprint: key.GetFingerprint(),
@@ -140,6 +177,17 @@ func storedKeyView(key *ladulasv1.KeyRef) KeyView {
 		Comment:     key.GetComment(),
 		// Unset means offered, as it does in the store (decision T).
 		AgentUse: key.AgentUse == nil || key.GetAgentUse(),
+		Disabled: key.GetDisabled(),
+		Hardware: key.GetHardware(),
+	}
+
+	for _, transfer := range key.GetHandedTo() {
+		view.HandedTo = append(view.HandedTo, keyTransferView(transfer))
+	}
+
+	if from := key.GetReceivedFrom(); from != nil {
+		received := keyTransferView(from)
+		view.ReceivedFrom = &received
 	}
 
 	if pub, err := ssh.ParsePublicKey(key.GetPublicKey()); err == nil {

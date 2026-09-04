@@ -159,8 +159,8 @@ func newFixture(t *testing.T) *fixture {
 		Locations: []bridge.Location{
 			{Label: "Agent socket", Path: "/run/user/1000/ladulas/agent.sock"},
 		},
-		Keys: func() []*ladulasv1.KeyRef {
-			return []*ladulasv1.KeyRef{{
+		Keys: func() []*ladulasv1.KeyInfo {
+			return []*ladulasv1.KeyInfo{{
 				Label: "work", Fingerprint: "SHA256:workkey", Algorithm: "ssh-ed25519",
 			}}
 		},

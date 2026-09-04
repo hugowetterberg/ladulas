@@ -30,9 +30,10 @@ import (
 type manageHost struct {
 	mu sync.Mutex
 
-	keys     map[string]*ladulasv1.KeyRef
+	keys     map[string]*ladulasv1.KeyInfo
 	removed  []string
 	agentUse []string
+	enabled  []string
 	sent     []string
 	// The passphrase as the host saw it, copied before the bridge wipes it.
 	passphrase string
@@ -63,7 +64,7 @@ func (h *manageHost) removeKey(_ context.Context, key string) error {
 
 func (h *manageHost) setKeyAgentUse(
 	_ context.Context, key string, use bool,
-) (*ladulasv1.KeyRef, error) {
+) (*ladulasv1.KeyInfo, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -75,6 +76,24 @@ func (h *manageHost) setKeyAgentUse(
 	}
 
 	ref.AgentUse = &use
+
+	return ref, nil
+}
+
+func (h *manageHost) setKeyEnabled(
+	_ context.Context, key string, enabled bool,
+) (*ladulasv1.KeyInfo, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.enabled = append(h.enabled, fmt.Sprintf("%s=%t", key, enabled))
+
+	ref, ok := h.keys[key]
+	if !ok {
+		return nil, errors.New("no such key")
+	}
+
+	ref.Disabled = !enabled
 
 	return ref, nil
 }
@@ -163,7 +182,7 @@ func (h *manageHost) setUnlockAtLogin(_ context.Context, enrol bool) error {
 // testKeyRef is a real ed25519 key as the store would hand it over, so the
 // authorized_keys line the bridge derives can be checked against the marshaller
 // rather than a literal.
-func testKeyRef(t *testing.T, label, comment string) (*ladulasv1.KeyRef, string) {
+func testKeyRef(t *testing.T, label, comment string) (*ladulasv1.KeyInfo, string) {
 	t.Helper()
 
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -178,7 +197,7 @@ func testKeyRef(t *testing.T, label, comment string) (*ladulasv1.KeyRef, string)
 
 	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
 
-	return &ladulasv1.KeyRef{
+	return &ladulasv1.KeyInfo{
 		Fingerprint: ssh.FingerprintSHA256(sshPub),
 		Algorithm:   sshPub.Type(),
 		PublicKey:   sshPub.Marshal(),
@@ -195,11 +214,11 @@ func newManageFixture(
 	opts := bridge.Options{
 		Name:      "workstation",
 		Presenter: &presenter{},
-		Keys: func() []*ladulasv1.KeyRef {
+		Keys: func() []*ladulasv1.KeyInfo {
 			host.mu.Lock()
 			defer host.mu.Unlock()
 
-			out := make([]*ladulasv1.KeyRef, 0, len(host.keys))
+			out := make([]*ladulasv1.KeyInfo, 0, len(host.keys))
 			for _, key := range host.keys {
 				out = append(out, key)
 			}
@@ -211,6 +230,7 @@ func newManageFixture(
 	if wired {
 		opts.RemoveKey = host.removeKey
 		opts.SetKeyAgentUse = host.setKeyAgentUse
+		opts.SetKeyEnabled = host.setKeyEnabled
 		opts.SendKey = host.sendKey
 		opts.Listen = host.listenState
 		opts.SetListen = host.setListen
@@ -223,13 +243,13 @@ func newManageFixture(
 	return bridge.NewSession(opts).Handler()
 }
 
-func newManageHost(t *testing.T) (*manageHost, *ladulasv1.KeyRef, string) {
+func newManageHost(t *testing.T) (*manageHost, *ladulasv1.KeyInfo, string) {
 	t.Helper()
 
 	key, line := testKeyRef(t, "work", "hugo@laptop")
 
 	host := &manageHost{
-		keys: map[string]*ladulasv1.KeyRef{key.GetFingerprint(): key},
+		keys: map[string]*ladulasv1.KeyInfo{key.GetFingerprint(): key},
 		listen: &ladulasv1.PeerListenState{
 			Spec:       "auto",
 			Source:     ladulasv1.ListenSource_LISTEN_SOURCE_AUTOMATIC,
@@ -319,6 +339,104 @@ func TestTakingAKeyOutOfTheAgentAnswersWithTheKey(t *testing.T) {
 
 	if len(host.agentUse) != 1 {
 		t.Errorf("the host was asked %v", host.agentUse)
+	}
+}
+
+// TestTurningAKeyOffAnswersWithTheKey: the stronger switch has the agent
+// switch's shape — the reply is the key, and a body that does not say which
+// way is refused rather than read as "off".
+func TestTurningAKeyOffAnswersWithTheKey(t *testing.T) {
+	host, key, _ := newManageHost(t)
+	handler := newManageFixture(t, host, true)
+
+	body := fmt.Sprintf(`{"key":%q,"enabled":false}`, key.GetFingerprint())
+
+	resp := postTo(t, handler, "/api/v1/keys/enabled", body)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("turn the key off: %d %s", resp.Code, resp.Body.String())
+	}
+
+	var answered bridge.KeyView
+
+	if err := json.Unmarshal(resp.Body.Bytes(), &answered); err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+
+	if !answered.Disabled {
+		t.Error("the answer does not say the key is off")
+	}
+
+	// The instance view says the same, so the Keys screen agrees with the
+	// sheet that made the change.
+	var view bridge.InstanceView
+
+	getJSON(t, handler, "/api/v1/instance", &view)
+
+	if len(view.Keys) != 1 || !view.Keys[0].Disabled {
+		t.Errorf("the instance view does not show the key off: %+v", view.Keys)
+	}
+
+	resp = postTo(t, handler, "/api/v1/keys/enabled",
+		fmt.Sprintf(`{"key":%q}`, key.GetFingerprint()))
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("a body that does not say which way answered %d", resp.Code)
+	}
+
+	if got := host.enabled; len(got) != 1 || !strings.HasSuffix(got[0], "=false") {
+		t.Errorf("the host was asked %v", got)
+	}
+}
+
+// TestAKeyCarriesWhereElseItIs: the other machines that hold a copy, and
+// whether the private half is in a secure element, are on the view — a name
+// where the store has one, the fingerprint where the pairing is gone.
+func TestAKeyCarriesWhereElseItIs(t *testing.T) {
+	host, key, _ := newManageHost(t)
+	handler := newManageFixture(t, host, true)
+
+	key.HandedTo = []*ladulasv1.KeyTransferInfo{
+		{PeerFingerprint: "SHA256:laptop", PeerName: "laptop"},
+		{PeerFingerprint: "SHA256:gone"},
+	}
+	key.ReceivedFrom = &ladulasv1.KeyTransferInfo{
+		PeerFingerprint: "SHA256:desk", PeerName: "desk",
+	}
+
+	var view bridge.InstanceView
+
+	getJSON(t, handler, "/api/v1/instance", &view)
+
+	if len(view.Keys) != 1 {
+		t.Fatalf("the instance lists %d keys", len(view.Keys))
+	}
+
+	shown := view.Keys[0]
+
+	if shown.Hardware {
+		t.Error("a portable key is shown as hardware")
+	}
+
+	if len(shown.HandedTo) != 2 ||
+		shown.HandedTo[0].Peer != "laptop" || shown.HandedTo[1].Peer != "SHA256:gone" {
+		t.Errorf("handed to %+v", shown.HandedTo)
+	}
+
+	if shown.ReceivedFrom == nil || shown.ReceivedFrom.Peer != "desk" {
+		t.Errorf("received from %+v", shown.ReceivedFrom)
+	}
+
+	key.Hardware = true
+	key.HandedTo = nil
+	key.ReceivedFrom = nil
+
+	var again bridge.InstanceView
+
+	getJSON(t, handler, "/api/v1/instance", &again)
+
+	shown = again.Keys[0]
+
+	if !shown.Hardware || shown.HandedTo != nil || shown.ReceivedFrom != nil {
+		t.Errorf("an enclave key is shown as %+v", shown)
 	}
 }
 
@@ -559,6 +677,7 @@ func TestAHostThatManagesNothingOffersNothing(t *testing.T) {
 	routes := map[string]string{
 		"/api/v1/keys/remove":              fmt.Sprintf(`{"key":%q}`, key.GetFingerprint()),
 		"/api/v1/keys/agent":               fmt.Sprintf(`{"key":%q,"agentUse":false}`, key.GetFingerprint()),
+		"/api/v1/keys/enabled":             fmt.Sprintf(`{"key":%q,"enabled":false}`, key.GetFingerprint()),
 		"/api/v1/keys/send":                fmt.Sprintf(`{"key":%q,"peer":"x","passphrase":"eA=="}`, key.GetFingerprint()),
 		"/api/v1/settings/listen":          `{"spec":"auto"}`,
 		"/api/v1/settings/auto-publish":    `{"enabled":true}`,

@@ -45,8 +45,8 @@ func TestViewerDemo(t *testing.T) {
 			{Label: "Policy", Path: "/home/hugo/.config/ladulas/policy.json"},
 			{Label: "Audit log", Path: "/home/hugo/.local/share/ladulas/audit.jsonl"},
 		},
-		Keys: func() []*ladulasv1.KeyRef {
-			return []*ladulasv1.KeyRef{{
+		Keys: func() []*ladulasv1.KeyInfo {
+			return []*ladulasv1.KeyInfo{{
 				Label:       "work",
 				Algorithm:   "ssh-ed25519",
 				Fingerprint: "SHA256:H9ysZRf1QUuqvtaOZHn2C9rgtUhPDq/BbDSi4SQgGGM",

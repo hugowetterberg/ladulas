@@ -137,6 +137,7 @@ func New(opts Options) (*Frontend, error) {
 		GenerateKey:        front.generateKey,
 		RemoveKey:          front.removeKey,
 		SetKeyAgentUse:     front.setKeyAgentUse,
+		SetKeyEnabled:      front.setKeyEnabled,
 		SendKey:            front.sendKey,
 		Borrowed:           front.borrowed,
 		KeyOffers:          front.keyOffers,

@@ -25,19 +25,6 @@ import (
 // dialled first.
 const rebindTimeout = 15 * time.Second
 
-// keyRef is the KeyRef a KeyInfo reduces to for the bridge, which is the part
-// a surface draws.
-func keyRef(key *ladulasv1.KeyInfo) *ladulasv1.KeyRef {
-	return &ladulasv1.KeyRef{
-		Fingerprint: key.GetFingerprint(),
-		Algorithm:   key.GetAlgorithm(),
-		PublicKey:   key.GetPublicKey(),
-		Comment:     key.GetComment(),
-		Label:       key.GetLabel(),
-		AgentUse:    key.AgentUse,
-	}
-}
-
 // removeKey forgets a key the instance holds.
 func (f *Frontend) removeKey(ctx context.Context, key string) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
@@ -55,7 +42,7 @@ func (f *Frontend) removeKey(ctx context.Context, key string) error {
 // setKeyAgentUse says whether the agent offers a key (decision T).
 func (f *Frontend) setKeyAgentUse(
 	ctx context.Context, key string, use bool,
-) (*ladulasv1.KeyRef, error) {
+) (*ladulasv1.KeyInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
@@ -68,7 +55,30 @@ func (f *Frontend) setKeyAgentUse(
 		return nil, fmt.Errorf("change what the agent offers: %w", err)
 	}
 
-	return keyRef(resp.Msg.GetKey()), nil
+	return resp.Msg.GetKey(), nil
+}
+
+// setKeyEnabled turns a key off without removing it, or back on.
+func (f *Frontend) setKeyEnabled(
+	ctx context.Context, key string, enabled bool,
+) (*ladulasv1.KeyInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	resp, err := f.client.SetKeyEnabled(ctx,
+		connect.NewRequest(&ladulasv1.SetKeyEnabledRequest{
+			Key:     key,
+			Enabled: enabled,
+		}))
+	if err != nil {
+		if enabled {
+			return nil, fmt.Errorf("turn the key on: %w", err)
+		}
+
+		return nil, fmt.Errorf("turn the key off: %w", err)
+	}
+
+	return resp.Msg.GetKey(), nil
 }
 
 // sendKey hands a portable key to a paired machine (decision S).

@@ -242,7 +242,7 @@ func (p *pairingControl) forget(window int) {
 // `ladulas keys generate` makes, from the surface that lists what it produced.
 func (f *Frontend) generateKey(
 	ctx context.Context, label, comment string,
-) (*ladulasv1.KeyRef, error) {
+) (*ladulasv1.KeyInfo, error) {
 	if label == "" {
 		return nil, errors.New("a key needs a name to be asked for by")
 	}
@@ -259,5 +259,5 @@ func (f *Frontend) generateKey(
 		return nil, fmt.Errorf("generate the key: %w", err)
 	}
 
-	return keyRef(resp.Msg.GetKey()), nil
+	return resp.Msg.GetKey(), nil
 }

@@ -437,10 +437,14 @@ export function keys(state) {
   }
 
   // Each key carries a cog, the way a machine does (decision AF): behind it
-  // are the public half to copy out, whether the agent offers the key, and
-  // the two things that cannot be undone — handing it to a paired machine
-  // and removing it. None of that is what somebody opening Keys came to
-  // read, and all of it used to be a command line.
+  // are the public half to copy out, whether the agent offers the key,
+  // whether it is on at all, where else it exists, and the two things that
+  // cannot be undone — handing it to a paired machine and removing it. None
+  // of that is what somebody opening Keys came to read, and all of it used
+  // to be a command line. The pills are the two ways a key can be not in use
+  // (decision T) — off, and on but kept out of the agent — plus the copies,
+  // because a key on more machines than this one is the fact that changes
+  // what losing one of them means.
   for (const key of held) {
     body.push(ui.card("key-card",
       append(el("div", "card-head"),
@@ -449,7 +453,7 @@ export function keys(state) {
           ui.title(key.label),
           key.comment ? ui.sub(key.comment) : null),
         key.algorithm ? el("span", "algorithm", key.algorithm) : null,
-        key.agentUse ? null : ui.pill("not offered"),
+        ...keyPills(key),
         ui.action("gear", "This key", () => keySheet(key, state))),
       ui.fingerprint(key.fingerprint, true)));
   }
@@ -787,8 +791,10 @@ function keySheet(key, state) {
       ui.stack(
         ui.title(key.label),
         key.comment ? ui.sub(key.comment) : null),
-      key.algorithm ? el("span", "algorithm", key.algorithm) : null),
-    ui.fingerprint(key.fingerprint, true)));
+      key.algorithm ? el("span", "algorithm", key.algorithm) : null,
+      ...keyPills(key)),
+    ui.fingerprint(key.fingerprint, true),
+    whereElse(key)));
 
   if (key.public) {
     body.push(ui.heading("Public key"));
@@ -801,6 +807,9 @@ function keySheet(key, state) {
 
   body.push(ui.heading("The agent"));
   body.push(agentUseCard(key, state));
+
+  body.push(ui.heading("On or off"));
+  body.push(enabledCard(key, state));
 
   const peers = state.instance.peers || [];
 
@@ -819,6 +828,113 @@ function keySheet(key, state) {
   body.push(removeKeyCard(key, state));
 
   return ui.sheet(key.label, ...body);
+}
+
+// keyPills are the words on a key card that say why it might not be in use,
+// and where else it is. "off" wins over "not offered": a disabled key is not
+// offered either, and saying both would be saying the weaker thing twice.
+function keyPills(key) {
+  const pills = [];
+
+  if (key.disabled) {
+    pills.push(ui.pill("off"));
+  } else if (!key.agentUse) {
+    pills.push(ui.pill("not offered"));
+  }
+
+  if (key.hardware) {
+    pills.push(ui.pill("secure element"));
+  } else if ((key.handedTo || []).length || key.receivedFrom) {
+    pills.push(ui.pill("copied"));
+  }
+
+  return pills;
+}
+
+// whereElse is the other machines that hold this key, on the sheet's head
+// card: the list somebody needs after losing one of them, because those are
+// the ends the key has to be rotated at. A key that exists only here has no
+// list and draws nothing. A pairing that has since been revoked leaves the
+// fingerprint where the name was; the copy is still there.
+function whereElse(key) {
+  const rows = [];
+
+  if (key.receivedFrom) {
+    rows.push({
+      label: "Received from",
+      value: key.receivedFrom.peer
+        + (key.receivedFrom.at ? ", " + key.receivedFrom.at : ""),
+    });
+  }
+
+  for (const copy of key.handedTo || []) {
+    rows.push({
+      label: "Handed to",
+      value: copy.peer + (copy.at ? ", " + copy.at : ""),
+    });
+  }
+
+  if (key.hardware) {
+    rows.push({
+      label: "Private half",
+      value: "In this machine's secure element. It cannot be copied out, "
+        + "so it cannot be handed to another machine.",
+    });
+  }
+
+  return rows.length ? facts(rows) : null;
+}
+
+// enabledCard turns the key off without removing it, or back on. It is the
+// stronger switch, kept apart from the agent's the way `ladulas keys disable`
+// is from `keys agent --off`: a key the agent does not offer still signs when
+// asked for by name, and a key that is off signs for nobody — not ssh here,
+// not git, not a paired machine that borrowed it — but stays in the store,
+// so the day it is wanted again it is a press away rather than a rotation.
+// One press, not two, because it is undone by pressing again.
+function enabledCard(key, state) {
+  const root = ui.card(null);
+
+  const draw = (disabled) => {
+    const change = el("button", null,
+      disabled ? "Turn it back on" : "Turn it off");
+    const said = ui.note("");
+
+    said.hidden = true;
+
+    change.onclick = () => {
+      change.disabled = true;
+
+      bridge
+        .setKeyEnabled(key.fingerprint, disabled)
+        .then((now) => {
+          state.refresh();
+          draw(Boolean(now && now.disabled));
+        })
+        .catch((error) => {
+          change.disabled = false;
+          said.textContent = error.message;
+          said.hidden = false;
+        });
+    };
+
+    root.replaceChildren(
+      el("div", "row-title", disabled ? "Off" : "On"),
+      ui.note(disabled
+        ? "The key signs for nobody: not the agent here, not a commit that "
+          + "names it, not a paired machine that borrowed it. It is still in "
+          + "the store and turns back on from here."
+        : "The key signs when asked. Turning it off keeps it in the store "
+          + "and stops every use of it at once — the switch to reach for "
+          + "when something about a machine that can use it is in doubt, "
+          + "and removing would be one step too many."),
+      append(el("div", "card-actions"), change),
+      said);
+  };
+
+  draw(Boolean(key.disabled));
+
+  return root;
 }
 
 // agentUseCard is whether the agent offers the key (decision T), and the way
