@@ -2754,6 +2754,30 @@ cannot be reached, and once ever, when a phone is lost — which is the
 definition of what belongs behind a cog rather than in front of one
 (decision AF).
 
+**Two things about a pairing can be changed there without ending it**, since
+2026-09-04: what this side calls the machine, and which of this instance's
+keys it may sign with. Both were `ladulas peers rename` and `peers allow
+--key` only, and both are decisions about a pairing rather than things done
+with it, which is what puts them on the sheet. The name is a field and not a
+question because it is this side's own label and travels nowhere (§7). The
+key access is a choice of three — none, every key including ones made later,
+or a ticked list — and then the list, because "every key" is a decision
+worth making in those words (decision T) and not one arrived at by ticking
+everything that happens to exist today; it is applied whole, the way the
+CLI's flags are, so a key unticked is withdrawn. The bridge carries it as
+`SetPeerKeys` and the desktop's host answers it through the daemon's
+`SetPeerDirections`, handing the directions back unchanged — the same shape
+as the phone's key switch, which is the two-way version of the same choice.
+
+**What the pairing is for is not on the sheet, and is not meant to be.** A
+direction was decided once, by the side showing the code, for both sides,
+and changing it means pairing again (decision AD); `peers allow --approve`
+at a terminal is the escape hatch for somebody who knows exactly what they
+are doing, and two checkboxes in a window would be exactly the
+widening-later that decision exists to refuse. The parity sweep that added
+the name and the keys listed the directions as a gap too, and the gap is the
+design. Do not close it by putting the checkboxes back.
+
 **A key has a cog too**, since 2026-09-04, and behind it is everything
 `ladulas keys` does to a key the store holds that a webview can be trusted
 with. The public key, as the authorized_keys line — the one thing people

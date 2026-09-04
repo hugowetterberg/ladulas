@@ -345,6 +345,28 @@ type Options struct {
 	// pairing bought — the keys it lends, the promises it holds, the route that
 	// wakes it — which is why the surface asks twice.
 	RevokePeer func(ctx context.Context, peer string) error
+	// RenamePeer changes the name a paired machine is known by here. Optional.
+	// The name is this side's own label for the machine and travels nowhere —
+	// which is why it can be a text field rather than a question — and the
+	// answer is the peer as it now is, so the screen redraws from it.
+	RenamePeer func(ctx context.Context, peer, name string) (PeerView, error)
+	// SetPeerKeys changes which of this instance's keys a paired machine may
+	// ask for signatures with (decision T): every key including ones made
+	// later, none, or a list. Optional.
+	//
+	// The list is the whole permission, the way `ladulas peers allow --key`
+	// reads its flags: a key left out is a key the peer may no longer use.
+	// It is key access and not the pairing's directions on purpose. What a
+	// pairing is for is decided once, by the side showing the code, and
+	// changing it means pairing again (decision AD); `peers allow --approve`
+	// is the escape hatch for somebody who knows exactly what they are doing,
+	// and a form with two checkboxes on it would be the widening-later that
+	// decision exists to refuse. Which keys a peer may borrow is the third,
+	// separate decision (§7), and a phone already has a switch for it. The
+	// answer is the peer as it now is.
+	SetPeerKeys func(
+		ctx context.Context, peer string, all bool, keys []string,
+	) (PeerView, error)
 	// Pairings lists the pairings under way, and Withdraw calls one off (§7).
 	// Optional together: a host without them shows no pairings section, which
 	// is right for an instance with no peer channel.
@@ -933,6 +955,8 @@ func (s *Session) Handler() http.Handler {
 	// The peer is named in the body rather than in the path, for the reason the
 	// browsing calls put it in the query: a fingerprint carries slashes.
 	mux.HandleFunc("POST /api/v1/peers/revoke", s.handleRevokePeer)
+	mux.HandleFunc("POST /api/v1/peers/rename", s.handleRenamePeer)
+	mux.HandleFunc("POST /api/v1/peers/keys", s.handleSetPeerKeys)
 	mux.HandleFunc("GET /api/v1/pairings/invitation", s.handleInvitation)
 	mux.HandleFunc("POST /api/v1/pairings/invite", s.handleInvite)
 	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
@@ -1528,6 +1552,102 @@ func (s *Session) handleRevokePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleRenamePeer changes what a paired machine is called here.
+func (s *Session) handleRenamePeer(w http.ResponseWriter, r *http.Request) {
+	if s.opts.RenamePeer == nil {
+		writeError(w, http.StatusNotImplemented, "this host cannot rename a peer")
+
+		return
+	}
+
+	var body struct {
+		Peer string `json:"peer"`
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Peer) == "" {
+		writeError(w, http.StatusBadRequest, "no machine was named")
+
+		return
+	}
+
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "a machine needs a name")
+
+		return
+	}
+
+	peer, err := s.opts.RenamePeer(r.Context(), body.Peer, name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, peer)
+}
+
+// handleSetPeerKeys changes which of this instance's keys a paired machine
+// may use.
+//
+// The body is the state wanted. The boolean is a pointer so that a body
+// missing it is refused rather than read as "not every key": a peer that
+// stops being able to sign because a field was misspelled is a machine that
+// stops working, and the screen would have no way to tell that from a
+// decision. A list with "all" set is not an error — the daemon keeps the list
+// and ignores it while the blanket permission stands, as the CLI does.
+func (s *Session) handleSetPeerKeys(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetPeerKeys == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change which keys a peer may use")
+
+		return
+	}
+
+	var body struct {
+		Peer    string   `json:"peer"`
+		AllKeys *bool    `json:"allKeys"`
+		Keys    []string `json:"keys"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Peer) == "" {
+		writeError(w, http.StatusBadRequest, "no machine was named")
+
+		return
+	}
+
+	if body.AllKeys == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether the peer may use every key")
+
+		return
+	}
+
+	peer, err := s.opts.SetPeerKeys(r.Context(), body.Peer, *body.AllKeys, body.Keys)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, peer)
 }
 
 // handleInvitation is the code on display, if there is one.

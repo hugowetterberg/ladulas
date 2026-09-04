@@ -264,23 +264,33 @@ func (f *Frontend) peers() []bridge.PeerView {
 	var out []bridge.PeerView
 
 	for _, peer := range status.GetPeers() {
-		out = append(out, bridge.PeerView{
-			Name:        peer.GetName(),
-			Fingerprint: peer.GetFingerprint(),
-			Direction: trust.Describe(
-				peer.GetMayApprove(), peer.GetMayRequest()),
-			Summary: trust.DescribeShort(
-				peer.GetMayApprove(), peer.GetMayRequest()),
-			State:      peerState(peer),
-			Dialable:   len(peer.GetAddresses()) > 0,
-			LastSeen:   peerLastSeen(peer),
-			Addresses:  peer.GetAddresses(),
-			MayUseKeys: peer.GetAllKeys(),
-			KeyAccess:  keyAccessWord(peer),
-		})
+		out = append(out, peerView(peer))
 	}
 
 	return out
+}
+
+// peerView is a peer as the window draws it, from what the daemon says about
+// it. It is one function because three calls answer with a peer — the
+// listing, a rename and a change of directions — and a sheet that redraws
+// from the answer to a write has to be drawing the same thing the listing
+// draws.
+func peerView(peer *ladulasv1.PeerStatus) bridge.PeerView {
+	return bridge.PeerView{
+		Name:        peer.GetName(),
+		Fingerprint: peer.GetFingerprint(),
+		Direction: trust.Describe(
+			peer.GetMayApprove(), peer.GetMayRequest()),
+		Summary: trust.DescribeShort(
+			peer.GetMayApprove(), peer.GetMayRequest()),
+		State:       peerState(peer),
+		Dialable:    len(peer.GetAddresses()) > 0,
+		LastSeen:    peerLastSeen(peer),
+		Addresses:   peer.GetAddresses(),
+		MayUseKeys:  peer.GetAllKeys(),
+		AllowedKeys: peer.GetAllowedKeys(),
+		KeyAccess:   keyAccessWord(peer),
+	}
 }
 
 // keyAccessWord says how much of this instance's key set a peer may use, in the
@@ -386,6 +396,76 @@ func (f *Frontend) revokePeer(ctx context.Context, peer string) error {
 	}
 
 	return nil
+}
+
+// renamePeer changes what this side calls a paired machine. The name goes
+// nowhere but this instance's trust store, which is why it is a field and not
+// a question (§7).
+func (f *Frontend) renamePeer(
+	ctx context.Context, peer, name string,
+) (bridge.PeerView, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	resp, err := f.client.RenamePeer(ctx,
+		connect.NewRequest(&ladulasv1.RenamePeerRequest{Peer: peer, Name: name}))
+	if err != nil {
+		return bridge.PeerView{}, fmt.Errorf("rename the machine: %w", err)
+	}
+
+	return peerView(resp.Msg.GetPeer()), nil
+}
+
+// setPeerKeys changes which of this instance's keys a paired machine may use,
+// leaving the pairing's directions as they are (§7, decision AD). The daemon
+// has one write for both — SetPeerDirections, whose fields are the whole
+// state wanted — so the directions are read first and handed back unchanged,
+// the way the phone's key switch does it (decision T).
+func (f *Frontend) setPeerKeys(
+	ctx context.Context, peer string, all bool, keys []string,
+) (bridge.PeerView, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	status, err := f.status()
+	if err != nil {
+		return bridge.PeerView{}, fmt.Errorf("read what the machine may do: %w", err)
+	}
+
+	var current *ladulasv1.PeerStatus
+
+	for _, candidate := range status.GetPeers() {
+		if candidate.GetFingerprint() == peer || candidate.GetName() == peer {
+			current = candidate
+
+			break
+		}
+	}
+
+	if current == nil {
+		return bridge.PeerView{}, fmt.Errorf("no paired machine %q", peer)
+	}
+
+	// Taking away the blanket permission takes the list with it: a person
+	// choosing "none" means none, and a remembered list quietly surviving
+	// would be the opposite of what they said.
+	if all {
+		keys = nil
+	}
+
+	resp, err := f.client.SetPeerDirections(ctx,
+		connect.NewRequest(&ladulasv1.SetPeerDirectionsRequest{
+			Peer:        current.GetFingerprint(),
+			MayApprove:  current.GetMayApprove(),
+			MayRequest:  current.GetMayRequest(),
+			AllowedKeys: keys,
+			AllKeys:     all,
+		}))
+	if err != nil {
+		return bridge.PeerView{}, fmt.Errorf("change which keys the machine may use: %w", err)
+	}
+
+	return peerView(resp.Msg.GetPeer()), nil
 }
 
 // fetchDiff asks the daemon to ask the requester (§5). The request is named by

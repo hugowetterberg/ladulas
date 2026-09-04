@@ -612,6 +612,16 @@ under `keys list` are the same at a terminal, and `keys import` is the one
 that stays there. On the Keys screen itself a key wears *off*, *not offered*,
 *copied* or *secure element* as a pill.
 
+**The cog on a paired machine** opens the pairing's sheet: the fingerprint
+the two machines compared, the addresses and when it was last connected;
+*Name*, what this side calls it, which travels nowhere; *Keys it may use*,
+which is none, every key including ones made later, or a ticked list, applied
+whole the way `peers allow --key` reads its flags; and *End the pairing*,
+which presses twice. What the pairing is *for* — who approves for whom — is
+not there and stays `peers allow --approve`/`--request` at a terminal, on
+purpose (decision AD): a direction is decided once when the code is shown,
+and changing it means pairing again.
+
 **Where the peer channel listens** is on Settings too, drawn as `ladulas
 listen` prints it — the setting and its source, what is bound, what peers
 dial, and what the policy passed over with the reason — and `Change` opens the

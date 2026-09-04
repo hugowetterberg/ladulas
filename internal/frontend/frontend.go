@@ -150,6 +150,8 @@ func New(opts Options) (*Frontend, error) {
 		Delegations:        front.delegations,
 		Peers:              front.peers,
 		RevokePeer:         front.revokePeer,
+		RenamePeer:         front.renamePeer,
+		SetPeerKeys:        front.setPeerKeys,
 		Pairings:           front.pairings,
 		Withdraw:           front.withdrawPairing,
 		Pairing:            &pairingControl{front: front},

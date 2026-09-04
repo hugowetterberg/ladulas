@@ -393,11 +393,15 @@ type PeerView struct {
 	Summary     string   `json:"summary,omitempty"`
 	State       string   `json:"state"`
 	Addresses   []string `json:"addresses,omitempty"`
-	// MayUseKeys says this peer may ask for signatures with the keys this
+	// MayUseKeys says this peer may ask for signatures with every key this
 	// instance holds (decision T). It is a permission somebody has to be able to
 	// give from the device holding the key, which on a phone is this field and a
 	// switch beside it.
 	MayUseKeys bool `json:"mayUseKeys"`
+	// AllowedKeys are the keys the peer may use when it is not every key, as
+	// fingerprints, which is how the trust record holds them and how a form
+	// matches them against the keys the instance lists.
+	AllowedKeys []string `json:"allowedKeys,omitempty"`
 	// KeyAccess is the same thing in the words a listing uses: all, none, or how
 	// many.
 	KeyAccess string `json:"keyAccess,omitempty"`

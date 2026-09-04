@@ -16,6 +16,7 @@ import (
 
 	"github.com/hugowetterberg/ladulas/pkg/bridge"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -45,6 +46,45 @@ type manageHost struct {
 	autoPublish bool
 	enrolled    bool
 	refuse      error
+
+	peer      bridge.PeerView
+	renamed   []string
+	keyGrants []string
+}
+
+func (h *manageHost) renamePeer(
+	_ context.Context, peer, name string,
+) (bridge.PeerView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.renamed = append(h.renamed, peer+"="+name)
+
+	if peer != h.peer.Fingerprint {
+		return bridge.PeerView{}, errors.New("no such peer")
+	}
+
+	h.peer.Name = name
+
+	return h.peer, nil
+}
+
+func (h *manageHost) setPeerKeys(
+	_ context.Context, peer string, all bool, keys []string,
+) (bridge.PeerView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.keyGrants = append(h.keyGrants, fmt.Sprintf("%s all=%t %v", peer, all, keys))
+
+	if peer != h.peer.Fingerprint {
+		return bridge.PeerView{}, errors.New("no such peer")
+	}
+
+	h.peer.MayUseKeys = all
+	h.peer.AllowedKeys = keys
+
+	return h.peer, nil
 }
 
 func (h *manageHost) removeKey(_ context.Context, key string) error {
@@ -231,6 +271,8 @@ func newManageFixture(
 		opts.RemoveKey = host.removeKey
 		opts.SetKeyAgentUse = host.setKeyAgentUse
 		opts.SetKeyEnabled = host.setKeyEnabled
+		opts.RenamePeer = host.renamePeer
+		opts.SetPeerKeys = host.setPeerKeys
 		opts.SendKey = host.sendKey
 		opts.Listen = host.listenState
 		opts.SetListen = host.setListen
@@ -250,6 +292,11 @@ func newManageHost(t *testing.T) (*manageHost, *ladulasv1.KeyInfo, string) {
 
 	host := &manageHost{
 		keys: map[string]*ladulasv1.KeyInfo{key.GetFingerprint(): key},
+		peer: bridge.PeerView{
+			Name:        "laptop",
+			Fingerprint: "SHA256:laptop",
+			Direction:   trust.Describe(true, false),
+		},
 		listen: &ladulasv1.PeerListenState{
 			Spec:       "auto",
 			Source:     ladulasv1.ListenSource_LISTEN_SOURCE_AUTOMATIC,
@@ -519,6 +566,77 @@ func TestHandingAKeyOverNeedsThePassphraseAndWipesIt(t *testing.T) {
 	}
 }
 
+// TestRenamingAPeerAnswersWithThePeer: the name is this side's label, so the
+// call is a write and an answer and nothing waits on the machine; an empty
+// name is refused before the host hears of it.
+func TestRenamingAPeerAnswersWithThePeer(t *testing.T) {
+	host, _, _ := newManageHost(t)
+	handler := newManageFixture(t, host, true)
+
+	resp := postTo(t, handler, "/api/v1/peers/rename",
+		`{"peer":"SHA256:laptop","name":" desk "}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("rename the peer: %d %s", resp.Code, resp.Body.String())
+	}
+
+	var answered bridge.PeerView
+
+	if err := json.Unmarshal(resp.Body.Bytes(), &answered); err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+
+	if answered.Name != "desk" {
+		t.Errorf("the answer calls the peer %q", answered.Name)
+	}
+
+	resp = postTo(t, handler, "/api/v1/peers/rename",
+		`{"peer":"SHA256:laptop","name":"  "}`)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("an empty name answered %d", resp.Code)
+	}
+
+	if got := host.renamed; len(got) != 1 || got[0] != "SHA256:laptop=desk" {
+		t.Errorf("the host was asked %v", got)
+	}
+}
+
+// TestChangingWhichKeysAPeerMayUseTakesTheWholeList: the body is the state
+// wanted, the boolean has to be there, and the answer carries the list a form
+// restarts from as well as the word a listing shows.
+func TestChangingWhichKeysAPeerMayUseTakesTheWholeList(t *testing.T) {
+	host, key, _ := newManageHost(t)
+	handler := newManageFixture(t, host, true)
+
+	body := fmt.Sprintf(`{"peer":"SHA256:laptop","allKeys":false,"keys":[%q]}`,
+		key.GetFingerprint())
+
+	resp := postTo(t, handler, "/api/v1/peers/keys", body)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("set the keys: %d %s", resp.Code, resp.Body.String())
+	}
+
+	var answered bridge.PeerView
+
+	if err := json.Unmarshal(resp.Body.Bytes(), &answered); err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+
+	if answered.MayUseKeys ||
+		len(answered.AllowedKeys) != 1 || answered.AllowedKeys[0] != key.GetFingerprint() {
+		t.Errorf("the answer is %+v", answered)
+	}
+
+	// Leaving the boolean out is refused rather than read as "not every key".
+	resp = postTo(t, handler, "/api/v1/peers/keys", `{"peer":"SHA256:laptop","keys":[]}`)
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("a body missing allKeys answered %d", resp.Code)
+	}
+
+	if len(host.keyGrants) != 1 {
+		t.Errorf("the host was asked %v", host.keyGrants)
+	}
+}
+
 // TestTheListenStateIsOnTheInstanceViewInWords: the settings screen is drawn
 // from one call, and the words are the bridge's so that every host says the
 // same thing `ladulas listen` does — including what was passed over and why,
@@ -678,6 +796,8 @@ func TestAHostThatManagesNothingOffersNothing(t *testing.T) {
 		"/api/v1/keys/remove":              fmt.Sprintf(`{"key":%q}`, key.GetFingerprint()),
 		"/api/v1/keys/agent":               fmt.Sprintf(`{"key":%q,"agentUse":false}`, key.GetFingerprint()),
 		"/api/v1/keys/enabled":             fmt.Sprintf(`{"key":%q,"enabled":false}`, key.GetFingerprint()),
+		"/api/v1/peers/rename":             `{"peer":"SHA256:laptop","name":"desk"}`,
+		"/api/v1/peers/keys":               `{"peer":"SHA256:laptop","allKeys":true}`,
 		"/api/v1/keys/send":                fmt.Sprintf(`{"key":%q,"peer":"x","passphrase":"eA=="}`, key.GetFingerprint()),
 		"/api/v1/settings/listen":          `{"spec":"auto"}`,
 		"/api/v1/settings/auto-publish":    `{"enabled":true}`,

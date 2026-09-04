@@ -1817,19 +1817,25 @@ export async function peer(state, fingerprint, go) {
 }
 
 // pairingSheet is what the cog on the peer screen opens (decision AF): what the
-// pairing is, and the one way to end it.
+// pairing is, what can be changed about it without ending it, and the one way
+// to end it.
 //
-// Both were down the screen, under everything a peer is *for* — the keys it
-// lends and what it publishes — and they belong together rather than apart. The
-// facts are read once, when two machines are being compared or somebody is
-// working out why a peer cannot be reached; ending the pairing is read once
-// ever. What a person opens a peer for is what it does, and neither of these
-// is that.
+// The facts and the ending were down the screen, under everything a peer is
+// *for* — the keys it lends and what it publishes — and they belong together
+// rather than apart. The facts are read once, when two machines are being
+// compared or somebody is working out why a peer cannot be reached; ending the
+// pairing is read once ever. What a person opens a peer for is what it does,
+// and none of this is that. The name and the key access joined them on
+// 2026-09-04, when they stopped being `ladulas peers rename` and `peers allow
+// --key` only: both are things decided about a pairing rather than done with
+// it. What the pairing is *for* is not here and is not meant to be: that was
+// decided once, by the side showing the code, and changing it means pairing
+// again (decision AD) — `peers allow --approve` at a terminal is the escape
+// hatch, and a checkbox would be the widening-later that decision refuses.
 function pairingSheet(peer, state, go) {
   const sheet = ui.sheet("Paired with " + peer.name,
     ui.card(null, facts([
       { label: "Fingerprint", value: peer.fingerprint, mono: true },
-      { label: "May use keys", value: keyAccess(peer) },
       ...(peer.addresses || []).map((address, index) => ({
         label: index === 0 ? "Addresses" : "",
         value: address,
@@ -1843,6 +1849,10 @@ function pairingSheet(peer, state, go) {
     ]),
     ui.note("The fingerprint is what the two machines compared when they "
       + "paired.")),
+    ui.heading("Name"),
+    renamePeerCard(peer, state),
+    ui.heading("Keys it may use"),
+    peerKeysCard(peer, state),
     ui.heading("End the pairing"),
     revokeCard(peer, state, () => {
       sheet.close();
@@ -1850,6 +1860,178 @@ function pairingSheet(peer, state, go) {
     }));
 
   return sheet;
+}
+
+// renamePeerCard changes what this side calls the machine. A field and not a
+// question: the name is this instance's own label, nobody else sees it, and
+// the reason to change it is that two machines named after their hostname are
+// easily the same word, and which one a prompt is talking about matters more
+// than what either calls itself (§7).
+function renamePeerCard(peer, state) {
+  const name = field("Known here as", peer.name, "text");
+  const rename = el("button", null, "Rename");
+  const said = ui.note("");
+
+  name.input.value = peer.name;
+  said.hidden = true;
+
+  rename.onclick = () => {
+    const wanted = name.input.value.trim();
+
+    if (!wanted) {
+      said.textContent = "A machine needs a name.";
+      said.hidden = false;
+      name.input.focus();
+
+      return;
+    }
+
+    if (wanted === peer.name) {
+      said.textContent = "That is what it is called already.";
+      said.hidden = false;
+
+      return;
+    }
+
+    rename.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .renamePeer(peer.fingerprint, wanted)
+      .then((now) => {
+        rename.disabled = false;
+        said.textContent = "It is " + ((now && now.name) || wanted) + " here now.";
+        said.hidden = false;
+        // The screen behind the sheet is titled with the old name, and the
+        // sheet is too; the poll redraws the one and the other closes with
+        // the sheet.
+        state.refresh();
+      })
+      .catch((error) => {
+        rename.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    ui.note("This side's label for the machine. It travels nowhere; the "
+      + "machine goes on calling itself whatever it likes."),
+    name.root,
+    append(el("div", "card-actions"), rename),
+    said);
+}
+
+// peerKeysCard is which of this machine's keys the peer may sign with, as a
+// form that starts from what it may use now and is applied whole, the way
+// `ladulas peers allow --key` reads its flags: a key unticked is a key the
+// peer may no longer use. One press, since pressing again with the old boxes
+// undoes it — the thing on this sheet that cannot be undone is below, and asks
+// twice.
+//
+// A choice of three and then a list, rather than a list alone, because "every
+// key, including ones made later" is a decision worth making in those words
+// (decision T) and not something arrived at by ticking everything that happens
+// to exist today. The phone has the same choice with two of the three.
+function peerKeysCard(peer, state) {
+  const root = ui.card(null);
+
+  const draw = (now) => {
+    const access = el("label", "field");
+    const choice = document.createElement("select");
+    const held = state.instance.keys || [];
+    const allowed = new Set(now.allowedKeys || []);
+
+    for (const [value, text] of [
+      ["none", "None of this machine's keys"],
+      ["all", "Every key this machine holds, including ones made later"],
+      ["some", "Only the keys ticked below"],
+    ]) {
+      const option = document.createElement("option");
+
+      option.value = value;
+      option.textContent = text;
+      choice.append(option);
+    }
+
+    choice.value = now.mayUseKeys ? "all" : allowed.size ? "some" : "none";
+    append(access, el("span", "field-label", "It may sign with"), choice);
+
+    const list = el("div", "key-choices");
+    const ticks = [];
+
+    for (const key of held) {
+      const row = checkRow(key.label + (key.comment ? " — " + key.comment : ""),
+        allowed.has(key.fingerprint));
+
+      ticks.push({ key, input: row.input });
+      list.append(row.root);
+    }
+
+    if (!held.length) {
+      list.append(ui.note("This machine holds no keys to lend."));
+    }
+
+    const showList = () => {
+      list.hidden = choice.value !== "some";
+    };
+
+    choice.onchange = showList;
+    showList();
+
+    const apply = el("button", null, "Apply");
+    const said = ui.note("");
+
+    said.hidden = true;
+
+    apply.onclick = () => {
+      apply.disabled = true;
+      said.hidden = true;
+
+      bridge
+        .setPeerKeys(peer.fingerprint, choice.value === "all",
+          choice.value === "some"
+            ? ticks.filter((tick) => tick.input.checked)
+              .map((tick) => tick.key.fingerprint)
+            : [])
+        .then((answered) => {
+          state.refresh();
+          draw(answered || now);
+        })
+        .catch((error) => {
+          apply.disabled = false;
+          said.textContent = error.message;
+          said.hidden = false;
+        });
+    };
+
+    root.replaceChildren(
+      el("div", "row-title", "May use " + keyAccess(now) + " of this machine's keys"),
+      ui.note("Pairing grants directions, never keys; this is the separate "
+        + "decision. The choice is the whole of what it may use afterwards, "
+        + "so a key left unticked is withdrawn, and the machine's agent "
+        + "stops offering it within a heartbeat."),
+      access,
+      list,
+      append(el("div", "card-actions"), apply),
+      said);
+  };
+
+  draw(peer);
+
+  return root;
+}
+
+// checkRow is a checkbox with its sentence beside it.
+function checkRow(text, checked) {
+  const root = el("label", "check");
+  const input = document.createElement("input");
+
+  input.type = "checkbox";
+  input.checked = Boolean(checked);
+  append(root, input, el("span", null, text));
+
+  return { root, input };
 }
 
 // revokeCard forgets a machine, and asks twice before it does.
@@ -1896,7 +2078,7 @@ function revokeCard(peer, state, done) {
     ui.note("Revoking takes back everything this pairing granted: the "
       + "direction, any keys it lends, any promise made under it, and the "
       + "connection it is holding. What this side lets it do is changed "
-      + "without revoking, with `ladulas peers allow`."),
+      + "without revoking, above."),
     append(el("div", "card-actions"), revoke),
     sure);
 }
@@ -1906,7 +2088,7 @@ function keyAccess(peer) {
     return peer.keyAccess;
   }
 
-  return peer.mayUseKeys ? "all of them" : "none";
+  return peer.mayUseKeys ? "all" : "none";
 }
 
 function projectRow(project) {

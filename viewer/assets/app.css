@@ -1481,6 +1481,9 @@ button.danger:hover:not(:disabled) {
 
 .check input { margin: 0; flex: none; }
 
+/* The keys a peer may use, indented under the choice that showed them. */
+.key-choices { margin-left: 12px; }
+
 button.primary {
   border-color: var(--accent);
   color: var(--accent);

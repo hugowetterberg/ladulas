@@ -79,6 +79,19 @@ export const bridge = {
   // not asked, so there is nothing to wait for and nothing that can be
   // half-done — which is why the screen asks twice before calling it.
   revokePeer: (peer) => call("POST", "/peers/revoke", { peer }),
+  // Changing a paired machine without forgetting it: what this side calls
+  // it, and which of this machine's keys it may use. Both answer with the
+  // peer as it now is. The list is the whole permission, as `ladulas peers
+  // allow --key` reads its flags, and the boolean is always sent so the
+  // bridge cannot read a missing one as "no". What the pairing is *for* is
+  // not here (decision AD).
+  renamePeer: (peer, name) => call("POST", "/peers/rename", { peer, name }),
+  setPeerKeys: (peer, allKeys, keys) =>
+    call("POST", "/peers/keys", {
+      peer,
+      allKeys: Boolean(allKeys),
+      keys: keys || [],
+    }),
 
   // Starting one. The intent is what the pairing is for and is required: the
   // side displaying the code decides it for both sides (decision AD). A 404
