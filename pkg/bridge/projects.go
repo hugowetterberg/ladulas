@@ -730,6 +730,15 @@ func (s *Session) writeListing(
 	case listing.Publisher != nil:
 		view.ProjectView = projectView(listing.Publisher)
 	case ok:
+		// The heading over a listing nobody asked for must not accuse the
+		// publisher either: the cached account is written as if a dial had
+		// failed, and here none was made.
+		if listing.Unasked {
+			unasked := *cached
+			unasked.Unasked = true
+			cached = &unasked
+		}
+
 		view.ProjectView = projectView(cached)
 	default:
 		view.ProjectView = ProjectView{Fingerprint: fingerprint, ProjectID: id}

@@ -670,6 +670,12 @@ func TestWhatIsHeldHereIsDrawnBeforeAnybodyIsAsked(t *testing.T) {
 		t.Errorf("the kept listing says %q", listing.Note)
 	}
 
+	// The heading is the cached account of the project, and it must not say
+	// the publisher could not be reached either.
+	if listing.State != "Read from headless before. 1 page readable with no signal." {
+		t.Errorf("the kept listing is headed %q", listing.State)
+	}
+
 	if len(listing.Entries) != 1 || listing.Entries[0].Name != "docs" {
 		t.Errorf("the kept root lists %+v", listing.Entries)
 	}
