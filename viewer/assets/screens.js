@@ -239,7 +239,10 @@ function grantCard(grant, state) {
   }
 
   if (!grant.revokePending) {
+    const extend = el("button", "small", "Extend");
     const revoke = el("button", "danger small", "Revoke");
+
+    extend.onclick = () => extendGrantSheet(grant, state);
 
     revoke.onclick = () => {
       revoke.disabled = true;
@@ -253,10 +256,101 @@ function grantCard(grant, state) {
         });
     };
 
-    root.append(append(el("div", "card-actions"), revoke));
+    root.append(append(el("div", "card-actions"), extend, revoke));
   }
 
   return root;
+}
+
+// extendGrantSheet puts more time on a promise, counted from now (decision V).
+//
+// From now rather than added to what is left, because that is what somebody
+// setting a clock means, and it is what lets the same ceiling apply here as to
+// granting: the clock stops where a grant offer's does, and the instance
+// refuses anything past it whatever was drawn. A delegated grant is re-signed
+// and delivered to the machine holding it, and one that could not be delivered
+// is one that did not happen — the error says so, and the sheet stays open on
+// it, because closing would say the extension took.
+function extendGrantSheet(grant, state) {
+  const settings = (state.instance && state.instance.settings) || {};
+  const max = settings.maxGrantSeconds || 24 * 3600;
+
+  const clock = document.createElement("input");
+
+  clock.type = "time";
+  clock.step = 60;
+  clock.min = "00:01";
+  clock.max = ui.clockValue(max);
+  clock.value = ui.clockValue(Math.min(3600, max));
+
+  const save = el("button", "primary", "");
+  const said = ui.note("");
+  const quick = el("div", "card-actions");
+
+  said.hidden = true;
+
+  function chosen() {
+    return ui.clockSeconds(clock.value);
+  }
+
+  function refresh() {
+    const seconds = chosen();
+
+    save.textContent = "Run for " + ui.duration(seconds) + " from now";
+    save.disabled = seconds < 60 || seconds > max;
+  }
+
+  clock.oninput = refresh;
+
+  for (const seconds of [900, 3600, 4 * 3600, 8 * 3600]) {
+    if (seconds > max) {
+      continue;
+    }
+
+    const button = el("button", null, ui.duration(seconds));
+
+    button.onclick = () => {
+      clock.value = ui.clockValue(seconds);
+      refresh();
+    };
+
+    quick.append(button);
+  }
+
+  const sheet = ui.sheet("Give the promise more time",
+    ui.note(grant.description + " — runs out " + grant.expires + "."),
+    append(el("label", "field"),
+      el("span", "field-label", "Hours and minutes, from now"), clock),
+    quick,
+    grant.delegated
+      ? ui.note("The promise is held by " + (grant.delegate || "a paired machine")
+        + ", which has to be reached for the new time to count. If it "
+        + "cannot be, nothing changes and this says so.")
+      : null,
+    append(el("div", "card-actions"), save),
+    said);
+
+  save.onclick = () => {
+    save.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .extendGrant(grant.id, chosen())
+      .then(() => {
+        state.refresh();
+        sheet.close();
+      })
+      .catch((error) => {
+        save.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  refresh();
+  clock.focus();
+
+  return sheet;
 }
 
 // A standing permission somebody else made about this instance: what it covers,

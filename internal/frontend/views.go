@@ -484,6 +484,7 @@ func settingsView(msg *ladulasv1.SettingsResponse) bridge.SettingsView {
 		MinSignTimeoutSeconds:     seconds(msg.GetMinSignTimeout()),
 		MaxSignTimeoutSeconds:     seconds(msg.GetMaxSignTimeout()),
 		PolicyPath:                msg.GetPolicyPath(),
+		MaxGrantSeconds:           seconds(msg.GetMaxGrantTtl()),
 	}
 }
 

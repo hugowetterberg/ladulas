@@ -39,6 +39,21 @@ func (a *App) SignTimeout() time.Duration {
 	return policy.Timeout(ladulasv1.RequestKind_REQUEST_KIND_GIT_SIGN)
 }
 
+// MaxGrantTTL is the longest promise this instance makes, read the way
+// SignTimeout is: from the engine in force, or from the file while sealed.
+func (a *App) MaxGrantTTL() time.Duration {
+	if current := a.currentCore(); current != nil {
+		return current.engine.Policy().MaxGrantTTL()
+	}
+
+	policy, err := approval.LoadPolicy(a.Config.PolicyPath())
+	if err != nil {
+		return approval.DefaultGrantTTLs[len(approval.DefaultGrantTTLs)-1]
+	}
+
+	return policy.MaxGrantTTL()
+}
+
 // SetSignTimeout writes the budget to the policy document and puts it into
 // effect, with no reload and no restart.
 //

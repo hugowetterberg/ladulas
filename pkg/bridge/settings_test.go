@@ -38,6 +38,7 @@ func (h *settingsHost) view() (bridge.SettingsView, error) {
 		MinSignTimeoutSeconds:     int64(approval.MinSignTimeout / time.Second),
 		MaxSignTimeoutSeconds:     int64(approval.MaxSignTimeout / time.Second),
 		PolicyPath:                "/home/hugo/.config/ladulas/policy.json",
+		MaxGrantSeconds:           8 * 3600,
 	}, nil
 }
 
@@ -106,6 +107,12 @@ func TestTheSigningBudgetIsOnTheInstanceView(t *testing.T) {
 		t.Errorf("the bounds are %d..%d",
 			view.Settings.MinSignTimeoutSeconds,
 			view.Settings.MaxSignTimeoutSeconds)
+	}
+
+	// The same for the clock that extends a grant: it stops where a grant
+	// offer's does, and the number is the instance's.
+	if view.Settings.MaxGrantSeconds != 8*3600 {
+		t.Errorf("the longest promise is %ds", view.Settings.MaxGrantSeconds)
 	}
 }
 

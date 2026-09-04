@@ -431,6 +431,10 @@ message SettingsResponse {
   google.protobuf.Duration max_sign_timeout = 4;
   // Where the document being written lives, so a surface can say so.
   string policy_path = 5;
+  // The longest promise this instance makes, which is as far as a surface's
+  // clock goes when granting or extending (decision V). Read-only here: it is
+  // the longest of the offered lengths, not a setting of its own.
+  google.protobuf.Duration max_grant_ttl = 6;
 }
 
 message SetSignTimeoutRequest {

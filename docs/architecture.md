@@ -1559,8 +1559,13 @@ scoped to the repository: it is the one asserted scope field left, the
 destination having become proven.
 
 **A promise that is still running can be given more time** — `ladulas
-grants extend <id> <duration>`, or the button above "Revoke this grant" on
-the phone. It is the same promise afterwards: the same identifier, the
+grants extend <id> <duration>`, the button above "Revoke this grant" on
+the phone, or *Extend* beside *Revoke* on the desktop's grant card, which
+opens a clock bounded by the longest promise the instance makes; the bound
+travels on `Settings` as `max_grant_ttl` so that a surface's clock stops
+where a grant offer's does (since 2026-09-04 — the route was there a
+fortnight before anything on the desktop called it). It is the same
+promise afterwards: the same identifier, the
 same scope, the same account of what it has covered, running until later.
 The length is counted from now rather than added to what is left, which is
 what somebody setting a clock means by it and what lets the ceiling on

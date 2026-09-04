@@ -751,6 +751,10 @@ type SettingsView struct {
 	// PolicyPath is the file being written, for a screen that says where the
 	// setting ends up. Empty on a host that has no file to name.
 	PolicyPath string `json:"policyPath,omitempty"`
+	// MaxGrantSeconds is the longest promise the instance makes, so a clock
+	// extending a grant stops where a clock granting one does (decision V).
+	// The instance refuses anything past it whatever the screen drew.
+	MaxGrantSeconds int64 `json:"maxGrantSeconds,omitempty"`
 }
 
 // EndorsementSummaryView is one promise another holder of a key has made about

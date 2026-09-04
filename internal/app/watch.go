@@ -473,6 +473,7 @@ func (s *controlService) settings() *ladulasv1.SettingsResponse {
 		MinSignTimeout:     durationpb.New(approval.MinSignTimeout),
 		MaxSignTimeout:     durationpb.New(approval.MaxSignTimeout),
 		PolicyPath:         s.app.Config.PolicyPath(),
+		MaxGrantTtl:        durationpb.New(s.app.MaxGrantTTL()),
 	}
 }
 
