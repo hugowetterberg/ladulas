@@ -798,10 +798,18 @@ func (n *Node) canCollectFor(record *storepb.TrustRecord) bool {
 	return ok && wakeup.GetRoute() != nil
 }
 
-// collectingHolderOf finds the peer that holds a key, cannot be dialled, and can
-// be reached — the phone in somebody's pocket that a signature has to be parked
-// for.
-func (n *Node) collectingHolderOf(fingerprint string) *storepb.TrustRecord {
+// collectingHoldersOf finds the peers that hold a key, cannot be dialled, and
+// can be reached — the phone in somebody's pocket that a signature has to be
+// parked for.
+//
+// All of them, in the order BorrowedKeys gives, because decision AT asks the
+// next one when a holder turns out to have nobody at it. Two phones holding one
+// portable key is the ordinary shape of decision S, not a corner case.
+func (n *Node) collectingHoldersOf(
+	fingerprint string,
+) []*storepb.TrustRecord {
+	var out []*storepb.TrustRecord
+
 	for _, borrowed := range n.BorrowedKeys() {
 		if borrowed.GetKey().GetFingerprint() != fingerprint ||
 			!borrowed.GetAvailable() {
@@ -813,10 +821,10 @@ func (n *Node) collectingHolderOf(fingerprint string) *storepb.TrustRecord {
 			continue
 		}
 
-		return record
+		out = append(out, record)
 	}
 
-	return nil
+	return out
 }
 
 // BorrowedKey finds what this instance remembers about a public key a peer
@@ -855,41 +863,142 @@ func (n *Node) sortedLinks() []*link {
 	return links
 }
 
-// holderOf finds the link to the peer that offers a key.
-func (n *Node) holderOf(fingerprint string) *link {
-	for _, l := range n.sortedLinks() {
-		for _, ref := range l.offeredKeys() {
-			if ref.GetFingerprint() == fingerprint {
-				return l
-			}
-		}
-	}
-
-	return nil
-}
-
-// RemoteSign asks the paired holder of a key to produce a signature (§8).
+// RemoteSign asks a paired holder of a key to produce a signature (§8).
 //
 // Which road it takes is decided the same way the approval fan-out decides
 // (§3): a holder that advertised an address is dialled, and one that did not is
 // a phone, which has to be knocked at and come and collect (decision T). The
 // holder's half of the work is the same code either way, and so is everything
 // this side checks about the answer.
+//
+// A key on more than one holder is tried in that order until one of them
+// answers, and "answers" is decision AT's word: a holder that cannot be reached
+// and a holder that reports it has nobody to ask are both reports about the
+// holder rather than decisions about the request, so the next one is asked. A
+// denial, a policy refusal and a timeout are decisions and settle it — the
+// first because shopping on for a yes is the thing this must never do, the last
+// because somebody was asked and the budget it would have taken is gone.
 func (n *Node) RemoteSign(
 	ctx context.Context,
 	msg *ladulasv1.ApprovalRequest,
 	payload []byte,
 	wrapSSHSIG bool,
 ) (*ladulasv1.RemoteSignResponse, error) {
-	if holder := n.holderOf(msg.GetKey().GetFingerprint()); holder != nil {
-		return n.signOverLink(ctx, holder, msg, payload, wrapSSHSIG)
+	routes := n.holderRoutes(msg.GetKey().GetFingerprint())
+	if len(routes) == 0 {
+		return nil, n.noHolder(msg.GetKey())
 	}
 
-	if record := n.collectingHolderOf(msg.GetKey().GetFingerprint()); record != nil {
-		return n.signThroughInbox(ctx, record, msg, payload, wrapSSHSIG)
+	var lastErr error
+
+	for i, route := range routes {
+		last := i == len(routes)-1
+
+		resp, err := route.sign(ctx, n, msg, payload, wrapSSHSIG)
+		if err != nil {
+			// A holder that could not be reached has said nothing about the
+			// request. The next one is asked unless the caller has given up,
+			// in which case there is nobody left to ask for.
+			if last || ctx.Err() != nil {
+				return nil, err
+			}
+
+			lastErr = err
+
+			continue
+		}
+
+		// The last holder's answer is returned as it stands even when it is a
+		// "nobody to ask": it is a signed artifact naming the machine that
+		// could not help, which is worth more to whoever reads the failure
+		// than an error made up here, and it is what the audit log keeps.
+		if last || !reportedNoApprover(resp) {
+			return resp, nil
+		}
+
+		n.log.Debug("a holder had nobody to ask, trying the next",
+			"holder", route.name(),
+			"request_id", msg.GetRequestId())
 	}
 
-	return nil, n.noHolder(msg.GetKey())
+	// Unreachable: the final route always returns its answer or its error.
+	return nil, lastErr
+}
+
+// holderRoutes is every way this instance could have a key signed, best first.
+//
+// Dialled before collecting is the whole of the ordering, and it is structural
+// rather than a guess about the far end: a live link is a holder that can be
+// asked now, while a phone has to be woken and may open the app in an hour.
+// Nothing here asks whether the holder is unlocked or has somebody at it —
+// decision AC turned that idea down for the approval fan-out, and it fails the
+// same way here, since the answer is stale by the time it is used and the
+// fallback is needed for the gap regardless.
+func (n *Node) holderRoutes(fingerprint string) []holderRoute {
+	var out []holderRoute
+
+	for _, l := range n.sortedLinks() {
+		for _, ref := range l.offeredKeys() {
+			if ref.GetFingerprint() == fingerprint {
+				out = append(out, holderRoute{link: l})
+
+				break
+			}
+		}
+	}
+
+	for _, record := range n.collectingHoldersOf(fingerprint) {
+		out = append(out, holderRoute{record: record})
+	}
+
+	return out
+}
+
+// holderRoute is one holder and the road to it. Exactly one field is set.
+type holderRoute struct {
+	link   *link
+	record *storepb.TrustRecord
+}
+
+func (r holderRoute) name() string {
+	if r.link != nil {
+		return r.link.Name()
+	}
+
+	return r.record.GetName()
+}
+
+func (r holderRoute) sign(
+	ctx context.Context,
+	n *Node,
+	msg *ladulasv1.ApprovalRequest,
+	payload []byte,
+	wrapSSHSIG bool,
+) (*ladulasv1.RemoteSignResponse, error) {
+	if r.link != nil {
+		return n.signOverLink(ctx, r.link, msg, payload, wrapSSHSIG)
+	}
+
+	return n.signThroughInbox(ctx, r.record, msg, payload, wrapSSHSIG)
+}
+
+// reportedNoApprover reports whether a holder answered that it had nobody to
+// ask, which decision AC established is a report and not a decision.
+//
+// The artifact has already been verified against the trust record, the request
+// identifier and the digest by the time it reaches here (checkSignature); this
+// reads the source out of it and nothing more. A malformed one is not treated
+// as a report, because falling through on an answer that could not be read
+// would let a broken holder push every request to the next machine.
+func reportedNoApprover(resp *ladulasv1.RemoteSignResponse) bool {
+	decision, _, err := identity.VerifyApproval(resp.GetApproval())
+	if err != nil {
+		return false
+	}
+
+	return decision.GetDecision() != ladulasv1.Decision_DECISION_APPROVE &&
+		decision.GetSource() ==
+			ladulasv1.DecisionSource_DECISION_SOURCE_NO_APPROVER
 }
 
 // signOverLink asks a holder this instance can dial.

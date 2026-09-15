@@ -1741,14 +1741,49 @@ The rules that make it a cache rather than a second source of truth:
   that will still use it is the useful reading of a key that is off on one
   of the two machines that have it.
 
-**A signature asked of an unreachable holder fails immediately**, saying
-which machine has the key and when it was last reachable. There is no new
-budget and no retry: the link's state is already known, so the answer
-arrives before anything has been asked of anybody, and the reconnection
-backoff (§8) is what brings the holder back. It is not a denial and does
-not read like one — nobody was asked — and it is not handed to `ssh-keygen`
-either, because the private half is in another machine's store and falling
-back could only bury the sentence worth reading (§5).
+**Which holder is asked when several have the key, and what happens when
+that one cannot answer** — decision AT. The order is dialled before
+collecting, which is structural rather than a guess about the far end: a
+live link is a holder that can be asked now, while a phone has to be woken
+and may open the app in an hour. Two holders on the same road are taken in
+a stable order, and it is deliberately not a clever one, because the
+recovery below is what carries the weight.
+
+A holder is asked, and **a holder that reports rather than decides sends
+the request to the next one**. There are two such reports and they are the
+ones that cost nothing: a holder that cannot be reached, and a holder
+whose engine answers `NO_APPROVER` because nothing was asked of anybody —
+decision AC's distinction, one layer up from the fan-out it was written
+for. Before this, a holder that was connected but sealed, or whose window
+had been closed, failed the signature *as though somebody had refused it*,
+while another machine holding the same key sat awake and was never asked.
+
+**A denial, a policy refusal, a hard rule and a timeout settle it.** The
+first three because a requester that asks on until somebody says yes is
+shopping for an answer, and that is the one thing this must never do. The
+timeout because somebody was asked and did not answer, which is a fact
+about a person rather than about a machine — and because the budget the
+next holder would need is the budget that just went. The two cases that do
+fall through are both instant, which is what makes the rule affordable at
+all: neither spends any part of an ssh login's ninety seconds (decision
+AJ).
+
+Nothing here asks whether a holder is unlocked or has somebody at it.
+Those are facts this side cannot see, and having holders advertise them is
+the idea decision AC turned down for the fan-out: the claim goes stale
+between the heartbeat and the request, so the fallback is needed for the
+gap either way, and once it exists the advertisement buys only a slightly
+better first guess.
+
+**A signature with no holder left to ask fails immediately**, saying which
+machine has the key and when it was last reachable. There is no new budget
+and no retry against a holder that has already reported: the link's state
+is already known, so the answer arrives before anything has been asked of
+anybody, and the reconnection backoff (§8) is what brings the holder back.
+It is not a denial and does not read like one — nobody was asked — and it
+is not handed to `ssh-keygen` either, because the private half is in
+another machine's store and falling back could only bury the sentence
+worth reading (§5).
 
 ### Encryption at rest (desktop)
 
@@ -3795,6 +3830,12 @@ Added 2026-09-04:
 | AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
 | AR | Whether a tailnet takes the local network out of the default bind | **it does not: the tailnet and the local network are bound and advertised together, tailnet first, and loopback only by a machine that has neither.** Decision AH made them two tiers and bound only the better one present, because a peer holding both addresses spent its reconnections on the one that could not work from where it was. That was right about the reconnections and wrong about what a default is for. The default is what a machine does before anybody has configured anything, which is to say during bootstrap — and a tailnet is the component most likely to be absent at exactly that moment: down, or half up while NetworkManager and tailscaled settle the link, or not installed yet on the machine being paired. With the tailnet alone bound, such a machine advertised nothing a phone on the same Wi-Fi could reach, although the LAN address was up and typed in, and the way out was `ladulas listen set`, which is configuration in the way of the step that exists to avoid it. The flakiness was observed here often enough to count as the normal case. Meanwhile the cost AH was paying for has been paid on the dialling side: the address that last worked is tried alone for three consecutive failures before the rest of the record gets a turn (§8), so a phone away from home does not charge a dial timeout for the LAN address on every round, and a sweep that does reach it reports the most informative failure rather than the last. The `tier` field's `tailnet` and `private` values are gone rather than aliased, since either would read as a claim that the other kind was left out; the one value is `local`, and `ladulas listen` says which of the two the bound list actually holds. Rejected: keeping one tier and asking people to add the LAN address by hand, which is what this replaces; binding both and advertising the tailnet only, which leaves the bootstrap exactly where it was because pairing works off the advertised list; and bringing loopback back beside them, which is the part of the pre-AH list that made peers dial themselves and is the part of AH that stands. Qualifies decision AH; the interface rules and the two-list rule are unchanged. Rationale in §8 |
 | AS | Which of the daemon's settings a window may change, and which stay command lines | **anything the daemon stores and already serves a write RPC for, and nothing it was started with.** The settings screen had one number on it (decision AJ) and the CLI had `listen set`, `publish --auto`, `unlock-at-login` and half of `keys` — on a daemon whose whole premise is that somebody is sitting in front of the window, and where the case for each was the same: the tailnet is down and the phone on the Wi-Fi cannot reach this machine, and the way out was a command to remember. The line is drawn by *who owns the value*. A setting kept in the store and changed through the control socket — where the channel listens, whether documentation is published unasked, whether the keychain opens the store at login, the signing budget, what the agent offers — is the daemon's, is already validated by the daemon, and takes effect without a restart; a screen for it is a form over a call that exists. A startup flag — `--data-dir`, `--socket`, `--log-level`, `--no-keyring`, the suspend and idle hooks — is the process's, is read once, and belongs to whatever starts the process; a screen that appeared to change one would be writing a unit file it does not own, or lying. The policy document stays out on decision AJ's grounds, which this does not reopen: none of the settings here decides an approval. Two of them cost something the screen has to say before the button: enrolling the keychain hands an unsealed store to anybody logged in as this user (decision I), and a public bind is a consent the flag already required. Importing a key stays a command line for decision AF's reason — a file to pick and a passphrase to type into a webview — and so does anything that takes a policy rule as input. Rejected: a settings screen that mirrors `ladulasd --help`, which is a screen full of fields that do nothing until a restart nobody is told about; and leaving the stored settings on the CLI because the CLI is where they were, which is the state this replaces. The phones inherit the routes through the bridge and wire them when their shells have a settings screen to put them on. Rationale in §12 |
+
+Added 2026-09-15:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AT | Which holder signs when several hold the key, and what happens when that one cannot | **dialled before collecting, and a holder that reports rather than decides sends the request to the next one.** A key on more than one machine is decision S's ordinary shape, and `RemoteSign` asked exactly one of them: the first linked holder, else a collecting one. That choice is kept and is structural rather than a guess about the far end — a live link is a holder that can be asked now, a phone has to be woken and may open the app in an hour. What is added is the fallback, and it is decision AC's rule one layer up: a holder that cannot be reached, and a holder whose engine answers `NO_APPROVER` because nothing was asked of anybody, have both reported on themselves rather than decided the request, so the next holder is asked. Without it a connected holder that was sealed, or whose window had been closed, failed the signature *as though somebody had refused it* — `signRemotely` treated every non-approval alike — while another machine holding the same key sat awake and was never asked. **A denial, a policy refusal, a hard rule and a timeout are decisions and settle it.** The first three because a requester that asks on until somebody says yes is shopping for an answer, which is the one thing this must never do; the timeout because somebody *was* asked, and the budget the next holder would need is the budget that just went. That the two fallback cases are both instant is what makes the rule affordable: neither spends any part of an ssh login's ninety seconds (decision AJ). Rejected: racing every holder and taking the first answer, the way the approval fan-out does (§2). It reads as the obvious symmetry and is not one — an approval fan-out produces a decision while a holder produces the *signature*, so racing wakes a phone for every request a desktop could have answered, splits decision P's standing grants across holders so a grant silently covers half the traffic, and can leave two valid signatures over one payload. Also rejected: preferring a holder that advertises itself as unlocked with an approver attached, which is the idea decision AC turned down for the fan-out and fails here for the same reason — the claim is stale by the time it is used, and the fallback is needed for the gap regardless. Which is the point: the ordering does not have to be clever, because the recovery is. Rationale in §10 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
