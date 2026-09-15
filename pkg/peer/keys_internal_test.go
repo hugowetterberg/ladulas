@@ -105,6 +105,59 @@ func (m *memoryKeys) hold(ref *ladulasv1.KeyRef) {
 	m.refs = append(m.refs, ref)
 }
 
+// handOver gives another instance a working copy of a key, signer and all.
+//
+// It is what accepting a portable key leaves behind (decision S), and the only
+// way to get the two holders of one fingerprint that decision AT is about.
+func (m *memoryKeys) handOver(
+	t *testing.T, to *memoryKeys, ref *ladulasv1.KeyRef,
+) {
+	t.Helper()
+
+	m.mu.Lock()
+	signer, ok := m.keys[ref.GetFingerprint()]
+	m.mu.Unlock()
+
+	if !ok {
+		t.Fatalf("no signer for %s", ref.GetFingerprint())
+	}
+
+	to.mu.Lock()
+	defer to.mu.Unlock()
+
+	if to.keys == nil {
+		to.keys = map[string]ssh.Signer{}
+	}
+
+	to.keys[ref.GetFingerprint()] = signer
+	to.refs = append(to.refs, ref)
+}
+
+// waitForHolders blocks until the requester has learned that `want` holders
+// offer a key, so that a fallback test is not racing the second link's first
+// heartbeat.
+func waitForHolders(
+	t *testing.T, requester *instance, fingerprint string, want int,
+) []holderRoute {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		routes := requester.node.holderRoutes(fingerprint)
+		if len(routes) >= want {
+			return routes
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("%s never saw %d holders of %s",
+		requester.identity.Name(), want, fingerprint)
+
+	return nil
+}
+
 // allowKey grants a peer the right to sign with a key, which pairing on its own
 // never does (§7).
 func (i *instance) allowKey(t *testing.T, peer string, keys ...string) {
@@ -326,6 +379,148 @@ func TestKeylessRequesterBorrowsASignature(t *testing.T) {
 	// not merely its own account of it (§18).
 	requireSignedDecision(t, headless.audit, true)
 	requireSignedDecision(t, desktop.audit, false)
+}
+
+// TestASignatureFallsThroughAHolderWithNobodyAtIt is decision AT: two machines
+// hold one portable key, the one asked first has no approver, and its instant
+// "nobody to ask" sends the request to the other rather than failing the
+// signature as though somebody had refused it.
+//
+// The holder asked first is whichever the ordering picks, so the test reads the
+// order and takes the approver away from that one — the rule is about what a
+// report does, not about which machine happens to sort first.
+func TestASignatureFallsThroughAHolderWithNobodyAtIt(t *testing.T) {
+	requester := newInstance(t, "headless")
+	deskA := newInstance(t, "desk-a")
+	deskB := newInstance(t, "desk-b")
+
+	pair(t, deskA, requester)
+	pair(t, deskB, requester)
+
+	// Nobody is at the requesting box either, so nothing local can answer.
+	requester.drop()
+
+	key := deskA.keys.generate(t, "work")
+	deskA.keys.handOver(t, deskB.keys, key)
+
+	deskA.allowKey(t, requester.identity.Fingerprint(), key.GetFingerprint())
+	deskB.allowKey(t, requester.identity.Fingerprint(), key.GetFingerprint())
+
+	routes := waitForHolders(t, requester, key.GetFingerprint(), 2)
+
+	holders := map[string]*instance{"desk-a": deskA, "desk-b": deskB}
+
+	first, ok := holders[routes[0].name()]
+	if !ok {
+		t.Fatalf("the first holder is %q", routes[0].name())
+	}
+
+	second, ok := holders[routes[1].name()]
+	if !ok {
+		t.Fatalf("the second holder is %q", routes[1].name())
+	}
+
+	// The holder asked first has nobody at it; the other one answers.
+	first.drop()
+	second.human.set(approveAnswer("approved at the other desk"), nil)
+
+	object := commitObject("seal the store on suspend")
+	req := signRequest(key, object)
+
+	// Counted from here, because pairing put a request in front of both humans
+	// already and "was it asked at all" would be true before signing started.
+	asked := second.human.count()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	resp, err := requester.node.RemoteSign(ctx, req, object, true)
+	if err != nil {
+		t.Fatalf("remote sign: %v", err)
+	}
+
+	if len(resp.GetSignature()) == 0 {
+		t.Fatal("the second holder approved without signing")
+	}
+
+	// It was the second holder that was asked, and the signature is its work.
+	if got := second.human.count(); got != asked+1 {
+		t.Errorf("the holder with somebody at it was asked %d times, want 1",
+			got-asked)
+	}
+
+	pub, err := ssh.ParsePublicKey(key.GetPublicKey())
+	if err != nil {
+		t.Fatalf("parse the key: %v", err)
+	}
+
+	blob, err := sshsig.SigningBlobFor(
+		sshsig.GitNamespace, sshsig.DefaultHash, object)
+	if err != nil {
+		t.Fatalf("build the blob: %v", err)
+	}
+
+	var sig ssh.Signature
+
+	if err := ssh.Unmarshal(resp.GetSignature(), &sig); err != nil {
+		t.Fatalf("parse the signature: %v", err)
+	}
+
+	if err := pub.Verify(blob, &sig); err != nil {
+		t.Errorf("the borrowed signature does not verify: %v", err)
+	}
+}
+
+// TestADenialOnOneHolderIsNotRetriedOnAnother is the other half of decision AT.
+// A human saying no settles the request, and asking the next holder would be a
+// machine that shops on until somebody says yes.
+func TestADenialOnOneHolderIsNotRetriedOnAnother(t *testing.T) {
+	requester := newInstance(t, "headless")
+	deskA := newInstance(t, "desk-a")
+	deskB := newInstance(t, "desk-b")
+
+	pair(t, deskA, requester)
+	pair(t, deskB, requester)
+
+	requester.drop()
+
+	key := deskA.keys.generate(t, "work")
+	deskA.keys.handOver(t, deskB.keys, key)
+
+	deskA.allowKey(t, requester.identity.Fingerprint(), key.GetFingerprint())
+	deskB.allowKey(t, requester.identity.Fingerprint(), key.GetFingerprint())
+
+	routes := waitForHolders(t, requester, key.GetFingerprint(), 2)
+
+	holders := map[string]*instance{"desk-a": deskA, "desk-b": deskB}
+
+	first := holders[routes[0].name()]
+	second := holders[routes[1].name()]
+
+	first.human.set(denyAnswer("not this one"), nil)
+	second.human.set(approveAnswer("would have said yes"), nil)
+
+	object := commitObject("seal the store on suspend")
+	req := signRequest(key, object)
+
+	asked := second.human.count()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	resp, err := requester.node.RemoteSign(ctx, req, object, true)
+	if err != nil {
+		t.Fatalf("remote sign: %v", err)
+	}
+
+	if len(resp.GetSignature()) != 0 {
+		t.Error("a refused request came back with a signature")
+	}
+
+	if got := second.human.count(); got != asked {
+		t.Errorf("a denial was retried on another holder, asked %d more times",
+			got-asked)
+	}
 }
 
 // TestAKeyHeldHereIsNoLongerBorrowed: the same key in two stores is what a

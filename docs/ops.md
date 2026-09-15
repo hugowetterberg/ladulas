@@ -388,6 +388,17 @@ route (notifications off — the key is deliberately not advertised), the
 key may have its agent-offer setting off (still signs when named), or the
 peer may never have been allowed the key.
 
+**A holder that is reachable but has nobody at it — sealed, or with its
+window closed — no longer fails the signature.** It answers `no_approver`
+instantly, that counts as a report rather than a decision, and the next
+holder of the same key is asked
+([decision AT](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)).
+With one holder nothing changes and the refusal names it. With two, the
+tell is a `DEBUG` line on the requester, `a holder had nobody to ask,
+trying the next`, naming the one that was skipped — worth looking for when
+a signature is answered by a machine you did not expect, or when one is
+slower than it used to be.
+
 ### The phone is never woken
 
 **Signal:** `ladulas_relay_wakeups_total{outcome="unknown"}` rising, or
