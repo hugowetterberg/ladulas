@@ -329,6 +329,19 @@ Verified mechanics (against git master, openssh-portable, and
   about authentication rather than about a phone. A *sign* request naming
   a borrowed key is still answered, and fails naming the holder (§8) —
   that path resolves a key by blob and does not go through the list.
+* **One identity per key, however many machines hold it.** A portable key
+  living on two holders is ordinary — decision S hands one to a phone on
+  purpose, and §10 has the copy here winning over a peer's — but the agent
+  protocol has no notion of "the same key, elsewhere", so a second entry is
+  simply the same identity again. ssh tries each one it is handed in turn,
+  so the duplicate spends one of the server's `MaxAuthTries` proving what
+  the first attempt already did. The list was deduplicated against the keys
+  held here and not against the rest of it, so a key two *peers* both
+  offered appeared twice; it showed up the first time a second holder was
+  lent a key the phone already had. Which holder signs is not decided by
+  the list — a sign request resolves by blob (§8) — so collapsing the
+  entries settles what ssh is told and nothing else.
+
 * **A key is advertised because its holder says it may be** (decision T).
   The list is not everything that can sign either. Every key carries one
   setting for whether it belongs in an agent's identity list, kept where

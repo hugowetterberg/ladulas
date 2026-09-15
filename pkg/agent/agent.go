@@ -105,6 +105,11 @@ var _ sshagent.ExtendedAgent = (*connAgent)(nil)
 // which is the sensible way round: signing locally needs nobody else to be
 // awake. ssh sees one list and cannot tell the difference, which is the point.
 //
+// A key two peers both offer appears once for the same reason. ssh is handed a
+// list of identities and tries them one at a time against a server that allows
+// six attempts, so the same key twice is an attempt spent proving nothing —
+// and the holder that signs it is not chosen here in any case (see findKey).
+//
 // What is left out is a key whose holder has said it does not belong in an
 // identity list (decision T). It can still be signed with; ssh is simply not
 // handed it and told to try, because ssh tries everything it is handed and the
@@ -243,8 +248,13 @@ func (s *Server) allKeys() []*ladulasv1.KeyRef {
 	out := make([]*ladulasv1.KeyRef, 0, len(local))
 	out = append(out, local...)
 
+	// Against out rather than local, so that the second holder of a key drops
+	// out too. Two peers offering the same fingerprint is ordinary — decision S
+	// hands a portable key to a phone on purpose — and ssh offers every identity
+	// it is handed separately, so a duplicate silently spends one of the six
+	// attempts a server allows on a key that has already been tried.
 	for _, ref := range s.remote.RemoteKeyRefs() {
-		if !holdsKey(local, ref.GetPublicKey()) {
+		if !holdsKey(out, ref.GetPublicKey()) {
 			out = append(out, ref)
 		}
 	}
