@@ -33,6 +33,10 @@ type holder struct {
 	identity *identity.Identity
 	signer   ssh.Signer
 	ref      *ladulasv1.KeyRef
+	// alsoOffered is what a second paired holder offers. The agent sees one
+	// RemoteKeys for every peer it has, so two holders lending the same key is
+	// simply the same fingerprint twice in RemoteKeyRefs.
+	alsoOffered []*ladulasv1.KeyRef
 
 	mu       sync.Mutex
 	decision ladulasv1.Decision
@@ -82,7 +86,7 @@ func (h *holder) RemoteKeyRefs() []*ladulasv1.KeyRef {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return []*ladulasv1.KeyRef{h.ref}
+	return append([]*ladulasv1.KeyRef{h.ref}, h.alsoOffered...)
 }
 
 // RefreshKeys is a no-op here: what a stub offers does not change.
@@ -152,6 +156,14 @@ func (h *holder) lends(ref *ladulasv1.KeyRef) {
 	defer h.mu.Unlock()
 
 	h.ref = ref
+}
+
+// alsoLentBy records that another paired holder offers this key too.
+func (h *holder) alsoLentBy(ref *ladulasv1.KeyRef) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.alsoOffered = append(h.alsoOffered, ref)
 }
 
 func (h *holder) last() (*ladulasv1.ApprovalRequest, []byte, bool) {
@@ -288,6 +300,29 @@ func TestAKeylessAgentListsThePeersKeys(t *testing.T) {
 
 	if string(keys[0].Blob) != string(a.holder.ref.GetPublicKey()) {
 		t.Error("the listed key is not the one the holder offers")
+	}
+}
+
+// TestAKeyTwoHoldersOfferIsListedOnce: a portable key that lives on two paired
+// holders is one identity, not two. ssh offers every identity it is handed
+// separately against a server that allows six attempts, so the duplicate costs
+// an attempt to prove what the first one already did.
+func TestAKeyTwoHoldersOfferIsListedOnce(t *testing.T) {
+	a := newKeylessAgent(t, ladulasv1.Decision_DECISION_APPROVE)
+
+	a.holder.alsoLentBy(a.holder.ref)
+
+	keys, err := a.client(t).List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("one key held by two peers was listed %d times", len(keys))
+	}
+
+	if string(keys[0].Blob) != string(a.holder.ref.GetPublicKey()) {
+		t.Error("the listed key is not the one the holders offer")
 	}
 }
 
