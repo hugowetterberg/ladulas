@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/hugowetterberg/ladulas/internal/localapi"
+	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/keystore"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 )
@@ -41,6 +43,8 @@ func keysCommand() *cli.Command {
 			keysOffersCommand(),
 			keysAcceptCommand(),
 			keysRefuseCommand(),
+			keysForgetCommand(),
+			keysPromoteCommand(),
 		},
 	}
 }
@@ -71,9 +75,31 @@ func storedKeys(
 func keysListCommand() *cli.Command {
 	return &cli.Command{
 		Name: "list",
-		Usage: "list the keys in the store, and the ones paired instances " +
-			"offer this one to sign with",
+		Usage: "list the keys in the store, the ones paired instances " +
+			"offer this one to sign with, and the ones programs have parked " +
+			"in the agent",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name: "local",
+				Usage: "list only the keys programs have parked in the agent, " +
+					"for scripting `keys forget` and `keys promote`",
+			},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// The parked keys are asked of the running instance, which is the
+			// only process that has them: they live in its memory and nowhere
+			// else (decision AU). Answerable while sealed, as none.
+			parked, err := localKeys(ctx, cmd)
+			if err != nil {
+				return err
+			}
+
+			if cmd.Bool("local") {
+				printParked(parked, true)
+
+				return nil
+			}
+
 			// The borrowed keys are asked of the running instance, because it
 			// is the process with the store open and the links in hand (§3,
 			// §14). A keyless box's whole key set is this table, and it is the
@@ -96,7 +122,7 @@ func keysListCommand() *cli.Command {
 				return nil
 			}
 
-			if len(keys) == 0 && len(borrowed) == 0 {
+			if len(keys) == 0 && len(borrowed) == 0 && len(parked) == 0 {
 				fmt.Println("No keys yet. `ladulas keys generate work` makes one, " +
 					"or pair with an instance that holds one.")
 
@@ -106,6 +132,7 @@ func keysListCommand() *cli.Command {
 			if len(keys) == 0 {
 				fmt.Println("This instance holds no keys of its own.")
 				printBorrowed(borrowed)
+				printParked(parked, false)
 
 				return nil
 			}
@@ -129,6 +156,241 @@ func keysListCommand() *cli.Command {
 			printCopies(keys)
 
 			printBorrowed(borrowed)
+
+			printParked(parked, false)
+
+			return nil
+		},
+	}
+}
+
+// localKeys asks the running instance what programs have parked in its agent
+// (§10, decision AU).
+func localKeys(
+	ctx context.Context, cmd *cli.Command,
+) ([]*ladulasv1.LocalKeyInfo, error) {
+	resp, err := control(cmd).Control().ListLocalKeys(ctx,
+		connect.NewRequest(&ladulasv1.ListLocalKeysRequest{}))
+	if err != nil {
+		return nil, requireInstance(cmd, err)
+	}
+
+	return resp.Msg.GetKeys(), nil
+}
+
+// printParked is the second section rather than a column: mixing parked keys
+// into the managed list would make the list lie about what Ladulås holds,
+// which is the one question that listing exists to answer. The "added by"
+// column is what makes the section worth having at all — `ssh-add -l` says a
+// key is in the agent and nothing about how it got there, on any agent that
+// has ever existed.
+func printParked(parked []*ladulasv1.LocalKeyInfo, alone bool) {
+	if len(parked) == 0 {
+		if alone {
+			fmt.Println("No program has parked a key in the agent.")
+		}
+
+		return
+	}
+
+	if !alone {
+		fmt.Println()
+	}
+
+	fmt.Println("Keys added through the agent (not managed, not shareable):")
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	fmt.Fprintln(w, "  LABEL\tALGORITHM\tFINGERPRINT\tADDED BY\tEXPIRES")
+
+	for _, key := range parked {
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
+			parkedLabel(key), parkedAlgorithm(key), key.GetFingerprint(),
+			parkedBy(key), parkedExpiry(key, time.Now()))
+	}
+
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+}
+
+func parkedLabel(key *ladulasv1.LocalKeyInfo) string {
+	if key.GetLabel() == "" {
+		return "(no label)"
+	}
+
+	return key.GetLabel()
+}
+
+// parkedAlgorithm is the key's own algorithm, with a word for a certificate
+// over it: what the agent lists is the certificate, and what promotion keeps
+// is the key.
+func parkedAlgorithm(key *ladulasv1.LocalKeyInfo) string {
+	algo := key.GetAlgorithm()
+
+	if key.GetCertificate() {
+		return algo + " cert"
+	}
+
+	return algo
+}
+
+// parkedBy is the session walk decision U computes for a prompt, in the
+// column that answers "how did this get here".
+func parkedBy(key *ladulasv1.LocalKeyInfo) string {
+	proc := key.GetAddedBy()
+	if proc == nil {
+		return "-"
+	}
+
+	exe := filepath.Base(proc.GetExecutable())
+	if proc.GetExecutable() == "" {
+		exe = fmt.Sprintf("pid %d", proc.GetPid())
+	}
+
+	if chain := approval.AskerChain(proc); chain != "" {
+		return exe + " ← " + chain
+	}
+
+	return exe
+}
+
+// parkedExpiry says when the key goes, as a countdown: the number somebody
+// reading this wants is "how long until tsh has to log in again", not a date.
+func parkedExpiry(key *ladulasv1.LocalKeyInfo, now time.Time) string {
+	expires := key.GetExpiresAt()
+	if expires == nil {
+		if key.GetConfirm() {
+			return "— (confirm each use)"
+		}
+
+		return "—"
+	}
+
+	left := expires.AsTime().Sub(now).Round(time.Minute)
+	if left <= 0 {
+		return "expired"
+	}
+
+	out := "in " + shortDuration(left)
+
+	if key.GetConfirm() {
+		out += " (confirm each use)"
+	}
+
+	return out
+}
+
+// shortDuration is a length of time the way somebody says it: "11h 48m",
+// "3d 2h", "40m".
+func shortDuration(d time.Duration) string {
+	const day = 24 * time.Hour
+
+	switch {
+	case d >= day:
+		return fmt.Sprintf("%dd %dh", d/day, (d%day)/time.Hour)
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", d/time.Hour, (d%time.Hour)/time.Minute)
+	default:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+}
+
+// keysForgetCommand drops a parked key. A separate verb from `remove` on
+// purpose: `remove` deletes an unrecoverable private key out of the store, and
+// this drops a cached credential a tool will re-add. The same word for both
+// would put an irreversible action and a trivial one behind one muscle memory.
+func keysForgetCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "forget",
+		Usage:     "drop a key a program parked in the agent",
+		ArgsUsage: "<label or fingerprint>",
+		Description: "A parked key is one a program put in the agent with " +
+			"ssh-add or its equivalent — Teleport's tsh parks its " +
+			"certificate that way. It is held in memory, never in the store, " +
+			"and never lent to a paired machine. Forgetting it costs " +
+			"nothing that cannot be got back: the program that parked it " +
+			"will park it again. A label names every key parked under it.",
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			ref := cmd.Args().First()
+			if ref == "" {
+				return cli.Exit("Usage: ladulas keys forget <label or fingerprint>", 1)
+			}
+
+			resp, err := control(cmd).Control().ForgetLocalKey(ctx,
+				connect.NewRequest(&ladulasv1.ForgetLocalKeyRequest{Key: ref}))
+			if err != nil {
+				return requireInstance(cmd, err)
+			}
+
+			fmt.Printf("Forgot %s (%s)\n",
+				parkedLabel(resp.Msg.GetKey()), resp.Msg.GetKey().GetFingerprint())
+
+			return nil
+		},
+	}
+}
+
+// keysPromoteCommand takes a parked key into the store as a portable key.
+func keysPromoteCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "promote",
+		Usage:     "keep a key a program parked in the agent, as a key in the store",
+		ArgsUsage: "<label or fingerprint> --label <name>",
+		Description: "The parked key becomes a portable key in the store, " +
+			"with an origin that says a program put it there and you " +
+			"decided to keep it. A certificate it was parked with is " +
+			"dropped: the CA's statement about the key has its own expiry " +
+			"and its own renewal, and the store can touch neither. If the " +
+			"certificate was the point, promotion is the wrong verb. The " +
+			"store passphrase is asked for again, as it is before a key is " +
+			"sent: nothing enters the store without one.",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "label",
+				Usage:    "name for the key inside Ladulås",
+				Required: true,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			ref := cmd.Args().First()
+			if ref == "" {
+				return cli.Exit(
+					"Usage: ladulas keys promote <label or fingerprint> --label <name>", 1)
+			}
+
+			fmt.Printf("Keeping %q in the store as %q. It becomes a portable key:\n",
+				ref, cmd.String("label"))
+			fmt.Println("encrypted, backed up, and something a paired machine can be handed.")
+
+			phrase, err := TerminalPassphrase(
+				"Store passphrase to confirm", false)
+			if err != nil {
+				return err
+			}
+
+			defer keystore.Wipe(phrase)
+
+			resp, err := control(cmd).Control().PromoteLocalKey(ctx,
+				connect.NewRequest(&ladulasv1.PromoteLocalKeyRequest{
+					Key:        ref,
+					Label:      cmd.String("label"),
+					Passphrase: phrase,
+				}))
+			if err != nil {
+				return requireInstance(cmd, err)
+			}
+
+			key := resp.Msg.GetKey()
+
+			fmt.Printf("\nAdopted %q, %s\n", key.GetLabel(), key.GetFingerprint())
+
+			if resp.Msg.GetCertificateDropped() {
+				fmt.Println("The certificate it was parked with was dropped; only " +
+					"the key is kept.")
+			}
+
+			fmt.Print(publicKeyLine(key))
 
 			return nil
 		},
@@ -233,6 +495,8 @@ func originName(origin ladulasv1.KeyOrigin) string {
 		return "generated"
 	case ladulasv1.KeyOrigin_KEY_ORIGIN_RECEIVED:
 		return "received"
+	case ladulasv1.KeyOrigin_KEY_ORIGIN_ADOPTED:
+		return "adopted"
 	case ladulasv1.KeyOrigin_KEY_ORIGIN_UNSPECIFIED:
 		return "unknown"
 	default:

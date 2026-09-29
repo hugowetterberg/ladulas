@@ -849,3 +849,53 @@ func TestWipeClearsTheBuffer(t *testing.T) {
 		}
 	}
 }
+
+// A parked key the operator keeps enters the store as a portable key with an
+// origin that says so (decision AU).
+func TestAdoptKey(t *testing.T) {
+	vault, _ := newVault(t)
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if _, err := vault.AdoptKey(priv, "teleport:hugo", ""); err == nil {
+		t.Error("an adopted key was accepted without a label")
+	}
+
+	key, err := vault.AdoptKey(priv, "teleport:hugo", "tsh")
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+
+	if key.GetOrigin() != storepb.KeyOrigin_KEY_ORIGIN_ADOPTED {
+		t.Errorf("origin %v", key.GetOrigin())
+	}
+
+	if key.GetComment() != "teleport:hugo" {
+		t.Errorf("comment %q", key.GetComment())
+	}
+
+	signer, _, err := vault.Signer(key.GetFingerprint())
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+
+	pub, err := ssh.NewPublicKey(priv.Public())
+	if err != nil {
+		t.Fatalf("public key: %v", err)
+	}
+
+	if string(signer.PublicKey().Marshal()) != string(pub.Marshal()) {
+		t.Error("the store signs with a different key from the one adopted")
+	}
+
+	if keystore.KeyInfo(key).GetOrigin() != ladulasv1.KeyOrigin_KEY_ORIGIN_ADOPTED {
+		t.Error("the management projection lost the origin")
+	}
+
+	if _, err := vault.AdoptKey(priv, "", "again"); !errors.Is(err, keystore.ErrDuplicateKey) {
+		t.Errorf("adopting the same key twice: %v", err)
+	}
+}

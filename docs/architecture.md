@@ -316,9 +316,22 @@ Verified mechanics (against git master, openssh-portable, and
 * **Forwarded-agent requests always prompt**, regardless of auto-approve
   policies (Bitwarden's rule, and the right one: a hostile remote host
   holding the forwarded socket can send arbitrary well-formed requests).
-* Mutation requests (`Add`/`Remove`/`Lock`/…) fail; key management goes
-  through Ladulås itself. Optionally (ssh-tpm-agent's pattern) proxy
-  unknown keys to another agent socket for coexistence during migration.
+* **Key management goes through Ladulås itself, and `Add` is not key
+  management** (decision AU). `Lock` and `Unlock` fail: the store's lock
+  state is not the agent's to change. `Add` is accepted, and what it
+  accepts is a *parked* key — a credential the calling program minted,
+  owns and will replace, held in this process's memory for as long as the
+  program asked and written nowhere (§10). `Remove` drops a parked key and
+  refuses a managed one; `RemoveAll` drops every parked key, leaves the
+  managed ones standing, and reports success because the wire has no
+  partial-success byte. Until 2026-09-29 every one of these failed, and
+  the way it failed is the argument: `SSH_AGENT_FAILURE` is a bare byte,
+  so the refusal reached nobody, and Teleport's `tsh` — which parks the
+  certificate it just minted on every login, `--add-keys-to-agent=auto`
+  — treated it as fatal for the whole command, `tsh version` included.
+  The proxy-to-a-second-agent arrangement this bullet used to float, for
+  coexistence during migration, is rejected in §10: it solves the error
+  and gives up the entire point of having one agent.
 * **The identity list is what can sign, not what exists** (decision N).
   Keys borrowed from a paired holder are advertised only while that holder
   is reachable and still offering them. Every other surface — `ladulas
@@ -1851,7 +1864,9 @@ live. Four states:
 * **Sealed** — the DEK is dropped, and the private material the store held is
   zeroed on the way down as far as it can be reached (`Vault.Wipe`, M5): the
   PEM-armoured keys, the identity key, and any portable keys queued or waiting
-  to be accepted. What zeroing cannot reach is stated where it is done — age
+  to be accepted. The keys programs parked in the agent go with it
+  (decision AU): seal means the machine holds nothing usable, and a
+  parked key surviving it would make that false. What zeroing cannot reach is stated where it is done — age
   keeps the DEK's scalar in an unexported field, and a parsed signer holds its
   own copy — so "the DEK is not in memory" is true of the recognisable copies
   and left to the collector for the rest, rather than an absolute. The boot
@@ -1874,7 +1889,10 @@ live. Four states:
   arrives*, which is the point: §1's "desktop reached over SSH while away
   from it" must keep working while the screen is locked. Sealing on lock
   instead would recreate exactly the 1Password failure this project
-  exists to fix.
+  exists to fix. A parked key stays parked and its one convenience — the
+  session that parked it signs unasked — is suspended with the prompts
+  (decision AU): nobody is here, so a session nobody is sitting in is not
+  one that should be spending it.
 
 The states are two halves of an instance rather than a flag on one. The
 sockets, the audit log and the lock state exist from the moment the
@@ -2242,6 +2260,205 @@ What cannot be built is the undo. A sent key is sent; the only remedy is
 rotation at the far ends, which is the same remedy as for a leaked key,
 because that is what it now is. The UI says this in as many words at the
 moment of sending rather than in a document nobody has open.
+
+### Parked keys — **decision AU**
+
+A third class of key beside portable and hardware, added 2026-09-29: a
+**parked** key is one a program put in the agent through the protocol's
+own `Add` — `ssh-add`, or Teleport's `tsh` pushing the certificate it
+just minted — and it is a credential Ladulås is *holding*, not a key it
+*manages*. Everything below follows from taking that distinction
+seriously rather than blurring it.
+
+**The problem, as it arrives.** `tsh kube login prod` fails with `failed
+to add one or more keys to the agent`, and so does `tsh version`, because
+the login path runs first. `tsh` defaults to `--add-keys-to-agent=auto`:
+when `SSH_AUTH_SOCK` names an agent it parks its short-lived user
+certificate there on every login, and an agent that refuses `Add` is
+fatal for the whole command. The refusal was right about managed keys
+and wrong about the box — a policy about key management applied to
+something that is not key management. Three things made it worse than
+one broken tool. The wire cannot explain itself: `SSH_AGENT_FAILURE` is
+a bare byte, so the reason reached the journal and nobody. The
+workaround was per-tool and unbounded: `TELEPORT_ADD_KEYS_TO_AGENT=no`
+fixes `tsh`, does nothing for the next tool, which is found the same
+way, and costs the tool a capability — that certificate can no longer be
+agent-forwarded. And it was the one thing that stopped Ladulås being the
+only agent on a box.
+
+**They live in memory, not in the store.** A parked key is in the
+daemon's heap and written nowhere, and is gone on a daemon restart
+exactly as an `ssh-agent`'s keys are — which is the semantics every tool
+that calls `Add` was written against, so honouring it surprises nobody.
+The store is the wrong home for three reasons: it is the thing that is
+encrypted, unlocked and backed up, and none of those promises make sense
+for material with a twelve-hour life a far end will reissue on demand;
+writing it there would make Ladulås responsible for key material it
+never saw created and cannot vouch for; and the store is where
+`handed_to` lives, the record that exists because a transfer cannot be
+undone, which is not a record any of this should be able to write.
+Sealing wipes them, because seal means the machine holds nothing usable.
+A soft lock keeps them and suspends the one convenience below, the way
+it suspends local approval authority. The consequence, plainly: after a
+`ladulasd` restart `tsh` logs in again, which is what happens with
+`ssh-agent` today and is better than Ladulås quietly accumulating expired
+certificates across reboots.
+
+**Constraints are honoured, including the one that is a gift.**
+`SSH_AGENT_CONSTRAIN_LIFETIME` sets an expiry and the key is dropped when
+it passes; so does the certificate a key was parked with, since a
+certificate past its `ValidBefore` signs nothing anybody will accept, and
+the earlier of the two wins. A key parked with neither lives until
+restart or seal. `SSH_AGENT_CONSTRAIN_CONFIRM` — `ssh-add -c` — asks the
+agent to confirm each use, and Ladulås is a machine for confirming each
+use: such a key gets the full approval prompt for every session, the
+parking one included. It is the one case in the design where a
+third-party tool asks for exactly what this project does and used to be
+told no.
+
+**Signing with a parked key does not prompt the session that parked it,
+and this is the honest part.** The default is auto-approve for the
+session that added the key (decision U's session, named the way every
+prompt names it) and a prompt for any other. Asking the adding session
+for permission to use a key it handed over ten seconds ago is theatre:
+it has the private bytes and can sign without touching the agent, so a
+prompt there defends against nothing and trains the operator to approve
+reflexively, which is a real cost to every prompt that matters. What the
+rule buys, stated as narrowly as it deserves: the agent socket is
+reachable by everything running as this uid, so a *different* session
+asking to sign with a key `tsh` parked is exactly the case the agent
+exists for, and that one prompts. It defends against other processes on
+the box, not against the process that added the key. It is a policy
+decision in the engine rather than a hard rule, so that a deny rule
+still wins and the hard rule about forwarded agents still applies; two
+processes with no session — a platform that reports none — are never the
+same session, because unknown matching unknown would fire for
+everything. `ssh-add -c` tightens it from the other side. The prompt a
+parked key raises says who parked it and warns that a program put the
+key there, because a parked key is not as trustworthy as a managed one
+and the surfaces must never suggest it is: Ladulås did not watch the
+bytes being made, has no idea whether they exist elsewhere, and cannot
+stop the adding session re-adding them a second after they are
+forgotten.
+
+**They are never shareable, and that is not a setting.** A parked key is
+not in the store, so it is not among the keys a peer is offered, not
+something `RemoteSign` resolves and not something `SendKey` finds — by
+construction rather than by a check, and `SendKey` says so by class when
+asked, pointing at promotion. `handed_to` stays empty forever, for the
+reason it does on a hardware key. Decision S calls a transfer the most
+dangerous thing in the system and spends four rules on making it
+deliberate; doing that with material a program put into the daemon
+without the operator ever seeing it is indefensible, and no confirmation
+dialog fixes it. This is also what bounds the blast radius of accepting
+`Add` at all: a hostile local process can put a key in front of the
+operator, and cannot get it any further than this machine. The set is
+capped, at sixty-four, because a hostile process can call `Add` in a
+loop and the session column makes a flood legible without making it
+bounded; the sixty-fifth is refused and logged.
+
+**`Remove` and `RemoveAll` work, with one wart.** `ssh-add -d` drops a
+parked key by blob and refuses a managed one; `ssh-add -D` drops every
+parked key and leaves the managed ones standing. `RemoveAll` returning
+success while managed keys remain is a lie the wire forces: there is no
+partial-success byte, refusing would break the cleanup path that made
+accepting `Add` worth it, and actually dropping managed keys would make
+`ssh-add -D` a way to wipe a store. So it succeeds, the log records what
+was left alone, and this paragraph is where that is written down. A key
+the store already holds, added again, is a success that parks nothing:
+the agent has it, and a second copy would list it twice.
+
+**The operator's side.** `ladulas keys list` grows a second section
+rather than a column, "keys added through the agent", because mixing
+parked keys into the managed list would make the list lie about what
+Ladulås holds, which is the one question listing exists to answer. Its
+"added by" column is the session walk decision U computes for a prompt,
+`tsh ← zsh ← kitty`, and it is what makes the section worth building on
+its own: `ssh-add -l` says a key is in the agent and nothing about how it
+got there, on any agent that has ever existed. Two verbs: `keys forget`
+drops one, a separate word from `keys remove` on purpose since `remove`
+deletes an unrecoverable private key out of the store and `forget` drops
+a cached credential a tool will re-add, and the same word for both would
+put an irreversible action and a trivial one behind one muscle memory;
+`keys promote` is below. `keys list --local` is the section alone, for
+scripting the two. `status` and `doctor` each gain a line when parked
+keys are present, which is the direct answer to what the agent's own
+refusal comment used to complain of — that `doctor` could not see a
+mutation was ever attempted. The desktop's Keys screen draws the same
+section under the managed keys, titled the way the CLI titles it, each
+row with the label, the adding session, the expiry and a one-press
+*Forget*; the fingerprint and the constraints are behind the (i)
+decision W established for exactly this. No sidebar count: the offers
+count is there because an offer needs an answer (decision AF), and a
+parked key needs nothing, so a badge would be a notification for a thing
+that is working correctly. `ladulas tui` gets nothing; it is an approver
+and a client (decision AK) and has never managed keys.
+
+**Audit.** A new `AUDIT_EVENT_KEY_LOCAL` covers added, expired,
+forgotten and promoted, with the process and its session, the
+fingerprint and the constraints. `AUDIT_EVENT_KEY_TRANSFER` is not
+reused: a transfer is a key moving between machines under decision S's
+rules, and calling this the same event would put the one class of key
+that never travels into the log line that means travel.
+
+**Promotion.** `ladulas keys promote <key> --label <name>` takes a parked
+key out of the volatile set and writes it into the store as a portable
+key with a fourth origin, `KEY_ORIGIN_ADOPTED` — a fourth rather than
+`IMPORTED`, on decision S's own reasoning that where a key came from is
+the first thing anybody asks about a key they did not make, and this is
+the only origin where the answer is "a program put it there and you
+decided to keep it". Two constraints. Any certificate is dropped, and the
+verb says so: `tsh` parks a key *with* an SSH certificate, the CA's
+statement about it with its own expiry and its own renewal path, neither
+of which the store can touch, so adopting the cert would produce a stored
+key that stops working on a schedule nothing here controls; the private
+half is what is adopted, and if the certificate was the point, promotion
+was the wrong verb. And the store passphrase is re-entered, as it is
+before a transfer, for the same reason: the store is open, so it unlocks
+nothing and exists to make the operator stop. This one is arguable —
+promotion is reversible in a way a transfer is not, `keys remove` undoes
+it completely — and the gate stays anyway, because what it really
+protects is the invariant that nothing enters the store without a
+passphrase, and an exception to that is worth more than the friction it
+saves. Promotion stays a CLI verb: it is rare and consequential, and the
+window has nowhere honest to ask for a passphrase twice in one screen.
+
+**Rejected.** *Proxying unknown keys to a second agent*, which §4 used
+to float as ssh-tpm-agent's pattern for coexistence during migration. It
+solves the error and nothing else: the keys become invisible to every
+Ladulås surface, so the operator is back to `ssh-add -l` against an
+agent they cannot see the shape of; there are two agents with two
+lifetimes and two unlock states to reason about; and `Add` would have to
+be forwarded blind, putting material somewhere Ladulås cannot describe,
+audit or stop from being forwarded onward. A smaller change that gives
+up the entire point of having one agent. *Keeping the refusal and
+documenting the workarounds* — the status quo, with a real argument:
+the refusal is a clean invariant, and every tool that trips it is doing
+something the design disapproves of. It fails on cost. The list of
+tools is unbounded, each is discovered by a failure that names nothing,
+each fix removes a capability from the tool, and it concedes that
+Ladulås cannot be the only agent on a working developer machine, which
+is a large thing to concede to save this much work. *Accepting `Add`
+and storing the keys normally* — rejected above: it makes Ladulås
+responsible for material it never saw created and puts twelve-hour
+credentials in a backed-up encrypted store.
+
+**What this does not buy** is trust. Approval on a parked key is a
+control over *other* processes on this box and nothing more. What it
+does buy is worth having anyway: the box has one agent, the failure mode
+stops being a cryptic hard error in the middle of unrelated work, and —
+the part that is genuinely new rather than merely unbroken — the
+operator can see what their tools have parked in their agent, who put it
+there and when it goes away. No agent has ever shown them that.
+
+Still open: whether a parked key should be offered in the identity list
+by default, or only signed with when named. Decision T's per-key setting
+exists and the default for this class is not obvious — `tsh` wants its
+certificate offered, `ssh-add -c` suggests somebody wanting the opposite
+— so for now every parked key is advertised. And whether `ladulas-sign`
+should refuse a parked key outright: signing a git commit with a
+Teleport certificate is not a thing anybody means to do, and today
+nothing stops it beyond the prompt.
 
 ## 11. Wake-ups and push (all optional)
 
@@ -2864,6 +3081,14 @@ wiped on both sides once it has answered (§14). And removing the key, which
 asks twice for the reason revoking a peer does. Importing a key is still
 `ladulas keys import` and stays there (decision AF).
 
+Since 2026-09-29 the screen also lists the keys programs have parked in
+the agent (decision AU), under the managed keys and apart from them —
+"added through the agent" — each with who parked it, when it goes and a
+one-press *Forget*, and nothing else: no public line, no agent switch,
+no *Hand to a paired machine*, because a parked key has none of those.
+The (i) carries the fingerprints and the constraints. Promotion into the
+store stays `ladulas keys promote`.
+
 The same day the bridge's key type became `KeyInfo` rather than `KeyRef`,
 and the sheet grew the two things that type carries and a `KeyRef` cannot:
 the *off* switch (`SetKeyEnabled`), kept apart from the agent's toggle the
@@ -3275,6 +3500,15 @@ The surface (existing pieces from M2/M3 plus planned):
   the table, by name, because "which of these are on somebody else's disk"
   is the question somebody asks after losing a machine and a column could
   only have answered it with a number;
+* keys forget, promote, and `keys list --local` — the keys programs have
+  parked in the agent (decision AU). `keys list` shows them in a second
+  section under everything else, with the session that parked each and
+  when it goes; `forget` drops one, a different word from `remove` because
+  it drops a cached credential a program will park again rather than a
+  private key nothing can recover; `promote` takes one into the store as
+  a portable key with the `adopted` origin, asking for the store
+  passphrase the way `send` does and dropping any certificate it was
+  parked with. `status` and `doctor` say when there are any;
 * keys send, offers, accept, refuse — giving a portable key to a paired
   peer and answering one that has arrived (decision S). `send` prints what
   it is about to do, asks for the store passphrase, and says afterwards
@@ -3550,8 +3784,9 @@ Per machine: disable the 1Password SSH agent, point `SSH_AUTH_SOCK` /
 either import them (they become desktop-resident Ladulås keys) or — better,
 matching §10's philosophy — generate fresh per-device keys and rotate
 GitHub/servers. Both paths supported; import eases transition, rotation is
-the recommended end state. The agent's proxy-to-another-agent option (§4)
-allows running both during migration.
+the recommended end state. There is no second agent to proxy to during the
+transition: the agent takes what a tool parks in it (decision AU), and a
+key that has to be in an agent for a while is `ssh-add`ed into this one.
 
 ## 16. Security considerations
 
@@ -3836,6 +4071,12 @@ Added 2026-09-15:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AT | Which holder signs when several hold the key, and what happens when that one cannot | **dialled before collecting, and a holder that reports rather than decides sends the request to the next one.** A key on more than one machine is decision S's ordinary shape, and `RemoteSign` asked exactly one of them: the first linked holder, else a collecting one. That choice is kept and is structural rather than a guess about the far end — a live link is a holder that can be asked now, a phone has to be woken and may open the app in an hour. What is added is the fallback, and it is decision AC's rule one layer up: a holder that cannot be reached, and a holder whose engine answers `NO_APPROVER` because nothing was asked of anybody, have both reported on themselves rather than decided the request, so the next holder is asked. Without it a connected holder that was sealed, or whose window had been closed, failed the signature *as though somebody had refused it* — `signRemotely` treated every non-approval alike — while another machine holding the same key sat awake and was never asked. **A denial, a policy refusal, a hard rule and a timeout are decisions and settle it.** The first three because a requester that asks on until somebody says yes is shopping for an answer, which is the one thing this must never do; the timeout because somebody *was* asked, and the budget the next holder would need is the budget that just went. That the two fallback cases are both instant is what makes the rule affordable: neither spends any part of an ssh login's ninety seconds (decision AJ). Rejected: racing every holder and taking the first answer, the way the approval fan-out does (§2). It reads as the obvious symmetry and is not one — an approval fan-out produces a decision while a holder produces the *signature*, so racing wakes a phone for every request a desktop could have answered, splits decision P's standing grants across holders so a grant silently covers half the traffic, and can leave two valid signatures over one payload. Also rejected: preferring a holder that advertises itself as unlocked with an approver attached, which is the idea decision AC turned down for the fan-out and fails here for the same reason — the claim is stale by the time it is used, and the fallback is needed for the gap regardless. Which is the point: the ordering does not have to be clever, because the recovery is. Rationale in §10 |
+
+Added 2026-09-29:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AU | What the agent does with a key a program asks it to add | **it parks it: held in memory for as long as the adder asked, never in the store, never lent, and signed with unasked only by the session that parked it.** A parked key is a credential Ladulås is holding, not a key it manages — `ssh-add`'s key, or the twelve-hour certificate Teleport's `tsh` pushes into whatever `SSH_AUTH_SOCK` names on every login — and the refusal that used to meet it was right about the store's keys and wrong about the box: a policy about key management applied to something that is not key management, failing with a bare wire byte that named nothing, fatal for the whole of `tsh`, and fixable only per tool at the cost of a capability each. The lifetime and confirm constraints are honoured, the certificate's own validity counts as a lifetime, `Remove` and `RemoveAll` drop parked keys and leave managed ones standing, sealing drops them all, a soft lock keeps them and suspends the one convenience, and the set is capped at sixty-four. The adding session signs without a prompt because asking it is theatre — it has the bytes — and any other session is asked, which defends against neighbours on the box and nothing more; a deny rule and the forwarded-agent rule still win. They are never sent, by construction: not in the store, so not offered to peers, not resolved by `RemoteSign`, refused by class by `SendKey`. `keys list` gains a second section with who parked each key, `forget` and `promote` are the verbs, the desktop gets the section and a one-press forget with no sidebar count, and `AUDIT_EVENT_KEY_LOCAL` covers added, expired, forgotten and promoted. Promotion writes the private half into the store under a fourth origin, `adopted`, behind the store passphrase and without the certificate. Rejected: proxying unknown keys to a second agent, which §4 used to float and which solves the error while giving up the point of having one agent; keeping the refusal, which concedes Ladulås cannot be the only agent on a working machine; and storing what arrives, which puts twelve-hour credentials in a backed-up store. Qualifies §4's mutation bullet; bounded by decisions S and T. Rationale in §10 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

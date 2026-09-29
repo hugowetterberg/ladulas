@@ -180,6 +180,11 @@ type App struct {
 	Audit *approval.AuditLog
 	Agent *agent.Server
 	Local *localapi.Server
+	// Parked is the keys programs have put in the agent (§10, decision AU).
+	// It is beside Audit rather than inside the core because it is not part of
+	// the store — held in memory, dropped with the seal, written nowhere — and
+	// the seal is what empties it rather than what creates it.
+	Parked *agent.LocalKeys
 
 	log *slog.Logger
 
@@ -373,6 +378,21 @@ func build(cfg Config) (*App, error) {
 		since:  time.Now(),
 	}
 
+	// A sealed instance parks nothing: seal means the machine holds nothing
+	// usable, and a key accepted into a sealed daemon would make that false.
+	// Every change to the set is an audit entry, because "what did this
+	// session put in the agent" is the question the log exists to answer.
+	instance.Parked = agent.NewLocalKeys(agent.LocalKeysOptions{
+		Accept: func() error {
+			if !instance.Unsealed() {
+				return ErrSealed
+			}
+
+			return nil
+		},
+		OnEvent: instance.logLocalKey,
+	})
+
 	// The servers are handed the instance itself rather than the store, so that
 	// a socket does not have to be torn down and rebuilt every time the lock
 	// state changes. What varies is what the instance answers, and while sealed
@@ -383,6 +403,7 @@ func build(cfg Config) (*App, error) {
 		Keys:       instance,
 		Approver:   instance,
 		Remote:     instance,
+		Local:      instance.Parked,
 		KnownHosts: agent.NewKnownHosts(cfg.KnownHosts...),
 		Logger:     cfg.Logger,
 		Identity:   instance.requesterInfo,

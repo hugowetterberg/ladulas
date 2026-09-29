@@ -582,6 +582,15 @@ func printPeerStatus(
 		fmt.Printf("Keys offered  %d waiting — `ladulas keys offers`\n", offers)
 	}
 
+	// A key a program parked in the agent is not something anybody has to act
+	// on, so it is a line only when there is one (decision AU): it says the
+	// box is holding something that is not in the store, which is what
+	// somebody comparing `keys list` with `ssh-add -l` is trying to find out.
+	if parked := live.GetLocalKeys(); parked > 0 {
+		fmt.Printf("Parked keys   %d added through the agent — `ladulas keys list --local`\n",
+			parked)
+	}
+
 	if len(peers) == 0 {
 		return nil
 	}

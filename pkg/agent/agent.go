@@ -31,10 +31,18 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 )
 
-// ErrMutationNotSupported is returned for every request that would change the
-// agent's key set. Key management goes through Ladulås itself (§4).
+// ErrMutationNotSupported is returned for the requests that would change the
+// managed key set, and for every mutation on a server with no parked set. Key
+// management goes through Ladulås itself (§4); what the agent's Add takes is
+// a parked key, which is a different thing (§10, decision AU).
 var ErrMutationNotSupported = errors.New(
 	"ladulas: the agent does not accept key management requests; use ladulas keys")
+
+// ErrManagedKey is returned when a program asks the agent to remove a key the
+// store holds. The store's keys are the operator's, and `ssh-add -d` is not
+// how one of them leaves.
+var ErrManagedKey = errors.New(
+	"ladulas: that key is managed by ladulas; remove it with ladulas keys remove")
 
 // ErrDenied is returned when a request was not approved. The text reaches the
 // user through ssh's "agent refused operation".
@@ -114,6 +122,10 @@ var _ sshagent.ExtendedAgent = (*connAgent)(nil)
 // identity list (decision T). It can still be signed with; ssh is simply not
 // handed it and told to try, because ssh tries everything it is handed and the
 // server allows six attempts.
+//
+// The keys programs have parked here are in the list too (§10, decision AU),
+// after the store's and before the peers': tsh parks its certificate so that
+// ssh will offer it, and a key on this machine signs without waking anybody.
 func (c *connAgent) List() ([]*sshagent.Key, error) {
 	refs := c.server.advertised()
 
@@ -149,18 +161,19 @@ func (c *connAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error)
 func (c *connAgent) SignWithFlags(
 	key ssh.PublicKey, data []byte, flags sshagent.SignatureFlags,
 ) (*ssh.Signature, error) {
-	ref, local, err := c.findKey(key)
+	found, err := c.findKey(key)
 	if err != nil {
 		return nil, err
 	}
 
-	req := c.buildRequest(ref, data, flags)
+	req := c.buildRequest(found.ref, data, flags)
+	req.LocalKey = found.parked
 
 	ctx, cancel := context.WithCancel(c.server.ctx)
 	defer cancel()
 
-	if !local {
-		return c.signRemotely(ctx, req, data, ref)
+	if found.where == keyOnPeer {
+		return c.signRemotely(ctx, req, data, found.ref)
 	}
 
 	resp, err := c.server.approver.Submit(ctx, req)
@@ -177,9 +190,13 @@ func (c *connAgent) SignWithFlags(
 		return nil, fmt.Errorf("%w: %s", ErrDenied, reason)
 	}
 
-	signer, _, err := c.server.keys.Signer(ref.GetFingerprint())
-	if err != nil {
-		return nil, fmt.Errorf("load key: %w", err)
+	signer := found.signer
+
+	if found.where == keyInStore {
+		signer, _, err = c.server.keys.Signer(found.ref.GetFingerprint())
+		if err != nil {
+			return nil, fmt.Errorf("load key: %w", err)
+		}
 	}
 
 	sig, err := signWithAlgorithm(signer, data, req.GetSignatureAlgorithm())
@@ -187,7 +204,7 @@ func (c *connAgent) SignWithFlags(
 		return nil, err
 	}
 
-	c.server.signed(req, ref)
+	c.server.signed(req, found.ref)
 
 	return sig, nil
 }
@@ -236,17 +253,29 @@ func (c *connAgent) signRemotely(
 	return &sig, nil
 }
 
-// allKeys is the store's keys followed by the ones paired holders offer, with
-// anything already held here left out of the second list.
+// allKeys is the store's keys, then the parked ones, then the ones paired
+// holders offer, with anything already listed left out of each later list.
 func (s *Server) allKeys() []*ladulasv1.KeyRef {
 	local := s.keys.KeyRefs()
 
-	if s.remote == nil {
+	if s.remote == nil && s.local == nil {
 		return local
 	}
 
 	out := make([]*ladulasv1.KeyRef, 0, len(local))
 	out = append(out, local...)
+
+	if s.local != nil {
+		for _, ref := range s.local.Refs() {
+			if !holdsKey(out, ref.GetPublicKey()) {
+				out = append(out, ref)
+			}
+		}
+	}
+
+	if s.remote == nil {
+		return out
+	}
 
 	// Against out rather than local, so that the second holder of a key drops
 	// out too. Two peers offering the same fingerprint is ordinary — decision S
@@ -303,20 +332,57 @@ func holdsKey(refs []*ladulasv1.KeyRef, blob []byte) bool {
 	return false
 }
 
-// findKey resolves the public key in a request, and says whether it is one this
-// instance can sign with itself.
-func (c *connAgent) findKey(key ssh.PublicKey) (*ladulasv1.KeyRef, bool, error) {
+// keyPlace is where a key a request names lives, which decides who signs and
+// what the request says about it.
+type keyPlace int
+
+const (
+	// keyInStore is a key this instance manages, signed with here after the
+	// approval engine has decided.
+	keyInStore keyPlace = iota
+	// keyParked is a key a program put in the agent (§10, decision AU),
+	// signed with here after the same decision — with the request saying which
+	// session parked it, which is what the engine's one rule about such keys
+	// reads.
+	keyParked
+	// keyOnPeer is a key a paired holder offers, and the holder decides (§8).
+	keyOnPeer
+)
+
+// foundKey is a resolved key: where it is, how to refer to it, and — for a
+// parked one — the signer and the note the request carries.
+type foundKey struct {
+	where  keyPlace
+	ref    *ladulasv1.KeyRef
+	signer ssh.Signer
+	parked *ladulasv1.LocalKey
+}
+
+// findKey resolves the public key in a request: the store's keys first, then
+// the parked ones, then whatever paired holders offer.
+func (c *connAgent) findKey(key ssh.PublicKey) (*foundKey, error) {
 	blob := key.Marshal()
 
 	for _, ref := range c.server.keys.KeyRefs() {
 		if bytes.Equal(ref.GetPublicKey(), blob) {
-			return ref, true, nil
+			return &foundKey{where: keyInStore, ref: ref}, nil
+		}
+	}
+
+	if c.server.local != nil {
+		if signer, ref, note, ok := c.server.local.lookup(blob); ok {
+			return &foundKey{
+				where:  keyParked,
+				ref:    ref,
+				signer: signer,
+				parked: note,
+			}, nil
 		}
 	}
 
 	if c.server.remote != nil {
 		if ref := findRemote(c.server.remote.RemoteKeyRefs(), blob); ref != nil {
-			return ref, false, nil
+			return &foundKey{where: keyOnPeer, ref: ref}, nil
 		}
 
 		// A key granted on the holder a moment ago is not in the cache yet, and
@@ -324,7 +390,7 @@ func (c *connAgent) findKey(key ssh.PublicKey) (*ladulasv1.KeyRef, bool, error) 
 		c.server.remote.RefreshKeys(c.server.ctx)
 
 		if ref := findRemote(c.server.remote.RemoteKeyRefs(), blob); ref != nil {
-			return ref, false, nil
+			return &foundKey{where: keyOnPeer, ref: ref}, nil
 		}
 
 		// Nobody is offering it right now, but this instance may well know
@@ -332,11 +398,11 @@ func (c *connAgent) findKey(key ssh.PublicKey) (*ladulasv1.KeyRef, bool, error) 
 		// fails naming the machine that has it (decision N) instead of claiming
 		// the key does not exist.
 		if ref, ok := c.server.remote.BorrowedKey(blob); ok {
-			return ref, false, nil
+			return &foundKey{where: keyOnPeer, ref: ref}, nil
 		}
 	}
 
-	return nil, false, fmt.Errorf("ladulas: no key %s here or on a paired instance",
+	return nil, fmt.Errorf("ladulas: no key %s here or on a paired instance",
 		ssh.FingerprintSHA256(key))
 }
 
@@ -465,49 +531,123 @@ func (c *connAgent) Extension(extensionType string, contents []byte) ([]byte, er
 }
 
 // refuseMutation logs a refused key-management request and returns the error
-// every one of them returns.
+// the caller should see.
 //
 // The logging is the whole of it, because the wire has nowhere to put a reason:
 // SSH_AGENT_FAILURE is a bare byte, so `ssh-add -D` prints "Failed to remove all
 // identities" and `ssh-add key` prints "Could not add identity" whatever we say
-// here. ErrMutationNotSupported names `ladulas keys` and reaches nobody. So the
-// verb goes to the log at info, where somebody asking why ssh-add did nothing
-// can find it with `journalctl --user -u ladulas` — and where `ladulas doctor`
-// cannot help, having no way to know a mutation was ever attempted.
-func (c *connAgent) refuseMutation(verb string) error {
+// here. The error names `ladulas keys` and reaches nobody. So the verb goes to
+// the log at info, where somebody asking why ssh-add did nothing can find it
+// with `journalctl --user -u ladulas`.
+func (c *connAgent) refuseMutation(verb, reason string, err error) error {
 	c.server.log.Info("refused an agent key-management request",
 		"verb", verb,
 		"pid", c.peer.GetPid(),
 		"exe", c.peer.GetExecutable(),
-		"reason", "key management goes through ladulas keys")
+		"reason", reason)
 
-	return ErrMutationNotSupported
+	return err
 }
 
-// Add refuses to add keys. Key management goes through Ladulås (§4).
-func (c *connAgent) Add(sshagent.AddedKey) error {
-	return c.refuseMutation("add")
+// Add parks a key (§10, decision AU).
+//
+// This is not key management, whatever the protocol calls it: the program is
+// not asking Ladulås to look after a key, it is parking a credential it minted,
+// owns and will replace — tsh's twelve-hour certificate — and the agent is the
+// only place it knows to park it. The refusal that used to be here was right
+// about the store's keys and wrong about the box, and it cost every tool that
+// tripped it a capability: tsh treated the refusal as fatal for the whole
+// command, `tsh version` included.
+//
+// A key the store already holds is answered with success and parked nowhere.
+// The agent has it, which is what the caller asked for; parking a second copy
+// would list one key twice.
+func (c *connAgent) Add(key sshagent.AddedKey) error {
+	if c.server.local == nil {
+		return c.refuseMutation("add",
+			"this agent parks no keys", ErrMutationNotSupported)
+	}
+
+	signer, err := ssh.NewSignerFromKey(key.PrivateKey)
+	if err != nil {
+		return c.refuseMutation("add", err.Error(),
+			fmt.Errorf("ladulas: the key cannot be parked: %w", err))
+	}
+
+	if holdsKey(c.server.keys.KeyRefs(), signer.PublicKey().Marshal()) {
+		c.server.log.Info("a program added a key the store already holds",
+			"pid", c.peer.GetPid(),
+			"exe", c.peer.GetExecutable(),
+			"key", ssh.FingerprintSHA256(signer.PublicKey()))
+
+		return nil
+	}
+
+	if err := c.server.local.Add(key, c.peer); err != nil {
+		return c.refuseMutation("add", err.Error(), err)
+	}
+
+	return nil
 }
 
-// Remove refuses to remove keys.
-func (c *connAgent) Remove(ssh.PublicKey) error {
-	return c.refuseMutation("remove")
+// Remove drops a parked key, and refuses to touch a managed one.
+func (c *connAgent) Remove(key ssh.PublicKey) error {
+	if c.server.local == nil {
+		return c.refuseMutation("remove",
+			"this agent parks no keys", ErrMutationNotSupported)
+	}
+
+	blob := key.Marshal()
+
+	if holdsKey(c.server.keys.KeyRefs(), blob) {
+		return c.refuseMutation("remove",
+			"the key is managed; ladulas keys remove is how it leaves",
+			ErrManagedKey)
+	}
+
+	if !c.server.local.Remove(blob, c.peer) {
+		return c.refuseMutation("remove", "no such parked key",
+			fmt.Errorf("%w: %s", ErrNoSuchLocalKey, ssh.FingerprintSHA256(key)))
+	}
+
+	return nil
 }
 
-// RemoveAll refuses to remove keys.
+// RemoveAll drops every parked key and leaves the managed ones standing.
+//
+// It succeeds while managed keys remain, and that is a lie the wire forces:
+// there is no partial-success byte. The alternatives are worse. Refusing
+// would break the cleanup path that made accepting Add worth it, and actually
+// dropping managed keys would make `ssh-add -D` a way to wipe a store. So it
+// succeeds, and the log records what was left alone.
 func (c *connAgent) RemoveAll() error {
-	return c.refuseMutation("remove-all")
+	if c.server.local == nil {
+		return c.refuseMutation("remove-all",
+			"this agent parks no keys", ErrMutationNotSupported)
+	}
+
+	dropped := c.server.local.RemoveAll(c.peer)
+
+	c.server.log.Info("a program removed every parked key",
+		"pid", c.peer.GetPid(),
+		"exe", c.peer.GetExecutable(),
+		"dropped", dropped,
+		"managed_keys_untouched", len(c.server.keys.KeyRefs()))
+
+	return nil
 }
 
 // Lock is not supported; the store's own lock state is not the agent's to
 // change.
 func (c *connAgent) Lock([]byte) error {
-	return c.refuseMutation("lock")
+	return c.refuseMutation("lock",
+		"the store's lock state is not the agent's to change", ErrMutationNotSupported)
 }
 
 // Unlock is not supported.
 func (c *connAgent) Unlock([]byte) error {
-	return c.refuseMutation("unlock")
+	return c.refuseMutation("unlock",
+		"the store's lock state is not the agent's to change", ErrMutationNotSupported)
 }
 
 // Signers refuses to hand out signers. Handing a caller an ssh.Signer would
@@ -521,8 +661,12 @@ func (c *connAgent) Signers() ([]ssh.Signer, error) {
 // algorithmForFlags resolves the SSH_AGENT_RSA_SHA2_* flags to a signature
 // algorithm. The flags are meaningless for anything but RSA, and OpenSSH
 // ignores them there, so an empty string means "the key's own algorithm".
+//
+// An RSA certificate is RSA for this purpose: the signature under it is the
+// key's, and a parked Teleport certificate over an RSA key is asked for
+// rsa-sha2-512 exactly as the bare key would be.
 func algorithmForFlags(keyAlgorithm string, flags sshagent.SignatureFlags) string {
-	if keyAlgorithm != ssh.KeyAlgoRSA {
+	if keyAlgorithm != ssh.KeyAlgoRSA && keyAlgorithm != ssh.CertAlgoRSAv01 {
 		return ""
 	}
 

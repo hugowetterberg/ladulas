@@ -378,6 +378,10 @@ func eventName(event ladulasv1.AuditEvent) string {
 		return "grant"
 	case ladulasv1.AuditEvent_AUDIT_EVENT_LIFECYCLE:
 		return "lifecycle"
+	case ladulasv1.AuditEvent_AUDIT_EVENT_KEY_TRANSFER:
+		return "key transfer"
+	case ladulasv1.AuditEvent_AUDIT_EVENT_KEY_LOCAL:
+		return "parked key"
 	case ladulasv1.AuditEvent_AUDIT_EVENT_UNSPECIFIED:
 		return "unknown"
 	default:

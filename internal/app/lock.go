@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hugowetterberg/ladulas/pkg/agent"
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/bridge"
 	"github.com/hugowetterberg/ladulas/pkg/keystore"
@@ -338,6 +339,14 @@ func (a *App) tearDown(current *core) {
 
 	a.stopPeer(current)
 
+	// The parked keys go with the seal (decision AU). Seal means the machine
+	// holds nothing usable, and a parked key surviving it would make that
+	// false; the tools that parked them were written against an agent that
+	// forgets on restart and will log in again.
+	if a.Parked != nil {
+		a.Parked.Wipe("dropped with the seal")
+	}
+
 	// Everything that could still be signing has stopped, so the store key and
 	// the private keys can be zeroed rather than merely dropped (M5). Best effort
 	// — Vault.Wipe says exactly what it can and cannot reach — but it takes the
@@ -520,6 +529,34 @@ func (a *App) LogKeyTransfer(detail, fingerprint string) {
 		Event:          ladulasv1.AuditEvent_AUDIT_EVENT_KEY_TRANSFER,
 		Detail:         detail,
 		KeyFingerprint: fingerprint,
+	})
+}
+
+// logLocalKey records a change to the parked keys (decision AU): what
+// happened, to which key, by which process. The process travels structured
+// rather than as a sentence, because the session column is what makes a flood
+// of added keys legible, and a log line somebody has to parse is a column
+// nobody can filter on.
+func (a *App) logLocalKey(event agent.LocalKeyEvent) {
+	detail := fmt.Sprintf("parked key %s: %s",
+		event.Kind, agent.LocalKeyDescription(event.Key))
+
+	if event.Reason != "" {
+		detail += " — " + event.Reason
+	}
+
+	a.log.Info("parked key "+event.Kind.String(),
+		"key", event.Key.GetFingerprint(),
+		"label", event.Key.GetLabel(),
+		"pid", event.By.GetPid(),
+		"exe", event.By.GetExecutable(),
+		"reason", event.Reason)
+
+	a.appendAudit(&ladulasv1.AuditEntry{
+		Event:          ladulasv1.AuditEvent_AUDIT_EVENT_KEY_LOCAL,
+		Detail:         detail,
+		KeyFingerprint: event.Key.GetFingerprint(),
+		Process:        event.By,
 	})
 }
 

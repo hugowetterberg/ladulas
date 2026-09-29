@@ -277,6 +277,17 @@ type Options struct {
 	// instance and nobody has answered yet (decision S). Optional: a host
 	// attached to nothing, or to an instance with peering off, has none.
 	KeyOffers func() []*ladulasv1.KeyOfferInfo
+	// LocalKeys lists the keys programs have parked in the agent (§10,
+	// decision AU): held in the daemon's memory, never in the store, never
+	// lent. Optional, and listed apart from Keys for the reason the CLI keeps
+	// them in a second section — a listing that mixed them in would say the
+	// store holds something it does not.
+	LocalKeys func() []*ladulasv1.LocalKeyInfo
+	// ForgetLocalKey drops one, by label or fingerprint. Optional and separate
+	// from LocalKeys. It is not RemoveKey and the surface must not draw it as
+	// one: what leaves the store is gone, and what is forgotten here comes
+	// back the next time the program that parked it logs in.
+	ForgetLocalKey func(ctx context.Context, key string) error
 	// AnswerKeyOffer takes one into the store, or forgets it. Optional and
 	// separate from KeyOffers: a host can say a key is waiting without being
 	// where it is answered.
@@ -994,6 +1005,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/keys/agent", s.handleSetKeyAgentUse)
 	mux.HandleFunc("POST /api/v1/keys/enabled", s.handleSetKeyEnabled)
 	mux.HandleFunc("POST /api/v1/keys/send", s.handleSendKey)
+	mux.HandleFunc("POST /api/v1/keys/forget", s.handleForgetLocalKey)
 	mux.HandleFunc("POST /api/v1/keys/offers/{id}/answer", s.handleAnswerKeyOffer)
 	mux.HandleFunc("POST /api/v1/endorsements/retract", s.handleRetractEndorsement)
 	// {session} is last of the /pairings/ routes by convention rather than by
@@ -1258,6 +1270,14 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 	if s.opts.KeyOffers != nil {
 		for _, offer := range s.opts.KeyOffers() {
 			view.Offers = append(view.Offers, keyOfferView(offer))
+		}
+	}
+
+	if s.opts.LocalKeys != nil {
+		now := time.Now()
+
+		for _, key := range s.opts.LocalKeys() {
+			view.LocalKeys = append(view.LocalKeys, localKeyView(key, now))
 		}
 	}
 
@@ -1969,6 +1989,45 @@ func (s *Session) handleRemoveKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.opts.RemoveKey(r.Context(), body.Key); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleForgetLocalKey drops a key a program parked in the agent (§10,
+// decision AU).
+//
+// One press, where removing a stored key takes two: what is dropped here is
+// a cached credential the program will park again, and asking twice about a
+// trivial action is how people learn to press twice without reading.
+func (s *Session) handleForgetLocalKey(w http.ResponseWriter, r *http.Request) {
+	if s.opts.ForgetLocalKey == nil {
+		writeError(w, http.StatusNotImplemented, "this host cannot forget a parked key")
+
+		return
+	}
+
+	var body struct {
+		Key string `json:"key"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the request could not be read")
+
+		return
+	}
+
+	if strings.TrimSpace(body.Key) == "" {
+		writeError(w, http.StatusBadRequest, "no key to forget")
+
+		return
+	}
+
+	if err := s.opts.ForgetLocalKey(r.Context(), body.Key); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 
 		return

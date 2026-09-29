@@ -191,6 +191,27 @@ service ControlService {
   // to hold, since the only record worth having is on the side that sent it.
   rpc AnswerKeyOffer(AnswerKeyOfferRequest) returns (AnswerKeyOfferResponse);
 
+  // ListLocalKeys reports the keys programs have parked in the agent through
+  // its Add request (§10, decision AU): held in memory, never in the store,
+  // and never lent to anybody. Answerable in every state, because a sealed
+  // instance holds none and saying so is the answer.
+  rpc ListLocalKeys(ListLocalKeysRequest) returns (ListLocalKeysResponse);
+
+  // ForgetLocalKey drops one. A separate verb from RemoveKey on purpose:
+  // RemoveKey deletes an unrecoverable private key out of the store, and this
+  // drops a cached credential the program that parked it will add again.
+  rpc ForgetLocalKey(ForgetLocalKeyRequest) returns (ForgetLocalKeyResponse);
+
+  // PromoteLocalKey takes a parked key out of memory and writes it into the
+  // store as a portable key with the ADOPTED origin. It asks for the store
+  // passphrase the way SendKey does, and for the same reason: the store is
+  // open, so what it gates is deliberateness — this is the moment material a
+  // program chose becomes material Ladulås keeps, encrypts, backs up and can
+  // hand to a peer. A certificate the key was parked with is dropped; the CA's
+  // statement has its own clock and its own renewal path, and neither is
+  // anything the store can touch.
+  rpc PromoteLocalKey(PromoteLocalKeyRequest) returns (PromoteLocalKeyResponse);
+
   // ListGrants reports the TTL grants that have not expired yet. A grant is the
   // approver's standing promise (§19) and lives in the store, so listing one is
   // the daemon's to answer like every other read.
@@ -539,6 +560,11 @@ message StatusResponse {
   // entry has nothing (decision Z). So the paths come from the process that
   // opened them, which is also the only one that can be right about them.
   InstanceLocations locations = 16;
+  // How many keys programs have parked in the agent (§10, decision AU). Zero
+  // while sealed, because sealing drops them; counted here so that `status`
+  // and `doctor` can say a tool has put something in the agent without a
+  // second call.
+  int32 local_keys = 17;
 }
 
 // InstanceLocations is where a running instance keeps things.
@@ -748,6 +774,7 @@ enum KeyOrigin {
   KEY_ORIGIN_IMPORTED = 1;
   KEY_ORIGIN_GENERATED = 2;
   KEY_ORIGIN_RECEIVED = 3;
+  KEY_ORIGIN_ADOPTED = 4;
 }
 
 // KeyTransferInfo is a portable key having changed machines (decision S), in
@@ -881,6 +908,71 @@ message KeyOfferInfo {
   string fingerprint = 7;
   bytes public_key = 8;
   google.protobuf.Timestamp received_at = 9;
+}
+
+// LocalKeyInfo is a key a program parked in the agent, as the management
+// surface reports it (§10, decision AU). The private half is in the daemon's
+// memory and nowhere else, and it is not here for the reason it is not in
+// KeyInfo.
+message LocalKeyInfo {
+  // The comment the key was added with, which is the only name it has. Empty
+  // when the adder gave none.
+  string label = 1;
+  // The fingerprint of what the agent lists: the certificate's, when the key
+  // was parked with one, and the key's otherwise.
+  string fingerprint = 2;
+  // The underlying key's algorithm and fingerprint. They differ from the
+  // listed ones only for a certificate, and it is the underlying key that
+  // promotion keeps.
+  string algorithm = 3;
+  string key_fingerprint = 4;
+  // The public half as the agent lists it, in SSH wire format.
+  bytes public_key = 5;
+  // True when what was parked is a certificate over the key, as Teleport's tsh
+  // parks one.
+  bool certificate = 6;
+  // The process that added the key and the session it belongs to, which is the
+  // column that makes this listing worth more than `ssh-add -l`.
+  ClientProcess added_by = 7;
+  google.protobuf.Timestamp added_at = 8;
+  // When the key is dropped; absent for a key that lives until the daemon
+  // restarts or the store is sealed.
+  google.protobuf.Timestamp expires_at = 9;
+  // The adder asked for every use to be confirmed (`ssh-add -c`).
+  bool confirm = 10;
+}
+
+message ListLocalKeysRequest {}
+
+message ListLocalKeysResponse {
+  repeated LocalKeyInfo keys = 1;
+}
+
+message ForgetLocalKeyRequest {
+  // The key's label or fingerprint.
+  string key = 1;
+}
+
+message ForgetLocalKeyResponse {
+  LocalKeyInfo key = 1;
+}
+
+message PromoteLocalKeyRequest {
+  // The key's label or fingerprint.
+  string key = 1;
+  // What to call the key in the store. Required: the comment a program chose
+  // is not a name somebody picked.
+  string label = 2;
+  // The store passphrase, re-entered. Checked against the wrapping and wiped;
+  // it unlocks nothing, because the store is open.
+  bytes passphrase = 3;
+}
+
+message PromoteLocalKeyResponse {
+  KeyInfo key = 1;
+  // True when the parked key carried a certificate that was dropped on the way
+  // into the store.
+  bool certificate_dropped = 2;
 }
 
 message ListKeyOffersRequest {}

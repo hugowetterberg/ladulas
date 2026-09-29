@@ -458,6 +458,26 @@ export function keys(state) {
       ui.fingerprint(key.fingerprint, true)));
   }
 
+  // The keys programs have parked in the agent (decision AU), under the
+  // managed keys and titled the way the CLI titles them, so that the two
+  // surfaces agree about what this is: not managed, not shareable, gone at
+  // the next restart. Drawn only when there is one — a section about a
+  // mechanism nobody on this machine uses is a heading about nothing — and
+  // with no count on the sidebar, because a parked key needs nothing from
+  // anybody (decision AF's count is for a question waiting to be answered).
+  const parked = instance.localKeys || [];
+
+  if (parked.length) {
+    body.push(ui.heading("Added through the agent", parked.length));
+    body.push(ui.note("Programs have put these in the agent with ssh-add or "
+      + "its equivalent. They are held in memory, never in the store, and "
+      + "are never lent to a paired machine; a restart or a seal drops them."));
+
+    for (const key of parked) {
+      body.push(parkedKeyCard(key, state));
+    }
+  }
+
   // What other holders of a key have promised about a machine, and what this
   // instance is therefore signing without asking (decision AG).
   //
@@ -523,6 +543,93 @@ export function keys(state) {
     actions: [ui.action("plus", "Make a new key", () => newKeySheet(state))],
     body,
   };
+}
+
+// parkedKeyCard is one key a program put in the agent (decision AU): what it
+// is called, who parked it, when it goes, and a forget button. The fingerprint
+// and the constraints are behind the (i), which is decision W's idiom for the
+// facts somebody checks after the fact rather than reads first.
+//
+// One press to forget, where a stored key takes two: forgetting drops a cached
+// credential the program will park again, and a second press on a trivial
+// action teaches people to press twice without reading.
+function parkedKeyCard(key, state) {
+  const pills = [];
+
+  if (key.certificate) {
+    pills.push(ui.pill("certificate"));
+  }
+
+  if (key.confirm) {
+    pills.push(ui.pill("confirm each use"));
+  }
+
+  const forget = el("button", "small", "Forget");
+
+  forget.onclick = () => {
+    forget.disabled = true;
+
+    bridge.forgetLocalKey(key.fingerprint)
+      .then(() => state.refresh())
+      .catch((error) => {
+        forget.disabled = false;
+        forget.textContent = error.message || "Could not forget it";
+      });
+  };
+
+  return ui.card("key-card",
+    append(el("div", "card-head"),
+      ui.icon("key", "kind"),
+      ui.stack(
+        ui.title(key.label || "(no label)"),
+        ui.sub(key.addedBy ? "Added by " + key.addedBy : "Added by a program")),
+      key.algorithm ? el("span", "algorithm", key.algorithm) : null,
+      ...pills,
+      ui.action("info", "About this key", () => parkedKeySheet(key))),
+    ui.note(key.expires
+      ? "Goes " + key.expires + "."
+      : "Stays until the daemon restarts or the store is sealed."),
+    append(el("div", "card-actions"), forget));
+}
+
+// parkedKeySheet is the (i): the fingerprints, the program, the clock and the
+// constraints, for whoever wants to check the row against `ssh-add -l`.
+function parkedKeySheet(key) {
+  const rows = [
+    { label: "Fingerprint", value: key.fingerprint, mono: true },
+  ];
+
+  if (key.certificate && key.keyFingerprint) {
+    rows.push({ label: "Key under the certificate", value: key.keyFingerprint, mono: true });
+  }
+
+  if (key.algorithm) {
+    rows.push({ label: "Algorithm", value: key.algorithm });
+  }
+
+  rows.push({ label: "Added by", value: key.addedBy || "a program" });
+
+  if (key.added) {
+    rows.push({ label: "Added", value: key.added });
+  }
+
+  rows.push({
+    label: "Expires",
+    value: key.expires ? key.expires : "with the next restart or seal",
+  });
+
+  rows.push({
+    label: "Each use",
+    value: key.confirm
+      ? "asks, as the program requested"
+      : "signs for the session that parked it, asks for any other",
+  });
+
+  ui.sheet(key.label || "A parked key",
+    facts(rows),
+    ui.note("A parked key is a credential Ladulås is holding, not a key it "
+      + "manages: nothing here watched it being made, and it cannot be sent "
+      + "to a paired machine. `ladulas keys promote` keeps one in the store."));
 }
 
 // endorsementCard is one promise another holder of a key has made about a

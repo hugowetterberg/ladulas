@@ -31,6 +31,14 @@ enum AuditEvent {
   // went where, and when" — which is a question a log should be able to answer
   // without anybody grepping for a phrase.
   AUDIT_EVENT_KEY_TRANSFER = 7;
+  // A key a program parked in the agent was added, expired, forgotten or
+  // promoted into the store (§10, decision AU).
+  //
+  // Not KEY_TRANSFER, deliberately: a transfer is a key moving between machines
+  // under decision S's rules, and a local key is the one class of key that
+  // never travels. Putting it under the event that means travel would make the
+  // one question that event answers — what went where — unanswerable.
+  AUDIT_EVENT_KEY_LOCAL = 8;
 }
 
 // AuditEntry is one line of the append-only JSONL audit log (§18). Entries are
@@ -78,6 +86,12 @@ message AuditEntry {
   string key_fingerprint = 11;
   // The grant a GRANT entry concerns.
   Grant grant = 12;
+  // The process behind a KEY_LOCAL entry: what added, removed or was signing
+  // with a parked key, and the session it belongs to (decision U). It is the
+  // column that makes a flood of added keys legible, and it is structured
+  // rather than folded into detail so that a log can be asked "what did this
+  // session put in the agent" without parsing a sentence.
+  ClientProcess process = 15;
 }
 
 // PresentedProject is the "published documentation" panel as one card carried

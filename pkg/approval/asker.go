@@ -146,6 +146,20 @@ func AskerChain(proc *ladulasv1.ClientProcess) string {
 	return strings.Join(names, " ← ")
 }
 
+// SameSession says whether two processes belong to one session (decision U),
+// which is the question the parked-key rule asks: is the program signing with
+// a key the one that parked it, or a neighbour on the same box that found the
+// socket (decision AU). Two processes with no session — a platform that
+// reports none — are never the same session, because "unknown" matching
+// "unknown" would make the rule fire for everything.
+func SameSession(a, b *ladulasv1.ClientProcess) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	return a.GetSessionId() != 0 && a.GetSessionId() == b.GetSessionId()
+}
+
 func sessionLeader(proc *ladulasv1.ClientProcess) *ladulasv1.ProcessAncestor {
 	for _, above := range proc.GetAncestry() {
 		if above.GetSessionLeader() {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -571,6 +572,93 @@ func keyOfferView(offer *ladulasv1.KeyOfferInfo) KeyOfferView {
 	return view
 }
 
+// LocalKeyView is a key a program parked in the agent (§10, decision AU), as
+// the Keys screen lists it: what it is called, who put it there, and when it
+// goes. Not a KeyView, deliberately — a parked key has no public line to copy
+// out, no agent switch, nowhere else it lives and no way to be sent, and a
+// row drawn from KeyView would offer every one of those.
+type LocalKeyView struct {
+	// Label is the comment the key was parked under; empty when none was.
+	Label string `json:"label,omitempty"`
+	// Fingerprint is of what the agent lists — the certificate's, when the
+	// key was parked with one — and KeyFingerprint is the key's own.
+	Fingerprint    string `json:"fingerprint"`
+	KeyFingerprint string `json:"keyFingerprint,omitempty"`
+	Algorithm      string `json:"algorithm,omitempty"`
+	Certificate    bool   `json:"certificate,omitempty"`
+	// AddedBy is the walk from the program to its session, the way a prompt
+	// names an asker (decision U): "tsh ← zsh ← kitty".
+	AddedBy string `json:"addedBy,omitempty"`
+	// Added and Expires are sentences for the card; AddedAt and ExpiresAt the
+	// stamps behind them. Expires is empty for a key that lives until the
+	// daemon restarts.
+	Added     string `json:"added,omitempty"`
+	AddedAt   string `json:"addedAt,omitempty"`
+	Expires   string `json:"expires,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	// Confirm says the program asked for every use to be confirmed.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
+func localKeyView(key *ladulasv1.LocalKeyInfo, now time.Time) LocalKeyView {
+	view := LocalKeyView{
+		Label:          key.GetLabel(),
+		Fingerprint:    key.GetFingerprint(),
+		KeyFingerprint: key.GetKeyFingerprint(),
+		Algorithm:      key.GetAlgorithm(),
+		Certificate:    key.GetCertificate(),
+		Confirm:        key.GetConfirm(),
+	}
+
+	if proc := key.GetAddedBy(); proc != nil {
+		exe := filepath.Base(proc.GetExecutable())
+		if proc.GetExecutable() == "" {
+			exe = fmt.Sprintf("pid %d", proc.GetPid())
+		}
+
+		view.AddedBy = exe
+
+		if chain := approval.AskerChain(proc); chain != "" {
+			view.AddedBy = exe + " ← " + chain
+		}
+	}
+
+	if at := key.GetAddedAt(); at != nil {
+		local := at.AsTime().Local()
+
+		view.Added = local.Format(time.RFC1123)
+		view.AddedAt = local.Format(time.RFC3339)
+	}
+
+	if at := key.GetExpiresAt(); at != nil {
+		local := at.AsTime().Local()
+
+		view.Expires = "in " + roughDuration(local.Sub(now))
+		view.ExpiresAt = local.Format(time.RFC3339)
+	}
+
+	return view
+}
+
+// roughDuration is a length of time as a card says it: "11h 48m", "3d 2h",
+// "40m", "moments" for anything shorter than a minute.
+func roughDuration(d time.Duration) string {
+	const day = 24 * time.Hour
+
+	d = d.Round(time.Minute)
+
+	switch {
+	case d >= day:
+		return fmt.Sprintf("%dd %dh", d/day, (d%day)/time.Hour)
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", d/time.Hour, (d%time.Hour)/time.Minute)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	default:
+		return "moments"
+	}
+}
+
 // InstanceView is the status pane.
 type InstanceView struct {
 	Name        string            `json:"name"`
@@ -581,8 +669,12 @@ type InstanceView struct {
 	// Offers are the portable keys paired machines have handed this instance
 	// and nobody has answered (decision S). Waiting for somebody rather than
 	// held, which is why they are not in Keys.
-	Offers []KeyOfferView     `json:"offers,omitempty"`
-	Grants []GrantSummaryView `json:"grants,omitempty"`
+	Offers []KeyOfferView `json:"offers,omitempty"`
+	// LocalKeys are the keys programs have parked in the agent (decision AU):
+	// held in memory rather than in the store, which is why they are not in
+	// Keys either.
+	LocalKeys []LocalKeyView     `json:"localKeys,omitempty"`
+	Grants    []GrantSummaryView `json:"grants,omitempty"`
 	// Delegations are the promises somebody else made about this instance,
 	// which it keeps for itself (decision P). The other side of Grants, and a
 	// separate list because they are answered from here and revoked elsewhere.

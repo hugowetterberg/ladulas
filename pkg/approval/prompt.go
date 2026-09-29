@@ -3,6 +3,7 @@ package approval
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 )
@@ -91,14 +92,20 @@ func RenderPrompt(req *ladulasv1.ApprovalRequest) Prompt {
 
 	if key := req.GetKey(); key != nil {
 		label := key.GetLabel()
-		if comment := key.GetComment(); comment != "" {
+		if comment := key.GetComment(); comment != "" && comment != label {
 			label = fmt.Sprintf("%s (%s)", label, comment)
+		}
+
+		if label == "" {
+			label = "(no label)"
 		}
 
 		p.Details = append(p.Details,
 			Detail{Label: "Key", Value: label},
 			Detail{Label: "Fingerprint", Value: key.GetFingerprint()})
 	}
+
+	renderParkedKey(&p, req.GetLocalKey())
 
 	renderRequester(&p, req.GetRequester())
 
@@ -324,6 +331,43 @@ func plural(n int32, one, many string) string {
 	}
 
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// renderParkedKey says that the key is one a program parked in the agent, and
+// which session did it (decision AU). It is the fact that makes the card
+// honest: a parked key is not as trustworthy as a managed one — Ladulås did
+// not watch it being made and has no idea whether it exists elsewhere — and
+// the prompt that names it must not read as though it were.
+func renderParkedKey(p *Prompt, parked *ladulasv1.LocalKey) {
+	if parked == nil {
+		return
+	}
+
+	by := "a program"
+
+	if proc := parked.GetAddedBy(); proc != nil {
+		if asker := AskerDetail(proc); asker != "" {
+			by = asker
+		} else if exe := proc.GetExecutable(); exe != "" {
+			by = exe
+		}
+
+		if chain := AskerChain(proc); chain != "" {
+			by = fmt.Sprintf("%s, via %s", by, chain)
+		}
+	}
+
+	p.Details = append(p.Details, Detail{Label: "Key parked by", Value: by})
+
+	if expires := parked.GetExpiresAt(); expires != nil {
+		p.Details = append(p.Details, Detail{
+			Label: "Key expires",
+			Value: expires.AsTime().Local().Format(time.RFC1123),
+		})
+	}
+
+	p.Warnings = append(p.Warnings,
+		"this key was put in the agent by a program, not made or imported here")
 }
 
 func renderRequester(p *Prompt, requester *ladulasv1.RequesterInfo) {

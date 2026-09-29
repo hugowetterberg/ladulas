@@ -29,6 +29,10 @@ type Options struct {
 	// Remote is the keys paired holders offer, and the way to have one used.
 	// Optional.
 	Remote RemoteKeys
+	// Local is the set of keys programs park through the agent's Add (§10,
+	// decision AU). Optional: without one every key-management request is
+	// refused, which is what a short-lived command's server wants.
+	Local *LocalKeys
 	// KnownHosts turns host keys into names. Optional.
 	KnownHosts *KnownHosts
 	// Identity describes this instance as a requester. Optional.
@@ -46,6 +50,7 @@ type Server struct {
 	keys       KeyStore
 	approver   Approver
 	remote     RemoteKeys
+	local      *LocalKeys
 	knownHosts *KnownHosts
 	identityFn func() *ladulasv1.RequesterInfo
 	onSigned   func(*ladulasv1.ApprovalRequest, *ladulasv1.KeyRef)
@@ -120,6 +125,7 @@ func New(opts Options) (*Server, error) {
 		keys:       opts.Keys,
 		approver:   opts.Approver,
 		remote:     opts.Remote,
+		local:      opts.Local,
 		knownHosts: knownHosts,
 		identityFn: identityFn,
 		onSigned:   opts.OnSigned,

@@ -93,6 +93,15 @@ const (
 	// ControlServiceAnswerKeyOfferProcedure is the fully-qualified name of the ControlService's
 	// AnswerKeyOffer RPC.
 	ControlServiceAnswerKeyOfferProcedure = "/ladulas.v1.ControlService/AnswerKeyOffer"
+	// ControlServiceListLocalKeysProcedure is the fully-qualified name of the ControlService's
+	// ListLocalKeys RPC.
+	ControlServiceListLocalKeysProcedure = "/ladulas.v1.ControlService/ListLocalKeys"
+	// ControlServiceForgetLocalKeyProcedure is the fully-qualified name of the ControlService's
+	// ForgetLocalKey RPC.
+	ControlServiceForgetLocalKeyProcedure = "/ladulas.v1.ControlService/ForgetLocalKey"
+	// ControlServicePromoteLocalKeyProcedure is the fully-qualified name of the ControlService's
+	// PromoteLocalKey RPC.
+	ControlServicePromoteLocalKeyProcedure = "/ladulas.v1.ControlService/PromoteLocalKey"
 	// ControlServiceListGrantsProcedure is the fully-qualified name of the ControlService's ListGrants
 	// RPC.
 	ControlServiceListGrantsProcedure = "/ladulas.v1.ControlService/ListGrants"
@@ -367,6 +376,24 @@ type ControlServiceClient interface {
 	// refusal is a deletion: nothing is kept about a key this instance declined
 	// to hold, since the only record worth having is on the side that sent it.
 	AnswerKeyOffer(context.Context, *connect.Request[ladulasv1.AnswerKeyOfferRequest]) (*connect.Response[ladulasv1.AnswerKeyOfferResponse], error)
+	// ListLocalKeys reports the keys programs have parked in the agent through
+	// its Add request (§10, decision AU): held in memory, never in the store,
+	// and never lent to anybody. Answerable in every state, because a sealed
+	// instance holds none and saying so is the answer.
+	ListLocalKeys(context.Context, *connect.Request[ladulasv1.ListLocalKeysRequest]) (*connect.Response[ladulasv1.ListLocalKeysResponse], error)
+	// ForgetLocalKey drops one. A separate verb from RemoveKey on purpose:
+	// RemoveKey deletes an unrecoverable private key out of the store, and this
+	// drops a cached credential the program that parked it will add again.
+	ForgetLocalKey(context.Context, *connect.Request[ladulasv1.ForgetLocalKeyRequest]) (*connect.Response[ladulasv1.ForgetLocalKeyResponse], error)
+	// PromoteLocalKey takes a parked key out of memory and writes it into the
+	// store as a portable key with the ADOPTED origin. It asks for the store
+	// passphrase the way SendKey does, and for the same reason: the store is
+	// open, so what it gates is deliberateness — this is the moment material a
+	// program chose becomes material Ladulås keeps, encrypts, backs up and can
+	// hand to a peer. A certificate the key was parked with is dropped; the CA's
+	// statement has its own clock and its own renewal path, and neither is
+	// anything the store can touch.
+	PromoteLocalKey(context.Context, *connect.Request[ladulasv1.PromoteLocalKeyRequest]) (*connect.Response[ladulasv1.PromoteLocalKeyResponse], error)
 	// ListGrants reports the TTL grants that have not expired yet. A grant is the
 	// approver's standing promise (§19) and lives in the store, so listing one is
 	// the daemon's to answer like every other read.
@@ -670,6 +697,24 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("AnswerKeyOffer")),
 			connect.WithClientOptions(opts...),
 		),
+		listLocalKeys: connect.NewClient[ladulasv1.ListLocalKeysRequest, ladulasv1.ListLocalKeysResponse](
+			httpClient,
+			baseURL+ControlServiceListLocalKeysProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("ListLocalKeys")),
+			connect.WithClientOptions(opts...),
+		),
+		forgetLocalKey: connect.NewClient[ladulasv1.ForgetLocalKeyRequest, ladulasv1.ForgetLocalKeyResponse](
+			httpClient,
+			baseURL+ControlServiceForgetLocalKeyProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("ForgetLocalKey")),
+			connect.WithClientOptions(opts...),
+		),
+		promoteLocalKey: connect.NewClient[ladulasv1.PromoteLocalKeyRequest, ladulasv1.PromoteLocalKeyResponse](
+			httpClient,
+			baseURL+ControlServicePromoteLocalKeyProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("PromoteLocalKey")),
+			connect.WithClientOptions(opts...),
+		),
 		listGrants: connect.NewClient[ladulasv1.ListGrantsRequest, ladulasv1.ListGrantsResponse](
 			httpClient,
 			baseURL+ControlServiceListGrantsProcedure,
@@ -885,6 +930,9 @@ type controlServiceClient struct {
 	sendKey              *connect.Client[ladulasv1.SendKeyRequest, ladulasv1.SendKeyResponse]
 	listKeyOffers        *connect.Client[ladulasv1.ListKeyOffersRequest, ladulasv1.ListKeyOffersResponse]
 	answerKeyOffer       *connect.Client[ladulasv1.AnswerKeyOfferRequest, ladulasv1.AnswerKeyOfferResponse]
+	listLocalKeys        *connect.Client[ladulasv1.ListLocalKeysRequest, ladulasv1.ListLocalKeysResponse]
+	forgetLocalKey       *connect.Client[ladulasv1.ForgetLocalKeyRequest, ladulasv1.ForgetLocalKeyResponse]
+	promoteLocalKey      *connect.Client[ladulasv1.PromoteLocalKeyRequest, ladulasv1.PromoteLocalKeyResponse]
 	listGrants           *connect.Client[ladulasv1.ListGrantsRequest, ladulasv1.ListGrantsResponse]
 	revokeGrant          *connect.Client[ladulasv1.RevokeGrantRequest, ladulasv1.RevokeGrantResponse]
 	extendGrant          *connect.Client[ladulasv1.ExtendGrantRequest, ladulasv1.ExtendGrantResponse]
@@ -1007,6 +1055,21 @@ func (c *controlServiceClient) ListKeyOffers(ctx context.Context, req *connect.R
 // AnswerKeyOffer calls ladulas.v1.ControlService.AnswerKeyOffer.
 func (c *controlServiceClient) AnswerKeyOffer(ctx context.Context, req *connect.Request[ladulasv1.AnswerKeyOfferRequest]) (*connect.Response[ladulasv1.AnswerKeyOfferResponse], error) {
 	return c.answerKeyOffer.CallUnary(ctx, req)
+}
+
+// ListLocalKeys calls ladulas.v1.ControlService.ListLocalKeys.
+func (c *controlServiceClient) ListLocalKeys(ctx context.Context, req *connect.Request[ladulasv1.ListLocalKeysRequest]) (*connect.Response[ladulasv1.ListLocalKeysResponse], error) {
+	return c.listLocalKeys.CallUnary(ctx, req)
+}
+
+// ForgetLocalKey calls ladulas.v1.ControlService.ForgetLocalKey.
+func (c *controlServiceClient) ForgetLocalKey(ctx context.Context, req *connect.Request[ladulasv1.ForgetLocalKeyRequest]) (*connect.Response[ladulasv1.ForgetLocalKeyResponse], error) {
+	return c.forgetLocalKey.CallUnary(ctx, req)
+}
+
+// PromoteLocalKey calls ladulas.v1.ControlService.PromoteLocalKey.
+func (c *controlServiceClient) PromoteLocalKey(ctx context.Context, req *connect.Request[ladulasv1.PromoteLocalKeyRequest]) (*connect.Response[ladulasv1.PromoteLocalKeyResponse], error) {
+	return c.promoteLocalKey.CallUnary(ctx, req)
 }
 
 // ListGrants calls ladulas.v1.ControlService.ListGrants.
@@ -1261,6 +1324,24 @@ type ControlServiceHandler interface {
 	// refusal is a deletion: nothing is kept about a key this instance declined
 	// to hold, since the only record worth having is on the side that sent it.
 	AnswerKeyOffer(context.Context, *connect.Request[ladulasv1.AnswerKeyOfferRequest]) (*connect.Response[ladulasv1.AnswerKeyOfferResponse], error)
+	// ListLocalKeys reports the keys programs have parked in the agent through
+	// its Add request (§10, decision AU): held in memory, never in the store,
+	// and never lent to anybody. Answerable in every state, because a sealed
+	// instance holds none and saying so is the answer.
+	ListLocalKeys(context.Context, *connect.Request[ladulasv1.ListLocalKeysRequest]) (*connect.Response[ladulasv1.ListLocalKeysResponse], error)
+	// ForgetLocalKey drops one. A separate verb from RemoveKey on purpose:
+	// RemoveKey deletes an unrecoverable private key out of the store, and this
+	// drops a cached credential the program that parked it will add again.
+	ForgetLocalKey(context.Context, *connect.Request[ladulasv1.ForgetLocalKeyRequest]) (*connect.Response[ladulasv1.ForgetLocalKeyResponse], error)
+	// PromoteLocalKey takes a parked key out of memory and writes it into the
+	// store as a portable key with the ADOPTED origin. It asks for the store
+	// passphrase the way SendKey does, and for the same reason: the store is
+	// open, so what it gates is deliberateness — this is the moment material a
+	// program chose becomes material Ladulås keeps, encrypts, backs up and can
+	// hand to a peer. A certificate the key was parked with is dropped; the CA's
+	// statement has its own clock and its own renewal path, and neither is
+	// anything the store can touch.
+	PromoteLocalKey(context.Context, *connect.Request[ladulasv1.PromoteLocalKeyRequest]) (*connect.Response[ladulasv1.PromoteLocalKeyResponse], error)
 	// ListGrants reports the TTL grants that have not expired yet. A grant is the
 	// approver's standing promise (§19) and lives in the store, so listing one is
 	// the daemon's to answer like every other read.
@@ -1560,6 +1641,24 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("AnswerKeyOffer")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceListLocalKeysHandler := connect.NewUnaryHandler(
+		ControlServiceListLocalKeysProcedure,
+		svc.ListLocalKeys,
+		connect.WithSchema(controlServiceMethods.ByName("ListLocalKeys")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServiceForgetLocalKeyHandler := connect.NewUnaryHandler(
+		ControlServiceForgetLocalKeyProcedure,
+		svc.ForgetLocalKey,
+		connect.WithSchema(controlServiceMethods.ByName("ForgetLocalKey")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServicePromoteLocalKeyHandler := connect.NewUnaryHandler(
+		ControlServicePromoteLocalKeyProcedure,
+		svc.PromoteLocalKey,
+		connect.WithSchema(controlServiceMethods.ByName("PromoteLocalKey")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceListGrantsHandler := connect.NewUnaryHandler(
 		ControlServiceListGrantsProcedure,
 		svc.ListGrants,
@@ -1790,6 +1889,12 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceListKeyOffersHandler.ServeHTTP(w, r)
 		case ControlServiceAnswerKeyOfferProcedure:
 			controlServiceAnswerKeyOfferHandler.ServeHTTP(w, r)
+		case ControlServiceListLocalKeysProcedure:
+			controlServiceListLocalKeysHandler.ServeHTTP(w, r)
+		case ControlServiceForgetLocalKeyProcedure:
+			controlServiceForgetLocalKeyHandler.ServeHTTP(w, r)
+		case ControlServicePromoteLocalKeyProcedure:
+			controlServicePromoteLocalKeyHandler.ServeHTTP(w, r)
 		case ControlServiceListGrantsProcedure:
 			controlServiceListGrantsHandler.ServeHTTP(w, r)
 		case ControlServiceRevokeGrantProcedure:
@@ -1933,6 +2038,18 @@ func (UnimplementedControlServiceHandler) ListKeyOffers(context.Context, *connec
 
 func (UnimplementedControlServiceHandler) AnswerKeyOffer(context.Context, *connect.Request[ladulasv1.AnswerKeyOfferRequest]) (*connect.Response[ladulasv1.AnswerKeyOfferResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.AnswerKeyOffer is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) ListLocalKeys(context.Context, *connect.Request[ladulasv1.ListLocalKeysRequest]) (*connect.Response[ladulasv1.ListLocalKeysResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ListLocalKeys is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) ForgetLocalKey(context.Context, *connect.Request[ladulasv1.ForgetLocalKeyRequest]) (*connect.Response[ladulasv1.ForgetLocalKeyResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.ForgetLocalKey is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) PromoteLocalKey(context.Context, *connect.Request[ladulasv1.PromoteLocalKeyRequest]) (*connect.Response[ladulasv1.PromoteLocalKeyResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.PromoteLocalKey is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) ListGrants(context.Context, *connect.Request[ladulasv1.ListGrantsRequest]) (*connect.Response[ladulasv1.ListGrantsResponse], error) {

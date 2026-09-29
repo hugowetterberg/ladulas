@@ -48,6 +48,14 @@ const (
 	// went where, and when" — which is a question a log should be able to answer
 	// without anybody grepping for a phrase.
 	AuditEvent_AUDIT_EVENT_KEY_TRANSFER AuditEvent = 7
+	// A key a program parked in the agent was added, expired, forgotten or
+	// promoted into the store (§10, decision AU).
+	//
+	// Not KEY_TRANSFER, deliberately: a transfer is a key moving between machines
+	// under decision S's rules, and a local key is the one class of key that
+	// never travels. Putting it under the event that means travel would make the
+	// one question that event answers — what went where — unanswerable.
+	AuditEvent_AUDIT_EVENT_KEY_LOCAL AuditEvent = 8
 )
 
 // Enum value maps for AuditEvent.
@@ -61,6 +69,7 @@ var (
 		5: "AUDIT_EVENT_GRANT",
 		6: "AUDIT_EVENT_LIFECYCLE",
 		7: "AUDIT_EVENT_KEY_TRANSFER",
+		8: "AUDIT_EVENT_KEY_LOCAL",
 	}
 	AuditEvent_value = map[string]int32{
 		"AUDIT_EVENT_UNSPECIFIED":  0,
@@ -71,6 +80,7 @@ var (
 		"AUDIT_EVENT_GRANT":        5,
 		"AUDIT_EVENT_LIFECYCLE":    6,
 		"AUDIT_EVENT_KEY_TRANSFER": 7,
+		"AUDIT_EVENT_KEY_LOCAL":    8,
 	}
 )
 
@@ -141,7 +151,13 @@ type AuditEntry struct {
 	// Fingerprint of the key a SIGNATURE entry used.
 	KeyFingerprint string `protobuf:"bytes,11,opt,name=key_fingerprint,json=keyFingerprint,proto3" json:"key_fingerprint,omitempty"`
 	// The grant a GRANT entry concerns.
-	Grant         *Grant `protobuf:"bytes,12,opt,name=grant,proto3" json:"grant,omitempty"`
+	Grant *Grant `protobuf:"bytes,12,opt,name=grant,proto3" json:"grant,omitempty"`
+	// The process behind a KEY_LOCAL entry: what added, removed or was signing
+	// with a parked key, and the session it belongs to (decision U). It is the
+	// column that makes a flood of added keys legible, and it is structured
+	// rather than folded into detail so that a log can be asked "what did this
+	// session put in the agent" without parsing a sentence.
+	Process       *ClientProcess `protobuf:"bytes,15,opt,name=process,proto3" json:"process,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -274,6 +290,13 @@ func (x *AuditEntry) GetGrant() *Grant {
 	return nil
 }
 
+func (x *AuditEntry) GetProcess() *ClientProcess {
+	if x != nil {
+		return x.Process
+	}
+	return nil
+}
+
 // PresentedProject is the "published documentation" panel as one card carried
 // it: which project the change belongs to, and how current what had been read
 // of it was (§6).
@@ -380,7 +403,7 @@ var File_ladulas_v1_audit_proto protoreflect.FileDescriptor
 const file_ladulas_v1_audit_proto_rawDesc = "" +
 	"\n" +
 	"\x16ladulas/v1/audit.proto\x12\n" +
-	"ladulas.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19ladulas/v1/approval.proto\"\x8f\x05\n" +
+	"ladulas.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19ladulas/v1/approval.proto\"\xc4\x05\n" +
 	"\n" +
 	"AuditEntry\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x128\n" +
@@ -398,7 +421,8 @@ const file_ladulas_v1_audit_proto_rawDesc = "" +
 	"\x05error\x18\n" +
 	" \x01(\tR\x05error\x12'\n" +
 	"\x0fkey_fingerprint\x18\v \x01(\tR\x0ekeyFingerprint\x12'\n" +
-	"\x05grant\x18\f \x01(\v2\x11.ladulas.v1.GrantR\x05grant\"\xb0\x01\n" +
+	"\x05grant\x18\f \x01(\v2\x11.ladulas.v1.GrantR\x05grant\x123\n" +
+	"\aprocess\x18\x0f \x01(\v2\x19.ladulas.v1.ClientProcessR\aprocess\"\xb0\x01\n" +
 	"\x10PresentedProject\x12)\n" +
 	"\x10peer_fingerprint\x18\x01 \x01(\tR\x0fpeerFingerprint\x12\x1d\n" +
 	"\n" +
@@ -406,7 +430,7 @@ const file_ladulas_v1_audit_proto_rawDesc = "" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x12\n" +
 	"\x04note\x18\x04 \x01(\tR\x04note\x12\x14\n" +
 	"\x05stale\x18\x05 \x01(\bR\x05stale\x12\x14\n" +
-	"\x05known\x18\x06 \x01(\bR\x05known*\xde\x01\n" +
+	"\x05known\x18\x06 \x01(\bR\x05known*\xf9\x01\n" +
 	"\n" +
 	"AuditEvent\x12\x1b\n" +
 	"\x17AUDIT_EVENT_UNSPECIFIED\x10\x00\x12\x17\n" +
@@ -416,7 +440,8 @@ const file_ladulas_v1_audit_proto_rawDesc = "" +
 	"\x11AUDIT_EVENT_ERROR\x10\x04\x12\x15\n" +
 	"\x11AUDIT_EVENT_GRANT\x10\x05\x12\x19\n" +
 	"\x15AUDIT_EVENT_LIFECYCLE\x10\x06\x12\x1c\n" +
-	"\x18AUDIT_EVENT_KEY_TRANSFER\x10\aBDZBgithub.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1b\x06proto3"
+	"\x18AUDIT_EVENT_KEY_TRANSFER\x10\a\x12\x19\n" +
+	"\x15AUDIT_EVENT_KEY_LOCAL\x10\bBDZBgithub.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1;ladulasv1b\x06proto3"
 
 var (
 	file_ladulas_v1_audit_proto_rawDescOnce sync.Once
@@ -441,6 +466,7 @@ var file_ladulas_v1_audit_proto_goTypes = []any{
 	(*ApprovalResponse)(nil),      // 5: ladulas.v1.ApprovalResponse
 	(*SignedApproval)(nil),        // 6: ladulas.v1.SignedApproval
 	(*Grant)(nil),                 // 7: ladulas.v1.Grant
+	(*ClientProcess)(nil),         // 8: ladulas.v1.ClientProcess
 }
 var file_ladulas_v1_audit_proto_depIdxs = []int32{
 	3, // 0: ladulas.v1.AuditEntry.timestamp:type_name -> google.protobuf.Timestamp
@@ -451,11 +477,12 @@ var file_ladulas_v1_audit_proto_depIdxs = []int32{
 	6, // 5: ladulas.v1.AuditEntry.remote_approval:type_name -> ladulas.v1.SignedApproval
 	2, // 6: ladulas.v1.AuditEntry.project_shown:type_name -> ladulas.v1.PresentedProject
 	7, // 7: ladulas.v1.AuditEntry.grant:type_name -> ladulas.v1.Grant
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	8, // 8: ladulas.v1.AuditEntry.process:type_name -> ladulas.v1.ClientProcess
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_audit_proto_init() }

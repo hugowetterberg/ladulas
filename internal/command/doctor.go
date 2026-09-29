@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
@@ -96,6 +97,10 @@ func runDoctor(ctx context.Context, cmd *cli.Command) error {
 
 	if live != nil {
 		checks = append(checks, checkStore(live))
+
+		if parked := checkParked(ctx, cmd, live); parked != nil {
+			checks = append(checks, *parked)
+		}
 	}
 
 	keys, agentCheck := checkAgentSocket(cfg)
@@ -224,6 +229,47 @@ func checkStore(live *ladulasv1.StatusResponse) check {
 		level: checkOK,
 		name:  "Store",
 		found: fmt.Sprintf("unlocked, %s", plural(int(live.GetKeys()), "key")),
+	}
+}
+
+// checkParked says what programs have parked in the agent (§10, decision AU).
+//
+// It is the direct answer to a complaint the agent used to log about itself:
+// that `ladulas doctor` could not see a key-management request. Now that Add
+// is accepted, what it can see is the result — and the line exists only when
+// there is one, because a parked key is a thing working correctly and not a
+// finding. It is never a warning: `tsh` parking its certificate is the box
+// behaving as a working machine does.
+func checkParked(
+	ctx context.Context, cmd *cli.Command, live *ladulasv1.StatusResponse,
+) *check {
+	if live.GetLocalKeys() == 0 {
+		return nil
+	}
+
+	parked, err := localKeys(ctx, cmd)
+	if err != nil || len(parked) == 0 {
+		return nil
+	}
+
+	lines := make([]string, 0, len(parked))
+
+	for _, key := range parked {
+		until := "until the daemon restarts"
+
+		if key.GetExpiresAt() != nil {
+			until = parkedExpiry(key, time.Now()) + " it goes"
+		}
+
+		lines = append(lines, fmt.Sprintf("%s — %s, %s",
+			parkedLabel(key), parkedBy(key), until))
+	}
+
+	return &check{
+		level:  checkOK,
+		name:   "Parked keys",
+		found:  plural(len(parked), "key") + " added through the agent by programs",
+		remedy: lines,
 	}
 }
 

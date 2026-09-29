@@ -1016,3 +1016,166 @@ func containsSubstring(list []string, needle string) bool {
 
 	return false
 }
+
+// parkedGitSign is a git signing request with a process behind it, for the
+// session helpers to fill in.
+func parkedGitSign() *ladulasv1.ApprovalRequest {
+	req := gitSignRequest()
+	req.Requester.Process = &ladulasv1.ClientProcess{
+		Pid: 42, Executable: "/usr/bin/ssh-keygen",
+	}
+
+	return req
+}
+
+// parkedBy marks a request's key as one a program parked in the agent, from
+// the given session (decision AU).
+func parkedBy(
+	req *ladulasv1.ApprovalRequest, session int32, confirm bool,
+) *ladulasv1.ApprovalRequest {
+	req.LocalKey = &ladulasv1.LocalKey{
+		AddedBy: &ladulasv1.ClientProcess{
+			Pid:        4711,
+			Executable: "/usr/bin/tsh",
+			SessionId:  session,
+		},
+		Confirm: confirm,
+	}
+
+	return req
+}
+
+// The session that parked a key may use it without being asked: it has the
+// private bytes already, so a prompt there would defend against nothing. Any
+// other session is asked, because the socket is reachable by everything
+// running as this uid (decision AU).
+func TestEngineLetsTheParkingSessionUseItsKey(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	handler := &stubHandler{id: "gui", answer: denyAnswer()}
+	f.engine.Register(handler)
+
+	same := parkedBy(fromSession(parkedGitSign(), 4242, "/usr/bin/zsh", "/usr/bin/kitty"),
+		4242, false)
+
+	resp, err := f.engine.Submit(context.Background(), same)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_APPROVE ||
+		resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_POLICY {
+		t.Fatalf("the parking session was answered %v from %v",
+			resp.GetDecision(), resp.GetSource())
+	}
+
+	if handler.promptCount() != 0 {
+		t.Error("the parking session was prompted")
+	}
+
+	if handler.notifyCount() != 1 {
+		t.Errorf("the approver was notified %d times, want 1", handler.notifyCount())
+	}
+
+	other := parkedBy(fromSession(parkedGitSign(), 5151, "/usr/bin/zsh", "/usr/bin/kitty"),
+		4242, false)
+
+	resp, err = f.engine.Submit(context.Background(), other)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() != ladulasv1.Decision_DECISION_DENY ||
+		resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_USER {
+		t.Fatalf("another session was answered %v from %v, want the human's no",
+			resp.GetDecision(), resp.GetSource())
+	}
+
+	if handler.promptCount() != 1 {
+		t.Fatalf("another session was prompted %d times", handler.promptCount())
+	}
+
+	handler.mu.Lock()
+	prompt := handler.prompts[0]
+	handler.mu.Unlock()
+
+	var parkedLine bool
+
+	for _, detail := range prompt.Details {
+		if detail.Label == "Key parked by" && strings.Contains(detail.Value, "tsh") {
+			parkedLine = true
+		}
+	}
+
+	if !parkedLine {
+		t.Errorf("the prompt did not say who parked the key: %+v", prompt.Details)
+	}
+
+	if !containsSubstring(prompt.Warnings, "put in the agent by a program") {
+		t.Errorf("the prompt did not warn that the key is parked: %v", prompt.Warnings)
+	}
+}
+
+// `ssh-add -c` asks for every use to be confirmed, and gets the full prompt
+// even from the session that parked the key.
+func TestEngineConfirmsAParkedKeyWhenAsked(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	handler := &stubHandler{id: "gui", answer: approveAnswer()}
+	f.engine.Register(handler)
+
+	req := parkedBy(fromSession(parkedGitSign(), 4242, "/usr/bin/zsh", ""), 4242, true)
+
+	resp, err := f.engine.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_USER {
+		t.Fatalf("a confirm key was answered from %v", resp.GetSource())
+	}
+
+	if handler.promptCount() != 1 {
+		t.Fatalf("prompted %d times", handler.promptCount())
+	}
+}
+
+// A soft lock suspends the parking session's convenience with everything else
+// local: nobody is here, so a key a session parked is not one that session
+// should be spending unasked (§10).
+func TestEngineSuspendsTheParkingRuleUnderASoftLock(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	f.engine.SuspendLocalPrompts(true)
+
+	req := parkedBy(fromSession(parkedGitSign(), 4242, "/usr/bin/zsh", ""), 4242, false)
+
+	resp, err := f.engine.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetDecision() == ladulasv1.Decision_DECISION_APPROVE {
+		t.Fatal("a parked key was signed with under a soft lock")
+	}
+}
+
+// A request with no session behind the parked key, or none behind the
+// request, is never "the same session": unknown does not match unknown.
+func TestEngineDoesNotMatchUnknownSessions(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	handler := &stubHandler{id: "gui", answer: denyAnswer()}
+	f.engine.Register(handler)
+
+	req := parkedBy(parkedGitSign(), 0, false)
+
+	resp, err := f.engine.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if resp.GetSource() != ladulasv1.DecisionSource_DECISION_SOURCE_USER {
+		t.Fatalf("answered from %v, want a prompt", resp.GetSource())
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/hugowetterberg/ladulas/pkg/agent"
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/keystore"
 	"github.com/hugowetterberg/ladulas/pkg/peer"
@@ -88,6 +89,10 @@ func (s *controlService) Status(
 			ControlSocket: s.app.Config.ControlSocket,
 		},
 	}
+
+	// Counted in every state; a sealed instance's answer is zero, and it is
+	// zero because the seal dropped them (decision AU).
+	resp.LocalKeys = int32(len(s.app.Parked.List())) //nolint:gosec // capped at DefaultLocalKeyLimit
 
 	vault := s.app.Vault()
 	if vault == nil {
@@ -576,6 +581,15 @@ func (s *controlService) RemoveKey(
 
 	key, ok := findKey(vault, ref)
 	if !ok {
+		// A parked key is not in the store and is not removed the way a stored
+		// one is (decision AU); saying "no such key" about one the agent is
+		// plainly listing would send somebody looking in the wrong place.
+		if s.app.Parked.Has(ref) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("%q is a key a program parked in the agent, not one "+
+					"in the store; `ladulas keys forget` drops it", ref))
+		}
+
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("no key %q in the store", ref))
 	}
@@ -810,4 +824,122 @@ func (s *controlService) UnpublishProject(
 	}
 
 	return node.UnpublishProject(ctx, req)
+}
+
+// The parked keys' verbs (§10, decision AU).
+//
+// Listing is answerable in every state: a sealed instance holds none, because
+// the seal dropped them, and "none" is the answer. Forgetting one is likewise
+// stateless. Promotion needs the store open, and could not be otherwise —
+// there is nothing parked in a sealed instance to promote.
+
+func (s *controlService) ListLocalKeys(
+	_ context.Context, _ *connect.Request[ladulasv1.ListLocalKeysRequest],
+) (*connect.Response[ladulasv1.ListLocalKeysResponse], error) {
+	return connect.NewResponse(&ladulasv1.ListLocalKeysResponse{
+		Keys: s.app.Parked.List(),
+	}), nil
+}
+
+// ForgetLocalKey drops a parked key. It is a separate verb from RemoveKey on
+// purpose: that one deletes an unrecoverable private key out of the store, and
+// this drops a cached credential the program will add again. The same word for
+// both would put an irreversible action and a trivial one behind one muscle
+// memory.
+func (s *controlService) ForgetLocalKey(
+	_ context.Context, req *connect.Request[ladulasv1.ForgetLocalKeyRequest],
+) (*connect.Response[ladulasv1.ForgetLocalKeyResponse], error) {
+	dropped, err := s.app.Parked.Forget(req.Msg.GetKey())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.ForgetLocalKeyResponse{
+		Key: dropped[0],
+	}), nil
+}
+
+// PromoteLocalKey writes a parked key into the store as a portable key.
+//
+// The store passphrase is re-entered first, as it is before a transfer
+// (decision S), and what it gates is the same thing: the store is open, so it
+// unlocks nothing, and it exists to make the operator stop. This is the moment
+// key material a program chose becomes key material Ladulås will keep,
+// encrypt, back up and — once it is portable — be able to hand to a peer. It
+// is reversible in a way a transfer is not, `keys remove` undoes it
+// completely, and the gate stays anyway: what it protects is the invariant
+// that nothing enters the store without a passphrase.
+//
+// The key is taken out of the parked set only once the passphrase has been
+// checked and the label is known to be free, so that a refused promotion
+// leaves the parked key exactly where it was.
+func (s *controlService) PromoteLocalKey(
+	_ context.Context, req *connect.Request[ladulasv1.PromoteLocalKeyRequest],
+) (*connect.Response[ladulasv1.PromoteLocalKeyResponse], error) {
+	vault, err := s.vault()
+	if err != nil {
+		return nil, err
+	}
+
+	defer keystore.Wipe(req.Msg.GetPassphrase())
+
+	if len(req.Msg.GetPassphrase()) == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("promoting a key needs the store passphrase"))
+	}
+
+	if err := vault.VerifyPassphrase(req.Msg.GetPassphrase()); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	}
+
+	label := req.Msg.GetLabel()
+	if label == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("promoting a key needs a label for it in the store"))
+	}
+
+	if _, taken := findKey(vault, label); taken {
+		return nil, connect.NewError(connect.CodeAlreadyExists,
+			fmt.Errorf("the store already has a key called %q", label))
+	}
+
+	if !s.app.Parked.Has(req.Msg.GetKey()) {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("%w: %s", agent.ErrNoSuchLocalKey, req.Msg.GetKey()))
+	}
+
+	private, taken, err := s.app.Parked.Take(req.Msg.GetKey())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	var (
+		comment     string
+		certDropped bool
+	)
+
+	for _, info := range taken {
+		if comment == "" {
+			comment = info.GetLabel()
+		}
+
+		certDropped = certDropped || info.GetCertificate()
+	}
+
+	key, err := vault.AdoptKey(private, comment, label)
+	if err != nil {
+		// The parked entries are gone and the store refused the key, which is
+		// the one outcome that loses something: it is said in the error, and
+		// the program that parked the key will park it again.
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("the parked key was dropped but the store refused it: %w", err))
+	}
+
+	s.app.LogLifecycle(fmt.Sprintf("adopted parked key %s as %q",
+		key.GetFingerprint(), key.GetLabel()))
+
+	return connect.NewResponse(&ladulasv1.PromoteLocalKeyResponse{
+		Key:                keystore.KeyInfo(key),
+		CertificateDropped: certDropped,
+	}), nil
 }

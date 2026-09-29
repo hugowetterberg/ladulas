@@ -26,6 +26,11 @@ enum KeyOrigin {
   // origin of its own rather than an import because where a key came from is
   // the first thing anybody asks about a key they did not make.
   KEY_ORIGIN_RECEIVED = 3;
+  // A key a program parked in the agent, which the operator decided to keep
+  // (§10, decision AU). A fourth origin rather than IMPORTED on the reasoning
+  // above: this is the only origin where the answer to "where did it come
+  // from" is "a program put it there and somebody chose to keep it".
+  KEY_ORIGIN_ADOPTED = 4;
 }
 
 // KeyTransfer records a portable key changing machines (§10, decision S).
