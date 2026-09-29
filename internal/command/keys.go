@@ -671,21 +671,34 @@ func importKey(
 
 func keysPublicCommand() *cli.Command {
 	return &cli.Command{
-		Name:      "public",
-		Usage:     "print public keys in authorized_keys format",
+		Name: "public",
+		Usage: "print public keys in authorized_keys format, the ones " +
+			"paired instances offer this one included",
 		ArgsUsage: "[label or fingerprint]",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			want := cmd.Args().First()
+
+			// The borrowed keys are what a keyless box signs with, so they are
+			// the keys somebody on that box pastes into GitHub or names in
+			// user.signingkey — and for the headless requester that is the
+			// whole point of the verb. Asked of the running instance, as in
+			// `keys list`, and asked first for the same reason: a sealed
+			// store must not hide what is still knowable.
+			borrowed := borrowedKeys(ctx, cmd)
+
 			keys, err := storedKeys(ctx, cmd)
 			if err != nil {
-				return err
-			}
+				if len(borrowed) == 0 {
+					return err
+				}
 
-			want := cmd.Args().First()
+				fmt.Fprintf(os.Stderr, "warning: the store could not be read: %v\n", err)
+			}
 
 			var printed int
 
 			for _, key := range keys {
-				if want != "" && key.GetLabel() != want && key.GetFingerprint() != want {
+				if !keyMatches(want, key.GetLabel(), key.GetFingerprint()) {
 					continue
 				}
 
@@ -694,6 +707,25 @@ func keysPublicCommand() *cli.Command {
 				if want != "" {
 					printTransfers(key)
 				}
+
+				printed++
+			}
+
+			// A key the store holds as well was printed above; the borrowed
+			// row for it only says where else it lives (§10), which is not a
+			// second line for authorized_keys.
+			for _, key := range borrowed {
+				if key.GetHeldHere() {
+					continue
+				}
+
+				ref := key.GetKey()
+				if !keyMatches(want, ref.GetLabel(), ref.GetFingerprint()) {
+					continue
+				}
+
+				fmt.Print(authorizedKeyLine(
+					ref.GetPublicKey(), ref.GetLabel(), ref.GetComment()))
 
 				printed++
 			}
@@ -707,18 +739,28 @@ func keysPublicCommand() *cli.Command {
 	}
 }
 
-// publicKeyLine renders a key as an authorized_keys line. The comment carries
-// the label as well, so a key pasted into GitHub can be traced back to the
-// instance that holds it.
+// keyMatches says whether a key is the one asked for. An empty request is
+// every key.
+func keyMatches(want, label, fingerprint string) bool {
+	return want == "" || label == want || fingerprint == want
+}
+
+// publicKeyLine renders a stored key as an authorized_keys line.
 func publicKeyLine(key *ladulasv1.KeyInfo) string {
-	pub, err := ssh.ParsePublicKey(key.GetPublicKey())
+	return authorizedKeyLine(key.GetPublicKey(), key.GetLabel(), key.GetComment())
+}
+
+// authorizedKeyLine renders a public key as an authorized_keys line. The
+// comment carries the label when the key has no comment of its own, so a key
+// pasted into GitHub can be traced back to the instance that holds it.
+func authorizedKeyLine(publicKey []byte, label, comment string) string {
+	pub, err := ssh.ParsePublicKey(publicKey)
 	if err != nil {
-		return fmt.Sprintf("# unreadable key %s: %v\n", key.GetLabel(), err)
+		return fmt.Sprintf("# unreadable key %s: %v\n", label, err)
 	}
 
-	comment := key.GetComment()
 	if comment == "" {
-		comment = key.GetLabel()
+		comment = label
 	}
 
 	return fmt.Sprintf("%s %s\n",

@@ -104,6 +104,18 @@ func TestABorrowedKeyOutlivesItsHolder(t *testing.T) {
 		t.Fatalf("the borrowed key is not described:\n%s", available)
 	}
 
+	// The borrowed key is the one this box signs with, so it is the one
+	// `keys public` has to print here: it is what goes into GitHub and into
+	// user.signingkey on a box that holds nothing itself. One line, nothing
+	// else on stdout, because the README puts it inside a `key::$(…)`.
+	for _, ref := range []string{"work", keys[0].GetFingerprint()} {
+		public := runCLI(t, cli, headless, "keys", "public", ref)
+		if !strings.HasPrefix(public, "ssh-ed25519 ") ||
+			strings.Count(strings.TrimRight(public, "\n"), "\n") != 0 {
+			t.Errorf("keys public %s on the keyless box printed:\n%s", ref, public)
+		}
+	}
+
 	// The holder goes away. Sealing takes its peer listener down, because the
 	// identity key that authenticates the channel lives inside the store.
 	mustLadulas(t, cli, desktop, "", "lock", "--seal")
