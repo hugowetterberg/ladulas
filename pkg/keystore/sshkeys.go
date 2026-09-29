@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -68,6 +69,37 @@ func (v *Vault) GenerateKey(label, comment string) (*storepb.StoredKey, error) {
 
 	return v.addKey(signer, keyPEM, label,
 		storepb.KeyOrigin_KEY_ORIGIN_GENERATED)
+}
+
+// AdoptKey takes a key a program parked in the agent into the store, as a
+// portable key with the ADOPTED origin (§10, decision AU).
+//
+// What arrives is the private half and nothing else. A certificate the key was
+// parked with is the CA's statement about it, with its own expiry and its own
+// renewal path, and adopting it would make a stored key that stops working on
+// a schedule nothing here controls — so it is the caller's to drop, and to say
+// so.
+func (v *Vault) AdoptKey(
+	private crypto.PrivateKey, comment, label string,
+) (*storepb.StoredKey, error) {
+	if label == "" {
+		return nil, errors.New("keystore: an adopted key needs a label")
+	}
+
+	block, err := ssh.MarshalPrivateKey(private, comment)
+	if err != nil {
+		return nil, fmt.Errorf("marshal the parked key: %w", err)
+	}
+
+	keyPEM := pem.EncodeToMemory(block)
+
+	signer, err := ssh.ParsePrivateKey(keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("reparse the parked key: %w", err)
+	}
+
+	return v.addKey(signer, keyPEM, label,
+		storepb.KeyOrigin_KEY_ORIGIN_ADOPTED)
 }
 
 // parsePrivateKey decrypts and normalizes a private key to an unencrypted
@@ -276,6 +308,8 @@ func keyOrigin(origin storepb.KeyOrigin) ladulasv1.KeyOrigin {
 		return ladulasv1.KeyOrigin_KEY_ORIGIN_GENERATED
 	case storepb.KeyOrigin_KEY_ORIGIN_RECEIVED:
 		return ladulasv1.KeyOrigin_KEY_ORIGIN_RECEIVED
+	case storepb.KeyOrigin_KEY_ORIGIN_ADOPTED:
+		return ladulasv1.KeyOrigin_KEY_ORIGIN_ADOPTED
 	case storepb.KeyOrigin_KEY_ORIGIN_UNSPECIFIED:
 		return ladulasv1.KeyOrigin_KEY_ORIGIN_UNSPECIFIED
 	default:

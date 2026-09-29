@@ -1253,3 +1253,122 @@ func TestKeyOffersAreListedAndAnswered(t *testing.T) {
 		}
 	}
 }
+
+// A key a program parked in the agent is listed apart from the store's keys,
+// with who parked it and when it goes, and is forgotten with one call
+// (decision AU).
+func TestParkedKeysAreListedAndForgotten(t *testing.T) {
+	added := time.Now().Add(-time.Hour)
+	expires := time.Now().Add(11*time.Hour + 48*time.Minute)
+
+	var forgotten []string
+
+	session := bridge.NewSession(bridge.Options{
+		Name: "workstation",
+		LocalKeys: func() []*ladulasv1.LocalKeyInfo {
+			return []*ladulasv1.LocalKeyInfo{{
+				Label:          "teleport:hugo",
+				Fingerprint:    "SHA256:cert",
+				KeyFingerprint: "SHA256:key",
+				Algorithm:      "ssh-ed25519",
+				Certificate:    true,
+				AddedBy: &ladulasv1.ClientProcess{
+					Pid:        4711,
+					Executable: "/usr/bin/tsh",
+					SessionId:  4242,
+					Ancestry: []*ladulasv1.ProcessAncestor{
+						{Pid: 4242, Executable: "/usr/bin/zsh", SessionLeader: true},
+						{Pid: 3901, Executable: "/usr/bin/kitty", StartedSession: true},
+					},
+				},
+				AddedAt:   timestamppb.New(added),
+				ExpiresAt: timestamppb.New(expires),
+			}}
+		},
+		ForgetLocalKey: func(_ context.Context, key string) error {
+			forgotten = append(forgotten, key)
+
+			if key != "SHA256:cert" {
+				return errors.New("no such parked key")
+			}
+
+			return nil
+		},
+		Presenter: &presenter{},
+	})
+
+	server := httptest.NewServer(session.Handler())
+	t.Cleanup(server.Close)
+
+	resp, err := server.Client().Get(server.URL + "/api/v1/instance")
+	if err != nil {
+		t.Fatalf("get the instance: %v", err)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the instance: %v", err)
+	}
+
+	_ = resp.Body.Close()
+
+	var view bridge.InstanceView
+
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Parked, not held: a parked key among the keys would be a window saying
+	// the store holds something it does not.
+	if len(view.Keys) != 0 {
+		t.Errorf("a parked key turned up among the keys: %+v", view.Keys)
+	}
+
+	if len(view.LocalKeys) != 1 {
+		t.Fatalf("the instance lists %d parked keys", len(view.LocalKeys))
+	}
+
+	parked := view.LocalKeys[0]
+
+	if parked.Label != "teleport:hugo" || parked.Fingerprint != "SHA256:cert" ||
+		parked.KeyFingerprint != "SHA256:key" || !parked.Certificate {
+		t.Errorf("the parked key reads %+v", parked)
+	}
+
+	if parked.AddedBy != "tsh ← zsh ← kitty" {
+		t.Errorf("added by %q, want the session walk", parked.AddedBy)
+	}
+
+	if parked.Expires != "in 11h 48m" {
+		t.Errorf("expires %q", parked.Expires)
+	}
+
+	if _, err := time.Parse(time.RFC3339, parked.ExpiresAt); err != nil {
+		t.Errorf("expiresAt is not a timestamp: %q", parked.ExpiresAt)
+	}
+
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{`{"key":"SHA256:cert"}`, http.StatusNoContent},
+		{`{"key":"SHA256:gone"}`, http.StatusBadRequest},
+		{`{"key":"  "}`, http.StatusBadRequest},
+	} {
+		resp, err := server.Client().Post(server.URL+"/api/v1/keys/forget",
+			"application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatalf("forget: %v", err)
+		}
+
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != tc.status {
+			t.Errorf("forgetting %s: status %d, want %d", tc.body, resp.StatusCode, tc.status)
+		}
+	}
+
+	if len(forgotten) != 2 || forgotten[0] != "SHA256:cert" || forgotten[1] != "SHA256:gone" {
+		t.Errorf("the host was asked to forget %v", forgotten)
+	}
+}

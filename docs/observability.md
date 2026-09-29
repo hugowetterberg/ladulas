@@ -144,6 +144,15 @@ touches no disk; they are as cheap as the scrape interval makes them.
   ([decision S](architecture.md#10-keys-and-key-storage)). A non-zero
   `key_offers` needs a person: nothing else will ever mention it on a box
   nobody is sitting at, and it stays until it is answered.
+* **`ladulas_parked_keys`** — keys programs have put in the agent with
+  `ssh-add` or its equivalent, Teleport's `tsh` being the usual one
+  ([decision AU](architecture.md#10-keys-and-key-storage)). They are held
+  in memory rather than in the store, so unlike `ladulas_keys` this is
+  emitted while sealed, as zero: the seal dropped them, and zero is the
+  answer rather than an inability to give one. A working developer
+  machine reads one or two here for the working day. A count that climbs
+  towards the daemon's limit of sixty-four is a program adding keys in a
+  loop, and `ladulas keys list --local` says which session it is.
 * **`ladulas_endorsements{state}`** — promises other holders of a key have
   made about a machine
   ([decision AG](architecture.md#9-approval-engine-and-policies)), by what

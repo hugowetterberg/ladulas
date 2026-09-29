@@ -614,6 +614,18 @@ under `keys list` are the same at a terminal, and `keys import` is the one
 that stays there. On the Keys screen itself a key wears *off*, *not offered*,
 *copied* or *secure element* as a pill.
 
+**Keys programs have parked in the agent** — what `ssh-add` puts there,
+and the certificate Teleport's `tsh` pushes in on every login (decision
+AU) — are a section of their own under the store's keys, titled *Added
+through the agent*. Each row says who parked it, as the session walk a
+prompt uses, when it goes, and has a one-press *Forget*; the (i) carries
+the fingerprints and the constraints. They are held in memory rather than
+in the store, never lent to a paired machine, and dropped by a restart or
+a seal, and the section is drawn only when there is one. `ladulas keys
+list --local`, `keys forget` and `keys promote` — which keeps one in the
+store, behind the passphrase — are the same at a terminal, and promotion
+is the one that stays there.
+
 **The cog on a paired machine** opens the pairing's sheet: the fingerprint
 the two machines compared, the addresses and when it was last connected;
 *Name*, what this side calls it, which travels nowhere; *Keys it may use*,

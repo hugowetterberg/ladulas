@@ -289,6 +289,44 @@ while ssh works fine, which is the tell.
 50, ahead of a user's own `90-`; if something later in the ordering is
 setting it, that is the thing to remove.
 
+### `tsh` says "failed to add one or more keys to the agent"
+
+`tsh` parks the certificate it just minted in whatever `SSH_AUTH_SOCK`
+names, on every login, and treats a refusal as fatal for the whole
+command — `tsh version` included, because the login path runs first.
+Since 2026-09-29 the agent takes the key
+([decision AU](architecture.md#10-keys-and-key-storage)), so on a current
+build this means one of three things: the daemon is the older binary
+([the change that was tested is not the change that is running](#the-change-that-was-tested-is-not-the-change-that-is-running)),
+the store is sealed, which parks nothing because a sealed machine holds
+nothing usable, or the parked set is at its limit of sixty-four.
+
+**Signal:** `journalctl --user -u ladulas` has a `refused an agent
+key-management request` line with the reason; `ladulas status` says
+`sealed`, or `Parked keys 64`.
+**Action:** unlock, or `ladulas keys list --local` to see which session
+has been filling the agent and `keys forget` to make room. A machine
+with `TELEPORT_ADD_KEYS_TO_AGENT=no` set from before the change can have
+it unset: the workaround costs `tsh` the ability to forward its
+certificate, and nothing needs it now.
+
+### A tool's login is gone after a restart
+
+A key a program parked in the agent lives in the daemon's memory and
+nowhere else, and a restart or a seal drops it
+([decision AU](architecture.md#10-keys-and-key-storage)) — which is what
+happens with `ssh-agent` too, and is the semantics every tool that calls
+`ssh-add` was written against. `tsh` logs in again; `ssh-add` is run
+again. Nothing was lost that the program cannot re-create, and nothing
+here will ever accumulate expired certificates across reboots.
+
+**Signal:** `ladulas keys list --local` is empty where it was not, and
+`ladulas audit` has a `parked key` line reading `dropped with the seal`
+for each.
+**Action:** none, unless the key was one worth keeping, in which case
+`ladulas keys promote` next time it is parked takes it into the store,
+where it survives.
+
 ### A grant was made and the login still asks
 
 A promise is matched by strict equality on the key, the kind, the user
@@ -732,6 +770,12 @@ build reattaches to the new daemon perfectly happily.
   set either, so on this machine the stored setting is what decides. And
   the peer channel is not how the CLI reaches the daemon: getting the
   addresses wrong cannot lock you out of `ladulas`, only out of peering.
+* **See what programs have parked in the agent.** `ladulas keys list
+  --local` — each key with the session that put it there and when it
+  goes, which is more than `ssh-add -l` has ever said. `ladulas keys
+  forget <label>` drops one, and `keys promote <key> --label <name>`
+  keeps one in the store
+  ([decision AU](architecture.md#10-keys-and-key-storage)).
 * **Read what happened.** `ladulas audit -n 50`. The metrics say a decision
   was made; this says which and to whom.
 * **Keep `main` compiling.** A consumer of `pkg/` builds against a

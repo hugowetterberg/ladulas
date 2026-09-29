@@ -128,6 +128,10 @@ export const bridge = {
       peer,
       passphrase: encodePassphrase(passphrase),
     }),
+  // Dropping a key a program parked in the agent (decision AU). Not
+  // removeKey: what leaves the store is gone, and what is forgotten here comes
+  // back the next time the program logs in. One press, for that reason.
+  forgetLocalKey: (key) => call("POST", "/keys/forget", { key }),
   // Answering a key a paired machine handed this one (decision S). Accepting
   // takes it into the store under the name given here, and refusing forgets it
   // — the sender is not told either way, and still holds the key.

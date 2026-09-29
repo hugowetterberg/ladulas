@@ -49,6 +49,20 @@ func (s *controlService) SendKey(
 
 	// The key first: "that key cannot be handed over" is a fact about the key
 	// and stays true whatever was typed for the peer.
+	//
+	// A parked key is refused by class rather than found missing (decision
+	// AU). It is not in the store, so PortableKey would not find it; but the
+	// agent lists it, and the honest answer is that it never travels — a key
+	// a program put in the daemon without the operator ever seeing it is not
+	// something any confirmation makes sendable. Promotion is the way, and it
+	// says so.
+	if s.app.Parked.Has(req.Msg.GetKey()) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("%q is a key a program parked in the agent, and a parked "+
+				"key is never sent; `ladulas keys promote` takes it into the "+
+				"store first", req.Msg.GetKey()))
+	}
+
 	key, err := vault.PortableKey(req.Msg.GetKey())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)

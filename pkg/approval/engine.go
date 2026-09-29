@@ -623,7 +623,9 @@ func (e *Engine) decide(
 	}
 
 	// A forwarded agent socket is held by a machine we do not control, and a
-	// pairing change is the root of all later trust — both always ask.
+	// pairing change is the root of all later trust — both always ask. So does
+	// a parked key whose adder asked for it: `ssh-add -c` is a third-party tool
+	// asking for exactly what this project does (decision AU).
 	mustPrompt := ""
 
 	switch {
@@ -631,6 +633,8 @@ func (e *Engine) decide(
 		mustPrompt = "requests through a forwarded agent always ask"
 	case msg.GetKind() == ladulasv1.RequestKind_REQUEST_KIND_PAIRING:
 		mustPrompt = "pairing changes always ask"
+	case msg.GetLocalKey().GetConfirm():
+		mustPrompt = "the program that parked this key asked for every use to be confirmed"
 	}
 
 	eval := policy.Evaluate(msg)
@@ -640,6 +644,29 @@ func (e *Engine) decide(
 	}
 
 	if mustPrompt == "" {
+		// The session that parked a key may use it without being asked
+		// (decision AU). Asking it would be theatre: it has the private bytes
+		// and can sign without ever touching the agent, so a prompt there
+		// defends against nothing and trains the operator to approve
+		// reflexively. What the prompt is for is a *different* session on the
+		// same box — the agent socket is reachable by everything running as
+		// this uid — and that one falls through to the rules below.
+		//
+		// It is a policy decision rather than a hard rule so that a DENY rule
+		// above still wins, and it is suspended with local approval authority:
+		// a soft lock is the claim that nobody is here, and a key parked by a
+		// session nobody is sitting in is not one that session should be
+		// spending (§10).
+		if e.parkedBySession(req) {
+			resp := approve(ladulasv1.DecisionSource_DECISION_SOURCE_POLICY,
+				"the session that parked this key in the agent is using it")
+			resp.NotifyOnly = true
+
+			e.notify(req, resp)
+
+			return resp, nil
+		}
+
 		if eval.Action == ladulasv1.Action_ACTION_APPROVE {
 			resp := approve(ladulasv1.DecisionSource_DECISION_SOURCE_POLICY, eval.Rule)
 			resp.NotifyOnly = eval.Notify
@@ -725,6 +752,24 @@ func (e *Engine) decide(
 	}
 
 	return e.prompt(ctx, req, policy)
+}
+
+// parkedBySession says whether a request is the session that parked a key
+// using that key (decision AU), which is the one case a parked key is signed
+// with without asking. A request from a peer never qualifies, whatever it
+// carries: the note is the requester's word, and the rule is about a session
+// on this machine.
+func (e *Engine) parkedBySession(req *Request) bool {
+	parked := req.Msg.GetLocalKey()
+	if parked == nil || req.Origin != OriginLocal {
+		return false
+	}
+
+	if e.LocalPromptsSuspended() {
+		return false
+	}
+
+	return SameSession(parked.GetAddedBy(), req.Msg.GetRequester().GetProcess())
 }
 
 // grantable reports whether "approve for a while" means anything for this kind

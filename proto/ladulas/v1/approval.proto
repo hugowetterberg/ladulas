@@ -397,6 +397,29 @@ message KeyListRequest {
   string purpose = 1;
 }
 
+// LocalKey describes a key that arrived through the agent socket's Add and
+// lives in the daemon's memory rather than in the store (§10, decision AU).
+//
+// It is a credential Ladulås is holding, not a key it manages: the process
+// that added it minted it, owns it and can sign with it without ever touching
+// the agent. What this carries is what the approval engine and a prompt need
+// to say so — who parked it, when it goes away, and whether the adder asked
+// for every use to be confirmed (`ssh-add -c`).
+message LocalKey {
+  // The process that added the key, with its session (decision U). The session
+  // is what the default policy is about: the adding session signs without a
+  // prompt, and any other session is asked.
+  ClientProcess added_by = 1;
+  google.protobuf.Timestamp added_at = 2;
+  // When the key is dropped, from SSH_AGENT_CONSTRAIN_LIFETIME. Absent for a
+  // key that lives until the daemon restarts or the store is sealed.
+  google.protobuf.Timestamp expires_at = 3;
+  // SSH_AGENT_CONSTRAIN_CONFIRM: the adder asked for each use to be confirmed,
+  // which here means the full approval prompt for every session, the adding
+  // one included.
+  bool confirm = 4;
+}
+
 // ApprovalRequest is the unit of work of the approval engine. It is created by
 // whatever produced the operation (the SSH agent, ladulas-sign, an incoming
 // peer RPC), evaluated against policy, and either auto-answered or shown to
@@ -438,6 +461,13 @@ message ApprovalRequest {
   // silently when it is longer than this instance promises — the bound is the
   // instance's and is not something a caller can argue with (decision V).
   google.protobuf.Duration requested_grant_ttl = 11;
+
+  // Set when the key is one a program parked in the agent rather than one the
+  // store holds (§10, decision AU). The engine reads it for the one rule that
+  // is about such keys — the session that parked a key may use it without
+  // being asked, unless the program asked for every use to be confirmed — and
+  // a prompt reads it to say where the key came from.
+  LocalKey local_key = 12;
 
   oneof operation {
     SshAuthRequest ssh_auth = 20;

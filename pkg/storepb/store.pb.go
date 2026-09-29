@@ -42,6 +42,11 @@ const (
 	// origin of its own rather than an import because where a key came from is
 	// the first thing anybody asks about a key they did not make.
 	KeyOrigin_KEY_ORIGIN_RECEIVED KeyOrigin = 3
+	// A key a program parked in the agent, which the operator decided to keep
+	// (§10, decision AU). A fourth origin rather than IMPORTED on the reasoning
+	// above: this is the only origin where the answer to "where did it come
+	// from" is "a program put it there and somebody chose to keep it".
+	KeyOrigin_KEY_ORIGIN_ADOPTED KeyOrigin = 4
 )
 
 // Enum value maps for KeyOrigin.
@@ -51,12 +56,14 @@ var (
 		1: "KEY_ORIGIN_IMPORTED",
 		2: "KEY_ORIGIN_GENERATED",
 		3: "KEY_ORIGIN_RECEIVED",
+		4: "KEY_ORIGIN_ADOPTED",
 	}
 	KeyOrigin_value = map[string]int32{
 		"KEY_ORIGIN_UNSPECIFIED": 0,
 		"KEY_ORIGIN_IMPORTED":    1,
 		"KEY_ORIGIN_GENERATED":   2,
 		"KEY_ORIGIN_RECEIVED":    3,
+		"KEY_ORIGIN_ADOPTED":     4,
 	}
 )
 
@@ -1986,12 +1993,13 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"\vreceived_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"receivedAt\x12=\n" +
 	"\x0funreported_uses\x18\x04 \x03(\v2\x14.ladulas.v1.GrantUseR\x0eunreportedUses\x12\x1b\n" +
-	"\tuse_count\x18\x05 \x01(\rR\buseCount*s\n" +
+	"\tuse_count\x18\x05 \x01(\rR\buseCount*\x8b\x01\n" +
 	"\tKeyOrigin\x12\x1a\n" +
 	"\x16KEY_ORIGIN_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13KEY_ORIGIN_IMPORTED\x10\x01\x12\x18\n" +
 	"\x14KEY_ORIGIN_GENERATED\x10\x02\x12\x17\n" +
-	"\x13KEY_ORIGIN_RECEIVED\x10\x03B7Z5github.com/hugowetterberg/ladulas/pkg/storepb;storepbb\x06proto3"
+	"\x13KEY_ORIGIN_RECEIVED\x10\x03\x12\x16\n" +
+	"\x12KEY_ORIGIN_ADOPTED\x10\x04B7Z5github.com/hugowetterberg/ladulas/pkg/storepb;storepbb\x06proto3"
 
 var (
 	file_ladulas_store_v1_store_proto_rawDescOnce sync.Once

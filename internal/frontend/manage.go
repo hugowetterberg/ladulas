@@ -260,3 +260,35 @@ func (f *Frontend) setUnlockAtLogin(ctx context.Context, enrol bool) error {
 
 	return nil
 }
+
+// localKeys and forgetLocalKey are the window's half of decision AU: what
+// programs have parked in the agent, and dropping one. Listing is answerable
+// in every state — a sealed instance parks nothing — so an error here is the
+// daemon being away, which the window already says elsewhere.
+func (f *Frontend) localKeys() []*ladulasv1.LocalKeyInfo {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := f.client.ListLocalKeys(ctx,
+		connect.NewRequest(&ladulasv1.ListLocalKeysRequest{}))
+	if err != nil {
+		f.log.Debug("could not list the parked keys", "error", err.Error())
+
+		return nil
+	}
+
+	return resp.Msg.GetKeys()
+}
+
+func (f *Frontend) forgetLocalKey(ctx context.Context, key string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	_, err := f.client.ForgetLocalKey(ctx,
+		connect.NewRequest(&ladulasv1.ForgetLocalKeyRequest{Key: key}))
+	if err != nil {
+		return fmt.Errorf("forget the parked key: %w", err)
+	}
+
+	return nil
+}

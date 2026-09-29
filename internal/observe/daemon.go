@@ -164,6 +164,7 @@ type daemonState struct {
 	lockState    *prometheus.Desc
 	stateSince   *prometheus.Desc
 	keys         *prometheus.Desc
+	parked       *prometheus.Desc
 	grants       *prometheus.Desc
 	offers       *prometheus.Desc
 	endorsements *prometheus.Desc
@@ -195,6 +196,11 @@ func newDaemonState(instance *app.App) *daemonState {
 			"When the store entered its current lock state.", nil, nil),
 		keys: prometheus.NewDesc(name("keys"),
 			"SSH keys held in this instance's own store.", nil, nil),
+		parked: prometheus.NewDesc(name("parked_keys"),
+			"Keys programs have put in the agent with ssh-add or its "+
+				"equivalent: held in memory, never in the store, never lent, and "+
+				"dropped by a restart or a seal. A count here that keeps growing "+
+				"is a program adding keys in a loop.", nil, nil),
 		grants: prometheus.NewDesc(name("grants"),
 			"Live TTL grants, which are the approvals given in advance.",
 			nil, nil),
@@ -229,6 +235,7 @@ func (s *daemonState) Describe(ch chan<- *prometheus.Desc) {
 	ch <- s.lockState
 	ch <- s.stateSince
 	ch <- s.keys
+	ch <- s.parked
 	ch <- s.grants
 	ch <- s.offers
 	ch <- s.endorsements
@@ -261,6 +268,12 @@ func (s *daemonState) Collect(ch chan<- prometheus.Metric) {
 
 	ch <- prometheus.MustNewConstMetric(s.listeners, prometheus.GaugeValue,
 		float64(len(s.instance.PeerAddresses())))
+
+	// Answerable in every state, unlike the store's own count below: a sealed
+	// instance parks nothing, and zero is the true answer rather than an
+	// inability to say (decision AU).
+	ch <- prometheus.MustNewConstMetric(s.parked, prometheus.GaugeValue,
+		float64(s.instance.Parked.Len()))
 
 	s.collectStore(ch)
 	s.collectPeers(ch)

@@ -141,6 +141,8 @@ func New(opts Options) (*Frontend, error) {
 		SendKey:            front.sendKey,
 		Borrowed:           front.borrowed,
 		KeyOffers:          front.keyOffers,
+		LocalKeys:          front.localKeys,
+		ForgetLocalKey:     front.forgetLocalKey,
 		Endorsements:       front.endorsements,
 		RetractEndorsement: front.retractEndorsement,
 		AnswerKeyOffer:     front.answerKeyOffer,

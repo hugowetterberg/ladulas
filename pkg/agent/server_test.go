@@ -75,6 +75,36 @@ type testAgent struct {
 	keyRef     *ladulasv1.KeyRef
 	publicKey  ssh.PublicKey
 	knownHosts string
+	// parked is the set programs add keys to (decision AU), and events is what
+	// it reported.
+	parked *agent.LocalKeys
+	events *eventLog
+}
+
+// eventLog records what the parked set reported, in order.
+type eventLog struct {
+	mu     sync.Mutex
+	events []agent.LocalKeyEvent
+}
+
+func (l *eventLog) record(event agent.LocalKeyEvent) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.events = append(l.events, event)
+}
+
+func (l *eventLog) kinds() []agent.LocalKeyEventKind {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	out := make([]agent.LocalKeyEventKind, 0, len(l.events))
+
+	for _, event := range l.events {
+		out = append(out, event.Kind)
+	}
+
+	return out
 }
 
 // socketDir keeps the socket path well inside the ~107 byte sun_path limit,
@@ -100,7 +130,23 @@ func testPassphrase(string, bool) ([]byte, error) {
 	return []byte("test passphrase"), nil
 }
 
+// newTestAgent is an agent that parks keys, which is what the daemon runs.
 func newTestAgent(t *testing.T, decision ladulasv1.Decision) *testAgent {
+	t.Helper()
+
+	events := &eventLog{}
+
+	return newTestAgentWith(t, decision, events,
+		agent.NewLocalKeys(agent.LocalKeysOptions{OnEvent: events.record}))
+}
+
+// newTestAgentWith is newTestAgent with the parked set chosen by the test —
+// nil for a server that refuses every mutation, the shape a short-lived
+// command's server has.
+func newTestAgentWith(
+	t *testing.T, decision ladulasv1.Decision, events *eventLog,
+	parked *agent.LocalKeys,
+) *testAgent {
 	t.Helper()
 
 	vault, err := keystore.Create(keystore.Options{
@@ -133,6 +179,7 @@ func newTestAgent(t *testing.T, decision ladulasv1.Decision) *testAgent {
 		SocketPath: socket,
 		Keys:       vault,
 		Approver:   approver,
+		Local:      parked,
 		KnownHosts: agent.NewKnownHosts(knownHosts),
 		Identity: func() *ladulasv1.RequesterInfo {
 			return vault.Identity().RequesterInfo(true)
@@ -179,6 +226,8 @@ func newTestAgent(t *testing.T, decision ladulasv1.Decision) *testAgent {
 		keyRef:     keystore.KeyRef(stored),
 		publicKey:  pub,
 		knownHosts: knownHosts,
+		parked:     parked,
+		events:     events,
 	}
 }
 
@@ -305,10 +354,12 @@ func TestAgentRefusesWhenDenied(t *testing.T) {
 	}
 }
 
-// Key management goes through Ladulås itself (§4), so every mutation request
-// has to fail.
+// Key management goes through Ladulås itself (§4), so on a server with no
+// parked set every mutation request has to fail. That is the shape a
+// short-lived command's server has; the daemon's parks keys, and local_test.go
+// is about what that accepts (decision AU).
 func TestAgentRefusesMutation(t *testing.T) {
-	a := newTestAgent(t, ladulasv1.Decision_DECISION_APPROVE)
+	a := newTestAgentWith(t, ladulasv1.Decision_DECISION_APPROVE, nil, nil)
 	client := a.client(t)
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
