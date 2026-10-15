@@ -269,6 +269,11 @@ func (n *Node) AnswerPairing(
 // after somebody uses it is followed rather than waited for: the exchange is on
 // disk by then, and the command can be interrupted, backgrounded or killed
 // without costing anything (§7).
+//
+// While it waits it reports every failed attempt, with where it came from, and
+// a window whose attempts are spent ends with `exhausted` set rather than as
+// though the clock had run out (decision AV): the person at this screen should
+// hear that something is guessing, and be offered a new PIN.
 func (n *Node) BeginPairing(
 	ctx context.Context,
 	req *connect.Request[ladulasv1.BeginPairingRequest],
@@ -296,7 +301,7 @@ func (n *Node) BeginPairing(
 	addresses := n.Advertised()
 
 	full, err := trust.EncodeCode(trust.NewCode(
-		secret, n.identity.Name(), n.identity.PublicKey(),
+		window.pin, secret, n.identity.Name(), n.identity.PublicKey(),
 		addresses, window.expires))
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, err)
@@ -304,6 +309,7 @@ func (n *Node) BeginPairing(
 
 	err = session.send(&ladulasv1.PairingProgress{
 		Kind:            ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_CODE,
+		Pin:             string(window.pin),
 		Code:            secret.Display(),
 		FullCode:        full,
 		ExpiresAt:       timestamppb.New(window.expires),
@@ -314,16 +320,38 @@ func (n *Node) BeginPairing(
 		return err
 	}
 
-	select {
-	case pairing := <-window.arrived:
-		return n.followPairing(ctx, session, pairing)
-	case <-time.After(time.Until(window.expires)):
-		return session.send(&ladulasv1.PairingProgress{
-			Kind:    ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED,
-			Message: "the pairing code expired before anybody used it",
-		})
-	case <-ctx.Done():
-		return nil
+	expired := time.After(time.Until(window.expires))
+
+	for {
+		select {
+		case pairing := <-window.arrived:
+			return n.followPairing(ctx, session, pairing)
+		case attempt := <-window.attempted:
+			err := session.send(&ladulasv1.PairingProgress{
+				Kind:    ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_ATTEMPT,
+				Attempt: attempt,
+			})
+			if err != nil {
+				return err
+			}
+		case <-window.exhausted:
+			n.log.Warn("closed a pairing window after too many attempts")
+
+			return session.send(&ladulasv1.PairingProgress{
+				Kind:      ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED,
+				Exhausted: true,
+				Message: fmt.Sprintf("something on your network is guessing: "+
+					"the code has had all %d attempts it allows. Show a new PIN "+
+					"to try again.", trust.MaxAttempts),
+			})
+		case <-expired:
+			return session.send(&ladulasv1.PairingProgress{
+				Kind:    ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED,
+				Message: "the pairing code expired before anybody used it",
+			})
+		case <-ctx.Done():
+			return nil
+		}
 	}
 }
 

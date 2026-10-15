@@ -54,7 +54,7 @@ func peersListCommand() *cli.Command {
 			if len(peers) == 0 {
 				fmt.Println("No paired instances yet. " +
 					"`ladulas pair --listen --intent <approver|requester|mutual>`" +
-					" on one machine and `ladulas pair <host:port> --code <code>`" +
+					" on one machine and `ladulas pair --address <host:port> --pin <PIN>`" +
 					" on the other.")
 
 				return nil
@@ -336,17 +336,27 @@ func pairCommand() *cli.Command {
 	return &cli.Command{
 		Name: "pair",
 		Usage: "pair with another instance: --listen --intent <what for> to " +
-			"display a code, or give the other instance's host:port to use one",
+			"display a PIN, or --address <host:port> --pin <PIN> to use one",
 		ArgsUsage: "[host:port]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "listen",
-				Usage: "display a pairing code and wait for the other instance",
+				Usage: "display a pairing PIN and wait for the other instance",
+			},
+			&cli.StringFlag{
+				Name: "address",
+				Usage: "`host:port` of the instance displaying the PIN; the " +
+					"same as giving it as the argument",
+			},
+			&cli.StringFlag{
+				Name:  "pin",
+				Usage: "the six-digit PIN the other instance is displaying",
 			},
 			&cli.StringFlag{
 				Name: "code",
-				Usage: "the code the other instance is displaying, " +
-					"or the full code it printed",
+				Usage: "the full code the other instance printed, which needs " +
+					"no address; or the ten-character code an older version " +
+					"displays",
 			},
 			&cli.StringFlag{
 				Name: "intent",
@@ -365,16 +375,50 @@ func pairCommand() *cli.Command {
 	}
 }
 
+// pairUsage is both ways in, because somebody who got the command wrong is as
+// likely to be on either machine.
+const pairUsage = "Usage: ladulas pair --listen --intent <approver|requester|mutual>, " +
+	"or ladulas pair --address <host:port> --pin <PIN>, " +
+	"or ladulas pair --code <full code>"
+
 func runPair(ctx context.Context, cmd *cli.Command) error {
 	client := localapi.NewClient(cmd.String("control-socket"))
-	address := cmd.Args().First()
 	listening := cmd.Bool("listen")
+
+	address := cmd.String("address")
+	if positional := cmd.Args().First(); positional != "" {
+		if address != "" && address != positional {
+			return cli.Exit("Give the address once: as the argument or as "+
+				"--address, not both.", 1)
+		}
+
+		address = positional
+	}
 
 	if !listening && cmd.String("intent") != "" {
 		return cli.Exit(
 			"The machine displaying the code says what the pairing is for. "+
 				"Run `ladulas pair --listen --intent <approver|requester|mutual>` "+
 				"there; this side confirms what it chose.", 1)
+	}
+
+	// The PIN and a code are two ways of saying one thing, and a command line
+	// carrying both is one where somebody is unsure which they were shown.
+	// Typing a PIN means one attempt (decision AV), so this asks rather than
+	// guessing which one to spend it on.
+	pin, code := cmd.String("pin"), cmd.String("code")
+	if pin != "" && code != "" {
+		return cli.Exit("Give the PIN or the code, not both.", 1)
+	}
+
+	if pin != "" {
+		parsed, err := trust.ParsePIN(pin)
+		if err != nil {
+			return cli.Exit("A pairing PIN is the six digits the other machine "+
+				"is showing.", 1)
+		}
+
+		code = string(parsed)
 	}
 
 	var (
@@ -393,16 +437,14 @@ func runPair(ctx context.Context, cmd *cli.Command) error {
 			connect.NewRequest(&ladulasv1.BeginPairingRequest{
 				Intent: trust.IntentToWire(intent),
 			}))
-	case address != "" || cmd.String("code") != "":
+	case code != "":
 		stream, err = client.Control().PairWithPeer(ctx,
 			connect.NewRequest(&ladulasv1.PairWithPeerRequest{
 				Address: address,
-				Code:    cmd.String("code"),
+				Code:    code,
 			}))
 	default:
-		return cli.Exit(
-			"Usage: ladulas pair --listen --intent <approver|requester|mutual>, "+
-				"or ladulas pair <host:port> --code <code>", 1)
+		return cli.Exit(pairUsage, 1)
 	}
 
 	if err != nil {
@@ -441,6 +483,8 @@ func followPairing(
 		switch progress.GetKind() {
 		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_CODE:
 			printPairingCode(progress)
+		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_ATTEMPT:
+			printAttempt(progress.GetAttempt())
 		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_CONFIRM:
 			if err := answerConfirmation(ctx, cmd, client, progress); err != nil {
 				return err
@@ -467,15 +511,17 @@ func followPairing(
 }
 
 func printPairingCode(progress *ladulasv1.PairingProgress) {
-	fmt.Printf("Pairing code   %s\n", progress.GetCode())
+	pin := trust.PIN(progress.GetPin())
+
+	fmt.Printf("PIN            %s\n", pin.Display())
 
 	if addresses := progress.GetListenAddresses(); len(addresses) > 0 {
 		fmt.Printf("Address        %s\n", strings.Join(addresses, "\n               "))
 	}
 
 	if expires := progress.GetExpiresAt(); expires != nil {
-		fmt.Printf("Valid until    %s\n",
-			expires.AsTime().Local().Format(time.Kitchen))
+		fmt.Printf("Valid until    %s, once, %d attempts\n",
+			expires.AsTime().Local().Format(time.Kitchen), trust.MaxAttempts)
 	}
 
 	// What was chosen here, said back, because it is the whole of what the
@@ -488,25 +534,43 @@ func printPairingCode(progress *ladulasv1.PairingProgress) {
 
 	fmt.Println()
 	fmt.Println("On the other machine:")
-	fmt.Printf("  ladulas pair %s --code %s\n",
-		firstAddress(progress.GetListenAddresses()), progress.GetCode())
+	fmt.Printf("  ladulas pair --address %s --pin %s\n",
+		firstAddress(progress.GetListenAddresses()), string(pin))
 
-	// The full code is what a QR carries (§7): the secret, this instance's
+	// The full code is what a QR carries (§7): the PIN, this instance's
 	// identity key and its addresses, so the far side pins before it connects
-	// and there is nothing left for a person to compare character by character.
-	// It is printed rather than drawn because a headless box's terminal is not
-	// somewhere Ladulås gets to choose the pixels; feeding it to qrencode is
-	// what turns it into something a phone camera can read.
+	// and there is nothing left for a person to compare character by
+	// character. It is printed rather than drawn because a headless box's
+	// terminal is not somewhere Ladulås gets to choose the pixels; feeding it
+	// to qrencode is what turns it into something a phone camera can read.
 	if full := progress.GetFullCode(); full != "" {
 		fmt.Println()
-		fmt.Println("On a phone, scan this — or paste it into the app:")
+		fmt.Println("On a phone, scan this — or paste it with --code, which " +
+			"needs no address:")
 		fmt.Printf("  %s\n", full)
 		fmt.Println()
 		fmt.Printf("  qrencode -t ansiutf8 %q\n", full)
 	}
 
+	// An older instance cannot take the PIN, and is the one thing the
+	// ten-character code is still for (decision AV).
+	if code := progress.GetCode(); code != "" {
+		fmt.Println()
+		fmt.Println("From an older version of Ladulås:")
+		fmt.Printf("  ladulas pair %s --code %s\n",
+			firstAddress(progress.GetListenAddresses()), code)
+	}
+
 	fmt.Println()
 	fmt.Println("Waiting…")
+}
+
+// printAttempt is a failed attempt at the displayed code, said where it came
+// from, because a PIN is readable across a room and this is how the person at
+// this screen finds out somebody else is trying it (decision AV).
+func printAttempt(attempt *ladulasv1.PairingAttempt) {
+	fmt.Printf("A failed attempt from %s: %s.\n",
+		attempt.GetSource(), attempt.GetOutcome())
 }
 
 func firstAddress(addresses []string) string {
@@ -544,6 +608,17 @@ func answerConfirmation(
 	if pairing.GetKeyFromCode() {
 		fmt.Println("  The code carried the other instance's identity, " +
 			"so it has already been checked.")
+	}
+
+	// What else knocked while the code was up. It is the reason to look harder
+	// at the name and the address above before agreeing (decision AV).
+	if attempts := pairing.GetFailedAttempts(); len(attempts) > 0 {
+		fmt.Printf("\n  %s failed before this one:\n",
+			plural(len(attempts), "attempt"))
+
+		for _, attempt := range attempts {
+			fmt.Printf("    %s  %s\n", attempt.GetSource(), attempt.GetOutcome())
+		}
 	}
 
 	fmt.Printf("\n  It %s\n",

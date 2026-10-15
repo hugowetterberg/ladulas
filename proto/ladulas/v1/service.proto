@@ -751,20 +751,44 @@ message Event {
 
 // PairingService establishes trust on first use (§7).
 //
-// The exchange is in two halves that keep different time. `Pair` spends the
-// pairing code, and the code is the short-lived half: five minutes, single use,
-// five wrong answers. Everything after it is durable — both sides write down a
-// pending pairing and then converge on it whenever they can reach each other,
-// which is what `SettlePairing` is for.
+// The exchange is in two halves that keep different time. Proving the code is
+// the short-lived half: five minutes, single use, five attempts, one window.
+// Everything after it is durable — both sides write down a pending pairing and
+// then converge on it whenever they can reach each other, which is what
+// `SettlePairing` is for.
 //
 // Neither side writes a trust record until both users have said yes, and no
-// clock ever decides that they did not. What the pairing code authenticates is
-// described on PairRequest.proof.
+// clock ever decides that they did not.
+//
+// The code is proved in one of two ways (decision AV). `PairStart` and
+// `PairFinish` run CPace (draft-irtf-cfrg-cpace-21) over the six-digit PIN,
+// and are what every current joiner uses. `Pair` is the HMAC proof over the
+// ten-character code, kept for one release so that older joiners — an older
+// phone scanning a new desktop's QR, an older box typing the code — can still
+// pair. It is never offered the PIN: a joiner that holds only a PIN treats an
+// unimplemented `PairStart` as a possible impostor rather than falling back,
+// because an HMAC over twenty bits falls to an offline search in
+// milliseconds. All three draw on the window's one attempt counter.
 service PairingService {
-  // Pair proves the pairing code and returns at once, with a session id both
-  // sides record. It does not wait for anybody: the human confirmation is
-  // raised behind it and answered whenever the human gets to it.
+  // Pair proves the ten-character code and returns at once, with a session id
+  // both sides record. It does not wait for anybody: the human confirmation is
+  // raised behind it and answered whenever the human gets to it. A window that
+  // holds no ten-character code refuses it. To be removed after the overlap
+  // release (decision AV).
   rpc Pair(PairRequest) returns (PairResponse);
+
+  // PairStart is the first round of the PIN exchange: the listener charges
+  // one attempt to the window, mints a CPace session id and answers with its
+  // share. It carries nothing that lets the caller check a guess.
+  rpc PairStart(PairStartRequest) returns (PairStartResponse);
+
+  // PairFinish is the second round: the joiner's share and its confirmation
+  // tag. The listener verifies the tag before it acts on anything else in the
+  // message and before it sends anything derived from the key; only then does
+  // it refund the attempt, spend the code, write down a pending pairing and
+  // answer with its own tag. It must come from the identity that made the
+  // PairStart.
+  rpc PairFinish(PairFinishRequest) returns (PairFinishResponse);
 
   // SettlePairing reconciles one pending pairing. The caller states its own
   // answer so far and is told the callee's; either side may call it, as often
@@ -801,34 +825,42 @@ enum PairingRecordState {
   PAIRING_RECORD_STATE_GONE = 3;
 }
 
-// PairingCode is everything a pairing code carries, and the reason the typed
-// code and the QR code are two renderings of one thing rather than two
-// mechanisms (§7).
+// PairingCode is everything a pairing code carries: what a QR holds and what
+// the copyable full code is (§7).
 //
-// The typed code is the secret alone, because ten characters is what somebody
-// will actually read off a screen and type into a headless box; the address is
-// typed alongside it. The QR — and the copyable full code, which is the same
-// string — carries this whole message, so the dialling side knows the listening
-// side's identity key before it connects and the visual channel becomes the
-// integrity root rather than a fingerprint comparison.
+// The typed paths carry less. A typed PIN is the six digits and the address is
+// given beside it; a typed ten-character code, for an older joiner, is the
+// secret and an address. The full code carries the whole message, so the
+// joining side knows the listening side's identity key before it connects and
+// the visual channel becomes the integrity root rather than a fingerprint
+// comparison.
 //
-// The security of the exchange does not depend on which rendering was used.
-// What the secret proves is the same either way, and both sides confirm on
-// their own screens regardless.
+// It stays at version 1 for the overlap release (decision AV), because an
+// older build refuses any other version and any secret that is not ten
+// characters. The PIN is a new field, which an older decoder ignores, so an
+// older phone scanning a new QR reads the ten-character secret and runs the old
+// `Pair` against it. The two secrets are independent: the PIN is never derived
+// from the ten characters or the other way round. After the overlap the secret
+// and the HMAC go, and the version moves to 2.
 message PairingCode {
   int32 version = 1;
-  // The typed secret, normalised.
+  // The ten-character secret for older joiners, normalised. It is the only
+  // thing the HMAC proof is ever keyed with.
   string secret = 2;
   // The displaying instance's identity key in SSH wire format.
   bytes identity_public_key = 3;
   repeated string addresses = 4;
   string instance_name = 5;
   google.protobuf.Timestamp expires_at = 6;
+  // The six-digit PIN, as six ASCII digits. It is only ever a CPace password
+  // (PairStart, PairFinish), and never goes into an HMAC on any code path.
+  string pin = 7;
 }
 
+// PairRequest is the older joiner's proof. Overlap release only (decision AV).
 message PairRequest {
-  // Proof that the caller is looking at the pairing code this instance is
-  // displaying, bound to the two identity keys of this very channel:
+  // Proof that the caller is looking at the ten-character code this instance
+  // is displaying, bound to the two identity keys of this very channel:
   //
   //   HMAC-SHA256(secret,
   //     "ladulas-pairing-v1" || 0x00 ||
@@ -838,12 +870,11 @@ message PairRequest {
   // The lengths are there so that the two keys cannot be slid past each other
   // to produce the same input from a different pair.
   //
-  // The binding is what makes a short typed code safe. A relay that got a
-  // dialler to connect to it rather than to the real listener receives a proof
-  // computed over its own key, which the real listener rejects, and it cannot
-  // recompute one without the secret. The secret is single use, attempt capped
-  // and short lived, which is the whole of the replay story: a proof is bound
-  // to a channel that no longer exists.
+  // The binding stops a relay: one that got a dialler to connect to it
+  // receives a proof computed over its own key, which the real listener
+  // rejects. What the relay can still do is test guesses against the proof it
+  // holds, offline, and fifty bits is what makes that hopeless inside five
+  // minutes. That is why the secret is never the PIN.
   bytes proof = 1;
   string instance_name = 2;
   // The caller's identity public key in SSH wire format. Redundant with the
@@ -886,6 +917,65 @@ message PairResponse {
   // it, which is exactly the moment a fingerprint is hardest to check.
   bytes confirmation = 8;
   string reason = 9;
+}
+
+// The PIN exchange is CPace, CPACE-RISTR255-SHA512, initiator-responder, with
+// the draft's §10.4 key confirmation, bound like this (decision AV):
+//
+//   PRS  the six ASCII digits of the PIN
+//   CI   lv_cat(<joiner identity key, SSH wire>, <listener identity key,
+//        SSH wire>), lv_cat being the draft's LEB128 length-value framing —
+//        both keys as the TLS handshake presented them, joiner first
+//   sid  the 16 random bytes the listener sends in PairStartResponse
+//   ADa  "ladulas-pairing-v2/listener"   (the listener is CPace's A)
+//   ADb  "ladulas-pairing-v2/joiner"     (the joiner is CPace's B)
+//
+// The roles are what make the order safe. The listener speaks first, with a
+// share that reveals nothing; the joiner then has the whole key and commits —
+// sends its share and its tag together — before it has received anything
+// derived from the key. So an attacking joiner learns nothing it can check a
+// guess against until it has spent an attempt, and an impostor listener gets
+// exactly one guess, the joiner's tag. The associated data carries the protocol
+// version, so it cannot be negotiated down, and a direction, so the two tags
+// differ even beyond the draft's own construction. Both are constants and are
+// not sent.
+//
+// The CPace session id is not the pairing's session id: that one is minted
+// when the code is spent, and is what SettlePairing refers to.
+message PairStartRequest {}
+
+message PairStartResponse {
+  // The CPace session id, 16 random bytes, minted by the listener for this
+  // run and bound to the identity that asked.
+  bytes session_id = 1;
+  // Ya, the listener's 32-byte ristretto255 share.
+  bytes share = 2;
+}
+
+message PairFinishRequest {
+  // The CPace session id from PairStartResponse.
+  bytes session_id = 1;
+  // Yb, the joiner's share.
+  bytes share = 2;
+  // The joiner's tag: HMAC-SHA-512(mac_key, lv_cat(Yb, ADb)).
+  bytes confirmation = 3;
+  // What the listener records about the joiner. It is read only after the
+  // tag has verified: before that, nothing in this message is believed.
+  string instance_name = 4;
+  repeated string listen_addresses = 5;
+}
+
+message PairFinishResponse {
+  // The listener's tag: HMAC-SHA-512(mac_key, lv_cat(Ya, ADa)). The joiner
+  // checks it before it believes anything else here.
+  bytes confirmation = 1;
+  // Identifies the pending pairing on both sides, as PairResponse's does.
+  string session_id = 2;
+  string instance_name = 3;
+  // The intent, as PairResponse carries it (decision AD).
+  bool may_approve = 4;
+  bool may_request = 5;
+  repeated string listen_addresses = 6;
 }
 
 message SettlePairingRequest {

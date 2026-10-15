@@ -703,16 +703,16 @@ func pair(t *testing.T, approver, requester *instance) {
 
 	// What the approver grants the requester: it may ask, and it does not
 	// approve for us.
-	window, secret, err := approver.node.beginPairing(trust.IntentPeerRequests)
+	window, _, err := approver.node.beginPairing(trust.IntentPeerRequests)
 	if err != nil {
 		t.Fatalf("begin pairing: %v", err)
 	}
 
 	defer approver.node.closeWindow(window)
 
-	// The typed-code path: the requester was told the address and the code, and
-	// learns the identity from the handshake.
-	code := &ladulasv1.PairingCode{Version: 1, Secret: string(secret)}
+	// The typed path: the requester was told the address and the PIN, and
+	// learns the identity from the handshake (decision AV).
+	code := &ladulasv1.PairingCode{Version: 1, Pin: string(window.pin)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -42,7 +42,7 @@ func scanQR(t *testing.T, requester, phone *instance) *storepb.TrustRecord {
 
 	defer requester.node.closeWindow(window)
 
-	code := trust.NewCode(secret, requester.identity.Name(),
+	code := trust.NewCode(window.pin, secret, requester.identity.Name(),
 		requester.identity.PublicKey(), requester.node.Addresses(),
 		time.Now().Add(trust.CodeValidity))
 

@@ -7,10 +7,17 @@
 //
 // The screen is in two states and never both. First the question: what is this
 // pairing for (decision AD), asked here because this is the side displaying the
-// code and that side decides for both. Then the invitation: the code itself, and
-// the three ways into it, which are one secret seen by three kinds of machine —
-// a terminal types the command, another window pastes the full string, a phone
-// points a camera at the picture.
+// code and that side decides for both. Then the invitation: the six-digit PIN
+// and the QR side by side (decision AV), and the full code under them to copy.
+// Another desktop or a headless box types the PIN with the address; a phone
+// points a camera at the picture; a window that cannot reach this one pastes
+// the full code. For one release an older version still types the ten
+// characters, labelled for what it is.
+//
+// The invitation is read again every couple of seconds while it is on screen,
+// because what happens to a PIN while it is up is the thing worth seeing: each
+// failed attempt, with where it came from, and — when the attempts are spent —
+// that something is guessing, with a new PIN one press away.
 
 import { el, append } from "./dom.js";
 import { bridge } from "./bridge.js";
@@ -60,13 +67,48 @@ export async function addMachine(state) {
     }
   }
 
+  let shown = null;
+
   const show = (invitation) => {
+    shown = invitation;
     panel.replaceChildren(...invitation
-      ? displayed(invitation, () => show(null))
+      ? displayed(invitation, () => show(null), show, state)
       : chooser(show, state));
   };
 
   show(live);
+
+  // What changes while a code is up is what knocked at it, whether it was
+  // withdrawn, and whether it is still there at all. Anything else is the same
+  // screen, and redrawing it would only take a half-finished copy away.
+  const shape = (invitation) => invitation
+    ? [invitation.pin, invitation.ended, (invitation.attempts || []).length].join("|")
+    : "";
+
+  const timer = setInterval(() => {
+    if (!panel.isConnected) {
+      clearInterval(timer);
+
+      return;
+    }
+
+    if (!shown) {
+      return;
+    }
+
+    bridge
+      .invitation()
+      .then((now) => {
+        if (shape(now) !== shape(shown)) {
+          show(now);
+        }
+      })
+      .catch((error) => {
+        if (error.status === 404) {
+          show(null);
+        }
+      });
+  }, 2000);
 
   return { title: "Add a machine", body: [panel] };
 }
@@ -78,7 +120,7 @@ function chooser(show, state) {
 
   let chosen = "";
 
-  const start = el("button", "primary", "Show a pairing code");
+  const start = el("button", "primary", "Show a PIN");
 
   start.disabled = true;
 
@@ -121,19 +163,24 @@ function chooser(show, state) {
       });
   };
 
-  nodes.push(ui.heading("Or join a code another machine is showing"));
+  nodes.push(ui.heading("Or join a machine that is showing a PIN"));
   nodes.push(joinCard(state));
 
   return nodes;
 }
 
-// joinCard is the other end of the screen above: the code from a machine that
-// has already answered the question, pasted here. It asks nothing about what
-// the pairing is for, because that side decided (decision AD) — what this side
-// agreed to is on the card that follows, beside the fingerprint to compare.
+// joinCard is the other end of the screen above: the PIN from a machine that
+// has already answered the question, typed here with its address, or its full
+// code pasted. It asks nothing about what the pairing is for, because that side
+// decided (decision AD) — what this side agreed to is on the card that follows,
+// beside the fingerprint to compare.
+//
+// One press is one attempt (decision AV). A refusal is shown and nothing is
+// retried: each try is a guess the other machine counts, and trying the same
+// PIN somewhere else would be a guess at a machine nobody picked.
 function joinCard(state) {
-  const code = field("Code", "ladulas-pair-v1… or the short code", "text");
-  const address = field("Address", "only for a short code: host:port", "text");
+  const code = field("PIN", "the six digits, or the full code", "text");
+  const address = field("Address", "host:port — not needed for a full code", "text");
   const join = el("button", "primary", "Join");
   const said = ui.note("");
 
@@ -164,10 +211,10 @@ function joinCard(state) {
   return ui.card(null,
     code.root,
     address.root,
-    ui.note("The full code — the long string under \"From another Ladulås "
-      + "window\" on the other machine — carries its address and identity, "
-      + "so there is nothing else to type. A short code needs the address "
-      + "beside it. Either way both machines then show the same two "
+    ui.note("Type the PIN the other machine is showing and the address under "
+      + "it. The full code — the long string under the PIN on the other "
+      + "machine — carries its address and identity instead, so there is "
+      + "nothing else to type. Either way both machines then show the same two "
       + "fingerprints, and somebody at each has to agree they match."),
     append(el("div", "card-actions"), join),
     said);
@@ -186,16 +233,58 @@ function field(text, placeholder, type) {
   return { root, input };
 }
 
-// displayed is the code on screen, with the three ways to use it under it.
-function displayed(invitation, stopped) {
+// displayed is the PIN on screen, with the other ways to use it under it — or,
+// when the attempts were spent, the sentence saying so and a new PIN.
+function displayed(invitation, stopped, show, state) {
+  if (invitation.ended) {
+    return ended(invitation, stopped, show, state);
+  }
+
   const nodes = [];
 
-  nodes.push(ui.card("pairing-code",
-    el("div", "code", invitation.code),
+  // The PIN and the QR side by side, because they are the two ways in that a
+  // person looks at (decision AE keeps the QR out from behind a disclosure —
+  // it is the phone's only path).
+  const pin = append(el("div", "pin-side"),
+    el("div", "field-label", "PIN"),
+    el("div", "code", invitation.pin || invitation.code),
     ui.note(invitation.expiresAt
       ? "Good until " + clockTime(invitation.expiresAt)
       + ", once, and then it is spent."
-      : "Good once, and then it is spent.")));
+      : "Good once, and then it is spent."));
+
+  const pair = append(el("div", "pairing-pair"), pin);
+
+  if (invitation.qr) {
+    const picture = document.createElement("img");
+
+    picture.className = "qr";
+    picture.alt = "The pairing code, as a QR for a phone camera";
+    picture.src = invitation.qr;
+
+    append(pair, append(el("div", "qr-side"), picture,
+      ui.note("Scan it in the Ladulås app.")));
+  }
+
+  const code = ui.card("pairing-code", pair);
+
+  // The full code under them: what a window that cannot see this one pastes,
+  // and what the phone scans, as a string.
+  append(code,
+    ui.note("Or copy the full code into the other machine. It carries this "
+      + "instance's identity and addresses, so nothing else needs typing."),
+    ui.copyable(invitation.fullCode));
+
+  // The ten characters, for one release, for the one kind of machine that
+  // still needs them (decision AV).
+  if (invitation.code && invitation.pin) {
+    append(code,
+      append(el("div", "older-code"),
+        el("span", "field-label", "For older versions of Ladulås"),
+        el("span", "mono", invitation.code)));
+  }
+
+  nodes.push(code);
 
   nodes.push(ui.card(null,
     el("div", "row-title", "The machine that joins " + invitation.direction),
@@ -203,31 +292,30 @@ function displayed(invitation, stopped) {
       + "at each of them has to agree they match. Nothing is written down "
       + "until then.")));
 
+  const attempts = invitation.attempts || [];
+
+  if (attempts.length > 0) {
+    nodes.push(ui.heading("Failed attempts", attempts.length));
+    nodes.push(ui.card(null,
+      ui.warning("Somebody tried this code and got it wrong. If that was not "
+        + "the machine you are pairing, look closely at the name on the card "
+        + "that arrives."),
+      ...attempts.map((attempt) => el("div", "mono address",
+        (attempt.at ? clockTime(attempt.at) + "  " : "")
+        + attempt.source + " — " + attempt.outcome))));
+  }
+
   nodes.push(ui.heading("From a terminal"));
   nodes.push(ui.card(null,
     ui.copyable(invitation.join),
     ui.note("The address is the one this machine thinks is most likely to "
       + "work; the rest are below.")));
 
-  nodes.push(ui.heading("From another Ladulås window"));
-  nodes.push(ui.card(null,
-    ui.note("Paste this into the join box at the bottom of the other "
-      + "machine's own Add a machine screen. It carries this instance's "
-      + "identity and address, so that side has nothing left to type or to "
-      + "compare by hand."),
-    ui.copyable(invitation.fullCode)));
-
-  if (invitation.qr) {
-    nodes.push(ui.heading("From a phone"));
-
-    const picture = document.createElement("img");
-
-    picture.className = "qr";
-    picture.alt = "The pairing code, as a QR for a phone camera";
-    picture.src = invitation.qr;
-
-    nodes.push(ui.card("qr-card", picture,
-      ui.note("Scan it in the Ladulås app. It is the same code as above.")));
+  if (invitation.olderJoin) {
+    nodes.push(ui.card(null,
+      ui.copyable(invitation.olderJoin),
+      ui.note("The same from an older version of Ladulås, which cannot take a "
+        + "PIN.")));
   }
 
   if ((invitation.addresses || []).length > 1) {
@@ -236,7 +324,7 @@ function displayed(invitation, stopped) {
       (address) => el("div", "mono address", address))));
   }
 
-  const stop = el("button", "danger small", "Stop showing this code");
+  const stop = el("button", "danger small", "Stop showing this PIN");
 
   stop.onclick = () => {
     stop.disabled = true;
@@ -255,6 +343,38 @@ function displayed(invitation, stopped) {
   nodes.push(append(el("div", "card-actions"), stop));
 
   return nodes;
+}
+
+// ended is a code withdrawn because its attempts were spent (decision AV). It
+// says so rather than closing quietly, and the way on is a new PIN for the same
+// pairing — the question was answered, and nothing about guessing changes it.
+function ended(invitation, stopped, show, state) {
+  const again = el("button", "primary", "Show a new PIN");
+  const done = el("button", "small", "Stop");
+
+  again.onclick = () => {
+    again.disabled = true;
+
+    bridge
+      .invite(invitation.intent)
+      .then(show)
+      .catch((error) => {
+        again.disabled = false;
+        state.complain(error.message);
+      });
+  };
+
+  done.onclick = () => {
+    bridge.stopPairing().then(stopped, stopped);
+  };
+
+  const attempts = invitation.attempts || [];
+
+  return [ui.card(null,
+    ui.warning(invitation.ended, true),
+    ...attempts.map((attempt) => el("div", "mono address",
+      attempt.source + " — " + attempt.outcome)),
+    append(el("div", "card-actions"), again, done))];
 }
 
 // clockTime is when a code stops working, in the reader's own locale. It is the

@@ -243,8 +243,10 @@ func buildCLI(t *testing.T) string {
 	return path
 }
 
-// codePattern picks the pairing code out of what `ladulas pair --listen` prints.
-var codePattern = regexp.MustCompile(`Pairing code\s+([0-9a-z]{5}-[0-9a-z]{5})`)
+// codePattern picks the PIN out of what `ladulas pair --listen` prints
+// (decision AV). It is shown in two groups of three, and typed back the same
+// way: the command forgives the space.
+var codePattern = regexp.MustCompile(`PIN\s+([0-9]{3} [0-9]{3})`)
 
 // pairOverTheCommandLine runs the real flow: the approver displays a code, the
 // requester uses it, and a user answers the confirmation on each side.
@@ -313,7 +315,7 @@ func pairOverTheCommandLine(t *testing.T, cli string, approver, requester *peerI
 	// The requester's side: use the code. What it grants is what the other
 	// machine already chose, which it sees on the confirmation.
 	dial := exec.CommandContext(ctx, cli,
-		"pair", approver.address, "--code", code)
+		"pair", "--address", approver.address, "--pin", code)
 	dial.Env = append(os.Environ(), "LADULAS_SOCK="+requester.control)
 	dial.Stdin = strings.NewReader("y\n")
 

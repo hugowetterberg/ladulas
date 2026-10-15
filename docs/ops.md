@@ -238,8 +238,9 @@ involved. That is the recovery path of last resort and it is deliberate.
 3. **`ladulas keys generate <name>`** — or `keys import`. Add the public
    half wherever it needs to go; nothing does that for you.
 4. **`ladulas pair --listen --intent <approver|requester|mutual>`** on the
-   machine displaying the code and **`ladulas pair <host:port> --code
-   <code>`** on the other, then **`ladulas pairings approve`** if the
+   machine displaying the PIN and **`ladulas pair --address <host:port>
+   --pin <PIN>`** on the other (or `--code` with the full code, which needs
+   no address), then **`ladulas pairings approve`** if the
    confirmation outlived the command. The intent is required and settles
    both sides; the joining side has no direction flag of its own
    ([decision AD](architecture.md#7-identity-pairing-and-trust)). Pairing
@@ -523,6 +524,29 @@ trusts, so a self check would pass on exactly the machine that is blocked.
 The peer sees the rejection; this machine sees nothing at all, because the
 packet never reached a socket. A daemon that says its channel is up is
 reporting a bind, not a route, and the report is honest as far as it goes.
+
+### A PIN is refused, or the code was already used
+
+**Signal:** the joining side says the PIN was refused, that another machine
+used the code, or that the machine that answered may be an impostor; the
+displaying side lists failed attempts with their source, or says something
+on the network is guessing.
+**Action:** each PIN attempt is one of five the displaying side allows for
+that PIN, charged when it starts and given back only when it verifies, so
+an exchange started and abandoned counts too
+([decision AV](architecture.md#7-identity-pairing-and-trust)). A refused
+PIN is a typo or the wrong address: check both and try once more. Nothing
+retries on its own. "Another machine used this code" means the displaying
+side now holds a pending pairing with somebody else — reject it there, with
+`ladulas pairings reject` or on the card, and show a new PIN. "May be an
+impostor" means what answered at that address does not speak the PIN
+exchange, or answered without proving it knew the PIN: something else is
+on that address, or the other machine is older than the PIN. An older
+machine is joined with its ten-character code instead; a joiner holding a
+PIN never falls back to the older proof by itself, because doing so would
+hand whoever answered something it could search offline. Spent attempts
+close the window: that is a denial somebody on the network can cause, never
+a way in, and the remedy is a new PIN.
 
 ### A pairing never completes
 
@@ -816,7 +840,9 @@ build reattaches to the new daemon perfectly happily.
 * **Inbound, network:** the peer channel's unauthenticated surface is the
   TLS handshake. An identity that is neither paired, nor arriving at an
   open pairing window, nor half way through a written-down pairing gets a
-  handshake and a refusal. The relay's is the signature check on every
+  handshake and a refusal. One arriving at a window gets the pairing
+  service, five attempts at the PIN shared with everybody else, and
+  nothing it can search offline (decision AV). The relay's is the signature check on every
   call, and a clock more than the allowed skew from its own is refused.
 * **Outbound credentials:** the APNs `.p8` reaches the relay through
   systemd `LoadCredential=` and is never in the unit's environment. The

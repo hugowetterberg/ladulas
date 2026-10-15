@@ -12,8 +12,8 @@ import (
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 )
 
-// Joining a pairing from the window: the code another machine is showing,
-// pasted here (§7, §14).
+// Joining a pairing from the window: the PIN another machine is showing, typed
+// here with its address, or its full code pasted (§7, §14, decision AV).
 //
 // Like displaying a code, dialling one is a streamed control call — but the
 // stream's lifetime is not the pairing's. The daemon writes the pending pairing
@@ -107,7 +107,7 @@ func (f *Frontend) join(
 
 		return bridge.JoinView{}, errors.New(
 			"the other machine did not answer in time; check the address " +
-				"and that its code is still showing")
+				"and that its PIN is still showing")
 	case <-ctx.Done():
 		cancel()
 

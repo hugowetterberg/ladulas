@@ -71,7 +71,7 @@ pkg/              what a mobile core binds against, and so what is
   sshsig/         SSHSIG wrapping
   storepb/        the store document's protobuf types
   transport/      pinned-TLS listener and dialer, bind policy
-  trust/          pairing codes, trust records, directions
+  trust/          pairing PINs and codes, trust records, directions
 internal/         the desktop's and the daemon's own halves, which no phone
                   reaches and nothing outside this repository may import
   app/            the assembly: store, engine, sockets, lock states
@@ -258,8 +258,9 @@ unlock it again. `systemctl --user show ladulas.service -p ExecStart
 ### Pairing a second instance
 
 ```
-ladulas pair --listen --intent approver      # displays a code, waits
-ladulas pair host:7373 --code <that code>    # on the other instance
+ladulas pair --listen --intent approver      # displays a PIN, waits
+ladulas pair --address host:7373 --pin 123456   # on the other instance
+ladulas pair --code ladulas-pair-v1.…        # or the full code: no address
 ladulas pairings list                        # if the confirmation outlived
                                              # the command that raised it
 ladulas peers allow <peer> --approve --key work
@@ -272,10 +273,22 @@ approves for, `--intent mutual` for both. The other side declares nothing
 and is shown the sentence on its confirmation. It is required, because the
 alternative was two independent guesses that routinely disagreed; changing
 it later means removing the peer and pairing again. On a desktop the same
-question, the same code and a QR are the **Add a machine** screen in the
-window, and the bottom of that screen is the other end: a box that takes the
-full code pasted from another window, or a short code with the address
-beside it, and then says to look for the confirmation card.
+question, the PIN beside a QR and the full code under them are the **Add a
+machine** screen in the window, and the bottom of that screen is the other
+end: a box that takes a PIN with the address beside it, or the full code
+pasted from another window, and then says to look for the confirmation card.
+
+**The PIN is six digits, good once, for five minutes and five attempts**
+(decision AV). It is proved with a CPace exchange, never sent and never
+hashed, so each try is one guess the displaying side counts; a typo costs an
+attempt, and the displaying side lists every failed one with where it came
+from. A joiner is told, in so many words, when the code was already used by
+another machine (reject the pairing on the other screen), when the PIN was
+refused, and when what answered does not behave like a Ladulås showing a PIN
+at all. For one release the displaying side also shows a ten-character code,
+labelled for older versions, so an instance that predates the PIN can still
+join with `ladulas pair <host:port> --code <that code>`; an older phone scans
+the same QR as a new one.
 
 Pairing grants **directions**, never keys; `peers allow` is the separate
 decision that lends one, and its flags describe the state wanted rather
@@ -870,6 +883,15 @@ half is fixed — `pair()` in the peer tests now waits for the link to report
 online — which means the race is no longer *visible* in CI while still being
 there in the product. Reproduce it by submitting inside the gap; do not
 expect the suite to catch it.
+
+**The PIN still needs an address beside it, and the overlap has to end.**
+Pairing by PIN (decision AV) is built; finding the displaying machine on the
+local network, so that nobody types `host:port` at all, is the next step
+and is not. The ten-character code and its HMAC proof are there for one
+release so older instances and phones can still join; removing them, and
+moving the full code to version 2, is a later change that phones need a
+core release for first. The displaying side's card does not yet flag a
+joining name that matches an existing peer or this machine.
 
 **Socket activation.** The unit starts the daemon directly, so the agent
 socket exists from start-up rather than on first connection.

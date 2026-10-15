@@ -12,6 +12,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/gtank/ristretto255 v0.2.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/urfave/cli/v3 v3.10.1
 	github.com/wailsapp/wails/v3 v3.0.0-beta.5
@@ -25,6 +26,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect

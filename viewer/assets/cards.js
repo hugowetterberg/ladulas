@@ -338,6 +338,31 @@ function renderPairing(request) {
     );
   }
 
+  // What else knocked while the code was up (decision AV). A PIN can be read
+  // across a room, so a card with failed attempts before it is one to read
+  // twice: the name and the address above are what to check.
+  const failed = pairing.failedAttempts || [];
+
+  if (failed.length > 0) {
+    nodes.push(
+      el(
+        "p",
+        "warning",
+        failed.length === 1
+          ? "Another attempt at this code failed first. Check the name and the address above before agreeing."
+          : failed.length + " other attempts at this code failed first. Check the name and the address above before agreeing.",
+      ),
+    );
+
+    nodes.push(
+      facts(failed.map((attempt) => ({
+        label: "Failed attempt",
+        value: attempt.source + " — " + attempt.outcome,
+        mono: true,
+      }))),
+    );
+  }
+
   return nodes;
 }
 

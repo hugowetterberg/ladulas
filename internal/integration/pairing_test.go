@@ -396,7 +396,7 @@ func (l *listening) kill() {
 	<-l.done
 }
 
-// dialling is `ladulas pair <address> --code <code> --yes` running in the
+// dialling is `ladulas pair --address <address> --pin <PIN> --yes` running in the
 // background: its user answers at once, and the command goes on reporting until
 // the other side answers too.
 type dialling struct {
@@ -412,7 +412,7 @@ func startDialling(
 	t.Helper()
 
 	return dial(t, box, box.command(
-		"pair", address, "--code", code, "--yes"))
+		"pair", "--address", address, "--pin", code, "--yes"))
 }
 
 // startDiallingUnanswered spends the code and then shows a confirmation nobody
@@ -422,7 +422,7 @@ func startDiallingUnanswered(
 ) *dialling {
 	t.Helper()
 
-	cmd := box.command("pair", address, "--code", code)
+	cmd := box.command("pair", "--address", address, "--pin", code)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -920,14 +920,14 @@ func TestAPairingCodeThatDoesNotMatchIsAnError(t *testing.T) {
 	// one looks like and what a guess looks like.
 	wrong := wrongCode(listen.code)
 
-	out, err := phone.run("pair", desk.address,
-		"--code", wrong, "--yes")
+	out, err := phone.run("pair", "--address", desk.address,
+		"--pin", wrong, "--yes")
 	if err == nil {
 		t.Fatalf("a wrong code paired:\n%s", out)
 	}
 
-	if !strings.Contains(out, "does not match") {
-		t.Errorf("the error does not say the code was wrong:\n%s", out)
+	if !strings.Contains(out, "refused the PIN") {
+		t.Errorf("the error does not say the PIN was refused:\n%s", out)
 	}
 
 	// And nothing was written down anywhere as a result.

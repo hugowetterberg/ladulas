@@ -390,6 +390,22 @@ message PairingRequest {
   // rather than learned from the connection, which makes the visual channel the
   // integrity root and leaves nothing for the user to compare by hand.
   bool key_from_code = 11;
+  // The attempts at the code that failed before this one succeeded, on the
+  // side that displayed it. A PIN can be seen across a room, and the
+  // displaying side's announcement of a window tells a neighbour when to try,
+  // so the card says what else knocked while the code was up (decision AV).
+  repeated PairingAttempt failed_attempts = 12;
+}
+
+// PairingAttempt is one attempt at a displayed pairing code that did not
+// succeed (§7, decision AV).
+message PairingAttempt {
+  // Where it came from: the connection's remote address.
+  string source = 1;
+  google.protobuf.Timestamp at = 2;
+  // What happened, in words: a refused PIN, a refused older code, an exchange
+  // that was started and never finished.
+  string outcome = 3;
 }
 
 // KeyListRequest is a peer asking which keys it may use. M3.

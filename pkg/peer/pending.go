@@ -20,8 +20,8 @@ import (
 // A pairing has two halves that keep different time, and this file is the
 // second one (§7).
 //
-// The first half is the pairing code: five minutes, single use, five wrong
-// answers. That is a security property and nothing here touches it. What it
+// The first half is the pairing code: five minutes, single use, five attempts
+// (decision AV). That is a security property and nothing here touches it. What it
 // buys is the right to write down a pending pairing on both sides, and from
 // that point on nothing is bounded by a clock, because what remains is two
 // people comparing two fingerprints and a person is not something an attacker

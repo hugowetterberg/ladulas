@@ -2963,32 +2963,39 @@ func (x *Event) GetHead() string {
 	return ""
 }
 
-// PairingCode is everything a pairing code carries, and the reason the typed
-// code and the QR code are two renderings of one thing rather than two
-// mechanisms (§7).
+// PairingCode is everything a pairing code carries: what a QR holds and what
+// the copyable full code is (§7).
 //
-// The typed code is the secret alone, because ten characters is what somebody
-// will actually read off a screen and type into a headless box; the address is
-// typed alongside it. The QR — and the copyable full code, which is the same
-// string — carries this whole message, so the dialling side knows the listening
-// side's identity key before it connects and the visual channel becomes the
-// integrity root rather than a fingerprint comparison.
+// The typed paths carry less. A typed PIN is the six digits and the address is
+// given beside it; a typed ten-character code, for an older joiner, is the
+// secret and an address. The full code carries the whole message, so the
+// joining side knows the listening side's identity key before it connects and
+// the visual channel becomes the integrity root rather than a fingerprint
+// comparison.
 //
-// The security of the exchange does not depend on which rendering was used.
-// What the secret proves is the same either way, and both sides confirm on
-// their own screens regardless.
+// It stays at version 1 for the overlap release (decision AV), because an
+// older build refuses any other version and any secret that is not ten
+// characters. The PIN is a new field, which an older decoder ignores, so an
+// older phone scanning a new QR reads the ten-character secret and runs the old
+// `Pair` against it. The two secrets are independent: the PIN is never derived
+// from the ten characters or the other way round. After the overlap the secret
+// and the HMAC go, and the version moves to 2.
 type PairingCode struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Version int32                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	// The typed secret, normalised.
+	// The ten-character secret for older joiners, normalised. It is the only
+	// thing the HMAC proof is ever keyed with.
 	Secret string `protobuf:"bytes,2,opt,name=secret,proto3" json:"secret,omitempty"`
 	// The displaying instance's identity key in SSH wire format.
 	IdentityPublicKey []byte                 `protobuf:"bytes,3,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"`
 	Addresses         []string               `protobuf:"bytes,4,rep,name=addresses,proto3" json:"addresses,omitempty"`
 	InstanceName      string                 `protobuf:"bytes,5,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
 	ExpiresAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The six-digit PIN, as six ASCII digits. It is only ever a CPace password
+	// (PairStart, PairFinish), and never goes into an HMAC on any code path.
+	Pin           string `protobuf:"bytes,7,opt,name=pin,proto3" json:"pin,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PairingCode) Reset() {
@@ -3063,10 +3070,18 @@ func (x *PairingCode) GetExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PairingCode) GetPin() string {
+	if x != nil {
+		return x.Pin
+	}
+	return ""
+}
+
+// PairRequest is the older joiner's proof. Overlap release only (decision AV).
 type PairRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Proof that the caller is looking at the pairing code this instance is
-	// displaying, bound to the two identity keys of this very channel:
+	// Proof that the caller is looking at the ten-character code this instance
+	// is displaying, bound to the two identity keys of this very channel:
 	//
 	//   HMAC-SHA256(secret,
 	//     "ladulas-pairing-v1" || 0x00 ||
@@ -3076,12 +3091,11 @@ type PairRequest struct {
 	// The lengths are there so that the two keys cannot be slid past each other
 	// to produce the same input from a different pair.
 	//
-	// The binding is what makes a short typed code safe. A relay that got a
-	// dialler to connect to it rather than to the real listener receives a proof
-	// computed over its own key, which the real listener rejects, and it cannot
-	// recompute one without the secret. The secret is single use, attempt capped
-	// and short lived, which is the whole of the replay story: a proof is bound
-	// to a channel that no longer exists.
+	// The binding stops a relay: one that got a dialler to connect to it
+	// receives a proof computed over its own key, which the real listener
+	// rejects. What the relay can still do is test guesses against the proof it
+	// holds, offline, and fifty bits is what makes that hopeless inside five
+	// minutes. That is why the secret is never the PIN.
 	Proof        []byte `protobuf:"bytes,1,opt,name=proof,proto3" json:"proof,omitempty"`
 	InstanceName string `protobuf:"bytes,2,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
 	// The caller's identity public key in SSH wire format. Redundant with the
@@ -3275,6 +3289,289 @@ func (x *PairResponse) GetReason() string {
 	return ""
 }
 
+// The PIN exchange is CPace, CPACE-RISTR255-SHA512, initiator-responder, with
+// the draft's §10.4 key confirmation, bound like this (decision AV):
+//
+//	PRS  the six ASCII digits of the PIN
+//	CI   lv_cat(<joiner identity key, SSH wire>, <listener identity key,
+//	     SSH wire>), lv_cat being the draft's LEB128 length-value framing —
+//	     both keys as the TLS handshake presented them, joiner first
+//	sid  the 16 random bytes the listener sends in PairStartResponse
+//	ADa  "ladulas-pairing-v2/listener"   (the listener is CPace's A)
+//	ADb  "ladulas-pairing-v2/joiner"     (the joiner is CPace's B)
+//
+// The roles are what make the order safe. The listener speaks first, with a
+// share that reveals nothing; the joiner then has the whole key and commits —
+// sends its share and its tag together — before it has received anything
+// derived from the key. So an attacking joiner learns nothing it can check a
+// guess against until it has spent an attempt, and an impostor listener gets
+// exactly one guess, the joiner's tag. The associated data carries the protocol
+// version, so it cannot be negotiated down, and a direction, so the two tags
+// differ even beyond the draft's own construction. Both are constants and are
+// not sent.
+//
+// The CPace session id is not the pairing's session id: that one is minted
+// when the code is spent, and is what SettlePairing refers to.
+type PairStartRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PairStartRequest) Reset() {
+	*x = PairStartRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairStartRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairStartRequest) ProtoMessage() {}
+
+func (x *PairStartRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairStartRequest.ProtoReflect.Descriptor instead.
+func (*PairStartRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{49}
+}
+
+type PairStartResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The CPace session id, 16 random bytes, minted by the listener for this
+	// run and bound to the identity that asked.
+	SessionId []byte `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Ya, the listener's 32-byte ristretto255 share.
+	Share         []byte `protobuf:"bytes,2,opt,name=share,proto3" json:"share,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PairStartResponse) Reset() {
+	*x = PairStartResponse{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairStartResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairStartResponse) ProtoMessage() {}
+
+func (x *PairStartResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairStartResponse.ProtoReflect.Descriptor instead.
+func (*PairStartResponse) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *PairStartResponse) GetSessionId() []byte {
+	if x != nil {
+		return x.SessionId
+	}
+	return nil
+}
+
+func (x *PairStartResponse) GetShare() []byte {
+	if x != nil {
+		return x.Share
+	}
+	return nil
+}
+
+type PairFinishRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The CPace session id from PairStartResponse.
+	SessionId []byte `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Yb, the joiner's share.
+	Share []byte `protobuf:"bytes,2,opt,name=share,proto3" json:"share,omitempty"`
+	// The joiner's tag: HMAC-SHA-512(mac_key, lv_cat(Yb, ADb)).
+	Confirmation []byte `protobuf:"bytes,3,opt,name=confirmation,proto3" json:"confirmation,omitempty"`
+	// What the listener records about the joiner. It is read only after the
+	// tag has verified: before that, nothing in this message is believed.
+	InstanceName    string   `protobuf:"bytes,4,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
+	ListenAddresses []string `protobuf:"bytes,5,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PairFinishRequest) Reset() {
+	*x = PairFinishRequest{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairFinishRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairFinishRequest) ProtoMessage() {}
+
+func (x *PairFinishRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairFinishRequest.ProtoReflect.Descriptor instead.
+func (*PairFinishRequest) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *PairFinishRequest) GetSessionId() []byte {
+	if x != nil {
+		return x.SessionId
+	}
+	return nil
+}
+
+func (x *PairFinishRequest) GetShare() []byte {
+	if x != nil {
+		return x.Share
+	}
+	return nil
+}
+
+func (x *PairFinishRequest) GetConfirmation() []byte {
+	if x != nil {
+		return x.Confirmation
+	}
+	return nil
+}
+
+func (x *PairFinishRequest) GetInstanceName() string {
+	if x != nil {
+		return x.InstanceName
+	}
+	return ""
+}
+
+func (x *PairFinishRequest) GetListenAddresses() []string {
+	if x != nil {
+		return x.ListenAddresses
+	}
+	return nil
+}
+
+type PairFinishResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The listener's tag: HMAC-SHA-512(mac_key, lv_cat(Ya, ADa)). The joiner
+	// checks it before it believes anything else here.
+	Confirmation []byte `protobuf:"bytes,1,opt,name=confirmation,proto3" json:"confirmation,omitempty"`
+	// Identifies the pending pairing on both sides, as PairResponse's does.
+	SessionId    string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	InstanceName string `protobuf:"bytes,3,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
+	// The intent, as PairResponse carries it (decision AD).
+	MayApprove      bool     `protobuf:"varint,4,opt,name=may_approve,json=mayApprove,proto3" json:"may_approve,omitempty"`
+	MayRequest      bool     `protobuf:"varint,5,opt,name=may_request,json=mayRequest,proto3" json:"may_request,omitempty"`
+	ListenAddresses []string `protobuf:"bytes,6,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PairFinishResponse) Reset() {
+	*x = PairFinishResponse{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairFinishResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairFinishResponse) ProtoMessage() {}
+
+func (x *PairFinishResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairFinishResponse.ProtoReflect.Descriptor instead.
+func (*PairFinishResponse) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *PairFinishResponse) GetConfirmation() []byte {
+	if x != nil {
+		return x.Confirmation
+	}
+	return nil
+}
+
+func (x *PairFinishResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *PairFinishResponse) GetInstanceName() string {
+	if x != nil {
+		return x.InstanceName
+	}
+	return ""
+}
+
+func (x *PairFinishResponse) GetMayApprove() bool {
+	if x != nil {
+		return x.MayApprove
+	}
+	return false
+}
+
+func (x *PairFinishResponse) GetMayRequest() bool {
+	if x != nil {
+		return x.MayRequest
+	}
+	return false
+}
+
+func (x *PairFinishResponse) GetListenAddresses() []string {
+	if x != nil {
+		return x.ListenAddresses
+	}
+	return nil
+}
+
 type SettlePairingRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -3290,7 +3587,7 @@ type SettlePairingRequest struct {
 
 func (x *SettlePairingRequest) Reset() {
 	*x = SettlePairingRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[49]
+	mi := &file_ladulas_v1_service_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3302,7 +3599,7 @@ func (x *SettlePairingRequest) String() string {
 func (*SettlePairingRequest) ProtoMessage() {}
 
 func (x *SettlePairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[49]
+	mi := &file_ladulas_v1_service_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3315,7 +3612,7 @@ func (x *SettlePairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlePairingRequest.ProtoReflect.Descriptor instead.
 func (*SettlePairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{49}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *SettlePairingRequest) GetSessionId() string {
@@ -3351,7 +3648,7 @@ type SettlePairingResponse struct {
 
 func (x *SettlePairingResponse) Reset() {
 	*x = SettlePairingResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[50]
+	mi := &file_ladulas_v1_service_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3363,7 +3660,7 @@ func (x *SettlePairingResponse) String() string {
 func (*SettlePairingResponse) ProtoMessage() {}
 
 func (x *SettlePairingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[50]
+	mi := &file_ladulas_v1_service_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3376,7 +3673,7 @@ func (x *SettlePairingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlePairingResponse.ProtoReflect.Descriptor instead.
 func (*SettlePairingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{50}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *SettlePairingResponse) GetState() PairingRecordState {
@@ -3409,7 +3706,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[51]
+	mi := &file_ladulas_v1_service_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3421,7 +3718,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[51]
+	mi := &file_ladulas_v1_service_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3434,7 +3731,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{51}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *PingRequest) GetSentAt() *timestamppb.Timestamp {
@@ -3456,7 +3753,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[52]
+	mi := &file_ladulas_v1_service_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3468,7 +3765,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[52]
+	mi := &file_ladulas_v1_service_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3481,7 +3778,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{52}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PingResponse) GetSentAt() *timestamppb.Timestamp {
@@ -3518,7 +3815,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[53]
+	mi := &file_ladulas_v1_service_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3530,7 +3827,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[53]
+	mi := &file_ladulas_v1_service_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3543,7 +3840,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{53}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *WatchRequest) GetListenAddresses() []string {
@@ -3567,7 +3864,7 @@ type PresenceEvent struct {
 
 func (x *PresenceEvent) Reset() {
 	*x = PresenceEvent{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[54]
+	mi := &file_ladulas_v1_service_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3579,7 +3876,7 @@ func (x *PresenceEvent) String() string {
 func (*PresenceEvent) ProtoMessage() {}
 
 func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[54]
+	mi := &file_ladulas_v1_service_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3592,7 +3889,7 @@ func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
 func (*PresenceEvent) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{54}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *PresenceEvent) GetTimestamp() *timestamppb.Timestamp {
@@ -3802,7 +4099,7 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"project_id\x18\x03 \x01(\tR\tprojectId\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12\x12\n" +
-	"\x04head\x18\x05 \x01(\tR\x04head\"\xed\x01\n" +
+	"\x04head\x18\x05 \x01(\tR\x04head\"\xff\x01\n" +
 	"\vPairingCode\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x05R\aversion\x12\x16\n" +
 	"\x06secret\x18\x02 \x01(\tR\x06secret\x12.\n" +
@@ -3810,7 +4107,8 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\taddresses\x18\x04 \x03(\tR\taddresses\x12#\n" +
 	"\rinstance_name\x18\x05 \x01(\tR\finstanceName\x129\n" +
 	"\n" +
-	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc9\x01\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x10\n" +
+	"\x03pin\x18\a \x01(\tR\x03pin\"\xc9\x01\n" +
 	"\vPairRequest\x12\x14\n" +
 	"\x05proof\x18\x01 \x01(\fR\x05proof\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12.\n" +
@@ -3828,7 +4126,29 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"mayRequest\x12)\n" +
 	"\x10listen_addresses\x18\a \x03(\tR\x0flistenAddresses\x12\"\n" +
 	"\fconfirmation\x18\b \x01(\fR\fconfirmation\x12\x16\n" +
-	"\x06reason\x18\t \x01(\tR\x06reason\"\x80\x01\n" +
+	"\x06reason\x18\t \x01(\tR\x06reason\"\x12\n" +
+	"\x10PairStartRequest\"H\n" +
+	"\x11PairStartResponse\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\fR\tsessionId\x12\x14\n" +
+	"\x05share\x18\x02 \x01(\fR\x05share\"\xbc\x01\n" +
+	"\x11PairFinishRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\fR\tsessionId\x12\x14\n" +
+	"\x05share\x18\x02 \x01(\fR\x05share\x12\"\n" +
+	"\fconfirmation\x18\x03 \x01(\fR\fconfirmation\x12#\n" +
+	"\rinstance_name\x18\x04 \x01(\tR\finstanceName\x12)\n" +
+	"\x10listen_addresses\x18\x05 \x03(\tR\x0flistenAddresses\"\xe9\x01\n" +
+	"\x12PairFinishResponse\x12\"\n" +
+	"\fconfirmation\x18\x01 \x01(\fR\fconfirmation\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12#\n" +
+	"\rinstance_name\x18\x03 \x01(\tR\finstanceName\x12\x1f\n" +
+	"\vmay_approve\x18\x04 \x01(\bR\n" +
+	"mayApprove\x12\x1f\n" +
+	"\vmay_request\x18\x05 \x01(\bR\n" +
+	"mayRequest\x12)\n" +
+	"\x10listen_addresses\x18\x06 \x03(\tR\x0flistenAddresses\"\x80\x01\n" +
 	"\x14SettlePairingRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x121\n" +
@@ -3904,9 +4224,12 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x10DocumentVersions\x12#.ladulas.v1.DocumentVersionsRequest\x1a$.ladulas.v1.DocumentVersionsResponse\x12f\n" +
 	"\x13FetchProjectVersion\x12&.ladulas.v1.FetchProjectVersionRequest\x1a'.ladulas.v1.FetchProjectVersionResponse2H\n" +
 	"\fEventService\x128\n" +
-	"\x06Events\x12\x19.ladulas.v1.EventsRequest\x1a\x11.ladulas.v1.Event0\x012\xa1\x01\n" +
+	"\x06Events\x12\x19.ladulas.v1.EventsRequest\x1a\x11.ladulas.v1.Event0\x012\xb8\x02\n" +
 	"\x0ePairingService\x129\n" +
-	"\x04Pair\x12\x17.ladulas.v1.PairRequest\x1a\x18.ladulas.v1.PairResponse\x12T\n" +
+	"\x04Pair\x12\x17.ladulas.v1.PairRequest\x1a\x18.ladulas.v1.PairResponse\x12H\n" +
+	"\tPairStart\x12\x1c.ladulas.v1.PairStartRequest\x1a\x1d.ladulas.v1.PairStartResponse\x12K\n" +
+	"\n" +
+	"PairFinish\x12\x1d.ladulas.v1.PairFinishRequest\x1a\x1e.ladulas.v1.PairFinishResponse\x12T\n" +
 	"\rSettlePairing\x12 .ladulas.v1.SettlePairingRequest\x1a!.ladulas.v1.SettlePairingResponse2\x8c\x01\n" +
 	"\x0fPresenceService\x129\n" +
 	"\x04Ping\x12\x17.ladulas.v1.PingRequest\x1a\x18.ladulas.v1.PingResponse\x12>\n" +
@@ -3925,7 +4248,7 @@ func file_ladulas_v1_service_proto_rawDescGZIP() []byte {
 }
 
 var file_ladulas_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
+var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
 var file_ladulas_v1_service_proto_goTypes = []any{
 	(ApprovalEventKind)(0),              // 0: ladulas.v1.ApprovalEventKind
 	(EventKind)(0),                      // 1: ladulas.v1.EventKind
@@ -3980,71 +4303,75 @@ var file_ladulas_v1_service_proto_goTypes = []any{
 	(*PairingCode)(nil),                 // 50: ladulas.v1.PairingCode
 	(*PairRequest)(nil),                 // 51: ladulas.v1.PairRequest
 	(*PairResponse)(nil),                // 52: ladulas.v1.PairResponse
-	(*SettlePairingRequest)(nil),        // 53: ladulas.v1.SettlePairingRequest
-	(*SettlePairingResponse)(nil),       // 54: ladulas.v1.SettlePairingResponse
-	(*PingRequest)(nil),                 // 55: ladulas.v1.PingRequest
-	(*PingResponse)(nil),                // 56: ladulas.v1.PingResponse
-	(*WatchRequest)(nil),                // 57: ladulas.v1.WatchRequest
-	(*PresenceEvent)(nil),               // 58: ladulas.v1.PresenceEvent
-	(*timestamppb.Timestamp)(nil),       // 59: google.protobuf.Timestamp
-	(*SignedApproval)(nil),              // 60: ladulas.v1.SignedApproval
-	(*GitDiff)(nil),                     // 61: ladulas.v1.GitDiff
-	(*GrantUse)(nil),                    // 62: ladulas.v1.GrantUse
-	(*SignedDelegation)(nil),            // 63: ladulas.v1.SignedDelegation
-	(*durationpb.Duration)(nil),         // 64: google.protobuf.Duration
-	(*SignedEndorsement)(nil),           // 65: ladulas.v1.SignedEndorsement
-	(*SignedRetraction)(nil),            // 66: ladulas.v1.SignedRetraction
-	(*KeyRef)(nil),                      // 67: ladulas.v1.KeyRef
-	(*SyncEntry)(nil),                   // 68: ladulas.v1.SyncEntry
-	(*Publication)(nil),                 // 69: ladulas.v1.Publication
-	(SyncChangeKind)(0),                 // 70: ladulas.v1.SyncChangeKind
-	(*ProjectEntry)(nil),                // 71: ladulas.v1.ProjectEntry
-	(*DocumentVersion)(nil),             // 72: ladulas.v1.DocumentVersion
-	(*KindPolicy)(nil),                  // 73: ladulas.v1.KindPolicy
+	(*PairStartRequest)(nil),            // 53: ladulas.v1.PairStartRequest
+	(*PairStartResponse)(nil),           // 54: ladulas.v1.PairStartResponse
+	(*PairFinishRequest)(nil),           // 55: ladulas.v1.PairFinishRequest
+	(*PairFinishResponse)(nil),          // 56: ladulas.v1.PairFinishResponse
+	(*SettlePairingRequest)(nil),        // 57: ladulas.v1.SettlePairingRequest
+	(*SettlePairingResponse)(nil),       // 58: ladulas.v1.SettlePairingResponse
+	(*PingRequest)(nil),                 // 59: ladulas.v1.PingRequest
+	(*PingResponse)(nil),                // 60: ladulas.v1.PingResponse
+	(*WatchRequest)(nil),                // 61: ladulas.v1.WatchRequest
+	(*PresenceEvent)(nil),               // 62: ladulas.v1.PresenceEvent
+	(*timestamppb.Timestamp)(nil),       // 63: google.protobuf.Timestamp
+	(*SignedApproval)(nil),              // 64: ladulas.v1.SignedApproval
+	(*GitDiff)(nil),                     // 65: ladulas.v1.GitDiff
+	(*GrantUse)(nil),                    // 66: ladulas.v1.GrantUse
+	(*SignedDelegation)(nil),            // 67: ladulas.v1.SignedDelegation
+	(*durationpb.Duration)(nil),         // 68: google.protobuf.Duration
+	(*SignedEndorsement)(nil),           // 69: ladulas.v1.SignedEndorsement
+	(*SignedRetraction)(nil),            // 70: ladulas.v1.SignedRetraction
+	(*KeyRef)(nil),                      // 71: ladulas.v1.KeyRef
+	(*SyncEntry)(nil),                   // 72: ladulas.v1.SyncEntry
+	(*Publication)(nil),                 // 73: ladulas.v1.Publication
+	(SyncChangeKind)(0),                 // 74: ladulas.v1.SyncChangeKind
+	(*ProjectEntry)(nil),                // 75: ladulas.v1.ProjectEntry
+	(*DocumentVersion)(nil),             // 76: ladulas.v1.DocumentVersion
+	(*KindPolicy)(nil),                  // 77: ladulas.v1.KindPolicy
 }
 var file_ladulas_v1_service_proto_depIdxs = []int32{
 	0,  // 0: ladulas.v1.ApprovalEvent.kind:type_name -> ladulas.v1.ApprovalEventKind
-	59, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
-	60, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
-	61, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
-	62, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
-	63, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
-	62, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
-	64, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
+	63, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
+	64, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
+	65, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
+	66, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
+	67, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
+	66, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
+	68, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
 	16, // 8: ladulas.v1.FetchPendingResponse.pending:type_name -> ladulas.v1.PendingApproval
-	59, // 9: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
-	64, // 10: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
-	65, // 11: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	60, // 12: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
-	65, // 13: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	66, // 14: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
-	66, // 15: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
-	67, // 16: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
-	67, // 17: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
-	65, // 18: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	60, // 19: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
+	63, // 9: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
+	68, // 10: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
+	69, // 11: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	64, // 12: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
+	69, // 13: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	70, // 14: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
+	70, // 15: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
+	71, // 16: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
+	71, // 17: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
+	69, // 18: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	64, // 19: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
 	33, // 20: ladulas.v1.CollectKeyOffersResponse.offers:type_name -> ladulas.v1.OfferedKey
-	68, // 21: ladulas.v1.SyncProjectRequest.have:type_name -> ladulas.v1.SyncEntry
-	69, // 22: ladulas.v1.SyncProjectEvent.project:type_name -> ladulas.v1.Publication
-	70, // 23: ladulas.v1.SyncProjectEvent.kind:type_name -> ladulas.v1.SyncChangeKind
-	71, // 24: ladulas.v1.SyncProjectEvent.file:type_name -> ladulas.v1.ProjectEntry
-	72, // 25: ladulas.v1.DocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
-	71, // 26: ladulas.v1.FetchProjectVersionResponse.file:type_name -> ladulas.v1.ProjectEntry
-	72, // 27: ladulas.v1.FetchProjectVersionResponse.version:type_name -> ladulas.v1.DocumentVersion
-	71, // 28: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	71, // 29: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	69, // 30: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
-	73, // 31: ladulas.v1.ListProjectsResponse.kinds:type_name -> ladulas.v1.KindPolicy
-	71, // 32: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
+	72, // 21: ladulas.v1.SyncProjectRequest.have:type_name -> ladulas.v1.SyncEntry
+	73, // 22: ladulas.v1.SyncProjectEvent.project:type_name -> ladulas.v1.Publication
+	74, // 23: ladulas.v1.SyncProjectEvent.kind:type_name -> ladulas.v1.SyncChangeKind
+	75, // 24: ladulas.v1.SyncProjectEvent.file:type_name -> ladulas.v1.ProjectEntry
+	76, // 25: ladulas.v1.DocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
+	75, // 26: ladulas.v1.FetchProjectVersionResponse.file:type_name -> ladulas.v1.ProjectEntry
+	76, // 27: ladulas.v1.FetchProjectVersionResponse.version:type_name -> ladulas.v1.DocumentVersion
+	75, // 28: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	75, // 29: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	73, // 30: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
+	77, // 31: ladulas.v1.ListProjectsResponse.kinds:type_name -> ladulas.v1.KindPolicy
+	75, // 32: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
 	1,  // 33: ladulas.v1.Event.kind:type_name -> ladulas.v1.EventKind
-	59, // 34: ladulas.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
-	59, // 35: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
+	63, // 34: ladulas.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
+	63, // 35: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
 	2,  // 36: ladulas.v1.SettlePairingRequest.answer:type_name -> ladulas.v1.PairingAnswer
 	3,  // 37: ladulas.v1.SettlePairingResponse.state:type_name -> ladulas.v1.PairingRecordState
 	2,  // 38: ladulas.v1.SettlePairingResponse.answer:type_name -> ladulas.v1.PairingAnswer
-	59, // 39: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
-	59, // 40: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
-	59, // 41: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	63, // 39: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
+	63, // 40: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
+	63, // 41: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
 	4,  // 42: ladulas.v1.ApprovalService.RequestApproval:input_type -> ladulas.v1.RequestApprovalRequest
 	6,  // 43: ladulas.v1.ApprovalService.CancelApproval:input_type -> ladulas.v1.CancelApprovalRequest
 	8,  // 44: ladulas.v1.ApprovalService.FetchDiff:input_type -> ladulas.v1.FetchDiffRequest
@@ -4068,37 +4395,41 @@ var file_ladulas_v1_service_proto_depIdxs = []int32{
 	38, // 62: ladulas.v1.ProjectService.FetchProjectVersion:input_type -> ladulas.v1.FetchProjectVersionRequest
 	48, // 63: ladulas.v1.EventService.Events:input_type -> ladulas.v1.EventsRequest
 	51, // 64: ladulas.v1.PairingService.Pair:input_type -> ladulas.v1.PairRequest
-	53, // 65: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
-	55, // 66: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
-	57, // 67: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
-	5,  // 68: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
-	7,  // 69: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
-	9,  // 70: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
-	15, // 71: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
-	18, // 72: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
-	11, // 73: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
-	13, // 74: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
-	24, // 75: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
-	28, // 76: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
-	30, // 77: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
-	32, // 78: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
-	26, // 79: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
-	20, // 80: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
-	22, // 81: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
-	45, // 82: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
-	41, // 83: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
-	43, // 84: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
-	47, // 85: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
-	35, // 86: ladulas.v1.ProjectService.SyncProject:output_type -> ladulas.v1.SyncProjectEvent
-	37, // 87: ladulas.v1.ProjectService.DocumentVersions:output_type -> ladulas.v1.DocumentVersionsResponse
-	39, // 88: ladulas.v1.ProjectService.FetchProjectVersion:output_type -> ladulas.v1.FetchProjectVersionResponse
-	49, // 89: ladulas.v1.EventService.Events:output_type -> ladulas.v1.Event
-	52, // 90: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
-	54, // 91: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
-	56, // 92: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
-	58, // 93: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
-	68, // [68:94] is the sub-list for method output_type
-	42, // [42:68] is the sub-list for method input_type
+	53, // 65: ladulas.v1.PairingService.PairStart:input_type -> ladulas.v1.PairStartRequest
+	55, // 66: ladulas.v1.PairingService.PairFinish:input_type -> ladulas.v1.PairFinishRequest
+	57, // 67: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
+	59, // 68: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
+	61, // 69: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
+	5,  // 70: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
+	7,  // 71: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
+	9,  // 72: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
+	15, // 73: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
+	18, // 74: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
+	11, // 75: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
+	13, // 76: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
+	24, // 77: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
+	28, // 78: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
+	30, // 79: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
+	32, // 80: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
+	26, // 81: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
+	20, // 82: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
+	22, // 83: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
+	45, // 84: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
+	41, // 85: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
+	43, // 86: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
+	47, // 87: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
+	35, // 88: ladulas.v1.ProjectService.SyncProject:output_type -> ladulas.v1.SyncProjectEvent
+	37, // 89: ladulas.v1.ProjectService.DocumentVersions:output_type -> ladulas.v1.DocumentVersionsResponse
+	39, // 90: ladulas.v1.ProjectService.FetchProjectVersion:output_type -> ladulas.v1.FetchProjectVersionResponse
+	49, // 91: ladulas.v1.EventService.Events:output_type -> ladulas.v1.Event
+	52, // 92: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
+	54, // 93: ladulas.v1.PairingService.PairStart:output_type -> ladulas.v1.PairStartResponse
+	56, // 94: ladulas.v1.PairingService.PairFinish:output_type -> ladulas.v1.PairFinishResponse
+	58, // 95: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
+	60, // 96: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
+	62, // 97: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
+	70, // [70:98] is the sub-list for method output_type
+	42, // [42:70] is the sub-list for method input_type
 	42, // [42:42] is the sub-list for extension type_name
 	42, // [42:42] is the sub-list for extension extendee
 	0,  // [0:42] is the sub-list for field type_name
@@ -4117,7 +4448,7 @@ func file_ladulas_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_service_proto_rawDesc), len(file_ladulas_v1_service_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   55,
+			NumMessages:   59,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

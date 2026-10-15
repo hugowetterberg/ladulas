@@ -214,7 +214,8 @@ message TrustRecord {
 // human comparing two fingerprints is not something an attacker can guess.
 message PendingPairing {
   // The session id both sides know the attempt by. Minted by the listening
-  // side and returned to the dialling side by PairResponse.
+  // side and returned to the dialling side by PairFinishResponse, or by
+  // PairResponse for an older joiner.
   string session_id = 1;
   // The peer as the exchange established it. The identity key is the record and
   // the fingerprint is derived from it, exactly as in TrustRecord.
@@ -250,6 +251,10 @@ message PendingPairing {
   // surface showing the prompt and a surface showing the pending list are
   // talking about the same thing.
   string confirmation_request_id = 17;
+  // The failed attempts at the code before it was spent, on the side that
+  // displayed it, so the confirmation can say so after a restart as well as
+  // before one (decision AV).
+  repeated ladulas.v1.PairingAttempt failed_attempts = 18;
 
   // 8 and 9 were what the peer said it would grant us, shown on the prompt and
   // believed by nobody. There is nothing left for the peer to say (decision

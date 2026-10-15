@@ -108,6 +108,12 @@ const (
 	EventServiceEventsProcedure = "/ladulas.v1.EventService/Events"
 	// PairingServicePairProcedure is the fully-qualified name of the PairingService's Pair RPC.
 	PairingServicePairProcedure = "/ladulas.v1.PairingService/Pair"
+	// PairingServicePairStartProcedure is the fully-qualified name of the PairingService's PairStart
+	// RPC.
+	PairingServicePairStartProcedure = "/ladulas.v1.PairingService/PairStart"
+	// PairingServicePairFinishProcedure is the fully-qualified name of the PairingService's PairFinish
+	// RPC.
+	PairingServicePairFinishProcedure = "/ladulas.v1.PairingService/PairFinish"
 	// PairingServiceSettlePairingProcedure is the fully-qualified name of the PairingService's
 	// SettlePairing RPC.
 	PairingServiceSettlePairingProcedure = "/ladulas.v1.PairingService/SettlePairing"
@@ -1241,10 +1247,23 @@ func (UnimplementedEventServiceHandler) Events(context.Context, *connect.Request
 
 // PairingServiceClient is a client for the ladulas.v1.PairingService service.
 type PairingServiceClient interface {
-	// Pair proves the pairing code and returns at once, with a session id both
-	// sides record. It does not wait for anybody: the human confirmation is
-	// raised behind it and answered whenever the human gets to it.
+	// Pair proves the ten-character code and returns at once, with a session id
+	// both sides record. It does not wait for anybody: the human confirmation is
+	// raised behind it and answered whenever the human gets to it. A window that
+	// holds no ten-character code refuses it. To be removed after the overlap
+	// release (decision AV).
 	Pair(context.Context, *connect.Request[ladulasv1.PairRequest]) (*connect.Response[ladulasv1.PairResponse], error)
+	// PairStart is the first round of the PIN exchange: the listener charges
+	// one attempt to the window, mints a CPace session id and answers with its
+	// share. It carries nothing that lets the caller check a guess.
+	PairStart(context.Context, *connect.Request[ladulasv1.PairStartRequest]) (*connect.Response[ladulasv1.PairStartResponse], error)
+	// PairFinish is the second round: the joiner's share and its confirmation
+	// tag. The listener verifies the tag before it acts on anything else in the
+	// message and before it sends anything derived from the key; only then does
+	// it refund the attempt, spend the code, write down a pending pairing and
+	// answer with its own tag. It must come from the identity that made the
+	// PairStart.
+	PairFinish(context.Context, *connect.Request[ladulasv1.PairFinishRequest]) (*connect.Response[ladulasv1.PairFinishResponse], error)
 	// SettlePairing reconciles one pending pairing. The caller states its own
 	// answer so far and is told the callee's; either side may call it, as often
 	// as it likes, and the same answer twice changes nothing. It is the only way
@@ -1270,6 +1289,18 @@ func NewPairingServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(pairingServiceMethods.ByName("Pair")),
 			connect.WithClientOptions(opts...),
 		),
+		pairStart: connect.NewClient[ladulasv1.PairStartRequest, ladulasv1.PairStartResponse](
+			httpClient,
+			baseURL+PairingServicePairStartProcedure,
+			connect.WithSchema(pairingServiceMethods.ByName("PairStart")),
+			connect.WithClientOptions(opts...),
+		),
+		pairFinish: connect.NewClient[ladulasv1.PairFinishRequest, ladulasv1.PairFinishResponse](
+			httpClient,
+			baseURL+PairingServicePairFinishProcedure,
+			connect.WithSchema(pairingServiceMethods.ByName("PairFinish")),
+			connect.WithClientOptions(opts...),
+		),
 		settlePairing: connect.NewClient[ladulasv1.SettlePairingRequest, ladulasv1.SettlePairingResponse](
 			httpClient,
 			baseURL+PairingServiceSettlePairingProcedure,
@@ -1282,12 +1313,24 @@ func NewPairingServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 // pairingServiceClient implements PairingServiceClient.
 type pairingServiceClient struct {
 	pair          *connect.Client[ladulasv1.PairRequest, ladulasv1.PairResponse]
+	pairStart     *connect.Client[ladulasv1.PairStartRequest, ladulasv1.PairStartResponse]
+	pairFinish    *connect.Client[ladulasv1.PairFinishRequest, ladulasv1.PairFinishResponse]
 	settlePairing *connect.Client[ladulasv1.SettlePairingRequest, ladulasv1.SettlePairingResponse]
 }
 
 // Pair calls ladulas.v1.PairingService.Pair.
 func (c *pairingServiceClient) Pair(ctx context.Context, req *connect.Request[ladulasv1.PairRequest]) (*connect.Response[ladulasv1.PairResponse], error) {
 	return c.pair.CallUnary(ctx, req)
+}
+
+// PairStart calls ladulas.v1.PairingService.PairStart.
+func (c *pairingServiceClient) PairStart(ctx context.Context, req *connect.Request[ladulasv1.PairStartRequest]) (*connect.Response[ladulasv1.PairStartResponse], error) {
+	return c.pairStart.CallUnary(ctx, req)
+}
+
+// PairFinish calls ladulas.v1.PairingService.PairFinish.
+func (c *pairingServiceClient) PairFinish(ctx context.Context, req *connect.Request[ladulasv1.PairFinishRequest]) (*connect.Response[ladulasv1.PairFinishResponse], error) {
+	return c.pairFinish.CallUnary(ctx, req)
 }
 
 // SettlePairing calls ladulas.v1.PairingService.SettlePairing.
@@ -1297,10 +1340,23 @@ func (c *pairingServiceClient) SettlePairing(ctx context.Context, req *connect.R
 
 // PairingServiceHandler is an implementation of the ladulas.v1.PairingService service.
 type PairingServiceHandler interface {
-	// Pair proves the pairing code and returns at once, with a session id both
-	// sides record. It does not wait for anybody: the human confirmation is
-	// raised behind it and answered whenever the human gets to it.
+	// Pair proves the ten-character code and returns at once, with a session id
+	// both sides record. It does not wait for anybody: the human confirmation is
+	// raised behind it and answered whenever the human gets to it. A window that
+	// holds no ten-character code refuses it. To be removed after the overlap
+	// release (decision AV).
 	Pair(context.Context, *connect.Request[ladulasv1.PairRequest]) (*connect.Response[ladulasv1.PairResponse], error)
+	// PairStart is the first round of the PIN exchange: the listener charges
+	// one attempt to the window, mints a CPace session id and answers with its
+	// share. It carries nothing that lets the caller check a guess.
+	PairStart(context.Context, *connect.Request[ladulasv1.PairStartRequest]) (*connect.Response[ladulasv1.PairStartResponse], error)
+	// PairFinish is the second round: the joiner's share and its confirmation
+	// tag. The listener verifies the tag before it acts on anything else in the
+	// message and before it sends anything derived from the key; only then does
+	// it refund the attempt, spend the code, write down a pending pairing and
+	// answer with its own tag. It must come from the identity that made the
+	// PairStart.
+	PairFinish(context.Context, *connect.Request[ladulasv1.PairFinishRequest]) (*connect.Response[ladulasv1.PairFinishResponse], error)
 	// SettlePairing reconciles one pending pairing. The caller states its own
 	// answer so far and is told the callee's; either side may call it, as often
 	// as it likes, and the same answer twice changes nothing. It is the only way
@@ -1322,6 +1378,18 @@ func NewPairingServiceHandler(svc PairingServiceHandler, opts ...connect.Handler
 		connect.WithSchema(pairingServiceMethods.ByName("Pair")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pairingServicePairStartHandler := connect.NewUnaryHandler(
+		PairingServicePairStartProcedure,
+		svc.PairStart,
+		connect.WithSchema(pairingServiceMethods.ByName("PairStart")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pairingServicePairFinishHandler := connect.NewUnaryHandler(
+		PairingServicePairFinishProcedure,
+		svc.PairFinish,
+		connect.WithSchema(pairingServiceMethods.ByName("PairFinish")),
+		connect.WithHandlerOptions(opts...),
+	)
 	pairingServiceSettlePairingHandler := connect.NewUnaryHandler(
 		PairingServiceSettlePairingProcedure,
 		svc.SettlePairing,
@@ -1332,6 +1400,10 @@ func NewPairingServiceHandler(svc PairingServiceHandler, opts ...connect.Handler
 		switch r.URL.Path {
 		case PairingServicePairProcedure:
 			pairingServicePairHandler.ServeHTTP(w, r)
+		case PairingServicePairStartProcedure:
+			pairingServicePairStartHandler.ServeHTTP(w, r)
+		case PairingServicePairFinishProcedure:
+			pairingServicePairFinishHandler.ServeHTTP(w, r)
 		case PairingServiceSettlePairingProcedure:
 			pairingServiceSettlePairingHandler.ServeHTTP(w, r)
 		default:
@@ -1345,6 +1417,14 @@ type UnimplementedPairingServiceHandler struct{}
 
 func (UnimplementedPairingServiceHandler) Pair(context.Context, *connect.Request[ladulasv1.PairRequest]) (*connect.Response[ladulasv1.PairResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.PairingService.Pair is not implemented"))
+}
+
+func (UnimplementedPairingServiceHandler) PairStart(context.Context, *connect.Request[ladulasv1.PairStartRequest]) (*connect.Response[ladulasv1.PairStartResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.PairingService.PairStart is not implemented"))
+}
+
+func (UnimplementedPairingServiceHandler) PairFinish(context.Context, *connect.Request[ladulasv1.PairFinishRequest]) (*connect.Response[ladulasv1.PairFinishResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.PairingService.PairFinish is not implemented"))
 }
 
 func (UnimplementedPairingServiceHandler) SettlePairing(context.Context, *connect.Request[ladulasv1.SettlePairingRequest]) (*connect.Response[ladulasv1.SettlePairingResponse], error) {

@@ -736,17 +736,25 @@ ask this instance to approve is not thereby allowed to borrow its keys — and
 the all-keys flag exists because a list of everything held today silently fails
 to cover a key generated tomorrow.
 
-Flow: instance A says what the pairing is for and displays a pairing code
-(and a QR — the Krypton pattern; the QR carries A's identity public key so
-B can seal its response to it, making the visual channel the integrity
-root). B connects to A's `host:port`, both sides display both fingerprints
-and the same sentence about what the pairing does, and *each side's user
-confirms on that side*. Trust records live in the encrypted local store
-(§10) and are revocable unilaterally.
+Flow: instance A says what the pairing is for and displays a six-digit PIN
+beside a QR — the Krypton pattern. B either types the PIN with A's
+`host:port`, or scans the QR (or pastes the same string, the *full code*),
+which carries the PIN, A's addresses and A's identity public key; a B that
+has the key pins A's handshake before anything else happens, which makes
+the visual channel the integrity root. The two then run the PIN exchange
+over the TLS channel (decision AV, below), both sides display both
+fingerprints and the same sentence about what the pairing does, and *each
+side's user confirms on that side*. Trust records live in the encrypted
+local store (§10) and are revocable unilaterally.
+
+This paragraph said until 2026-10-14 that the QR's key was there so that B
+could "seal its response to it". Nothing ever sealed anything: what the key
+buys is the pin on the handshake, and the response travels inside the
+pinned TLS channel like everything else.
 
 **The QR is drawn** since 2026-08-19 — decision AE. A desktop shows it
-beside the typed code and the command line, on the same screen the intent
-was chosen on; a headless box still prints the string and the `qrencode`
+beside the PIN, with the full code to copy beneath them, on the same screen
+the intent was chosen on; a headless box still prints the string and the `qrencode`
 invocation, because a terminal is not somewhere Ladulås gets to choose the
 pixels. It is one route on the bridge (`/api/v1/pairings/qr`), drawn from
 `rsc.io/qr` and rendered to SVG here, and it is the one response the bridge
@@ -755,8 +763,12 @@ with five minutes to live.
 
 **A pairing is in two halves that keep different time** (decision M). The
 first half is the code: `trust.CodeValidity` (5 minutes), single use, five
-wrong answers. That window is what bounds guessing a fifty-bit secret and
-it is a security property; nothing about it is negotiable. What it buys is
+attempts. That window is what bounds guessing the PIN — five in a million
+per code, because each attempt is one online guess at a CPace exchange and
+nothing can be searched offline (decision AV) — and it is a security
+property; nothing about it is negotiable. It bounded guessing a fifty-bit
+secret until 2026-10-14, when the bound was the secret's length and the cap
+was belt and braces; now the cap is the bound. What it buys is
 the second half, and the second half has no clock on it at all — because
 what remains is two people comparing two hashes on two screens, and a
 person is not something an attacker can guess at ten thousand tries a
@@ -792,8 +804,8 @@ From there, three rules:
   engine that found nobody to ask leaves the pairing exactly where it was
   and tries again when an approver appears. The ways a pairing ends are:
   somebody says no, somebody withdraws it, or the two ends turn out to
-  disagree about who they are talking to — a proof that does not match the
-  code, an identity in a message that is not the one on the channel, a
+  disagree about who they are talking to — a PIN exchange that does not
+  confirm, an identity in a message that is not the one on the channel, a
   session id presented by an identity it does not belong to. Those are
   errors. Unreachable, asleep, backgrounded, restarted and slow are not.
 
@@ -841,6 +853,142 @@ narrow fixes for that (a budget per side, a report on a context of its
 own, an error that distinguishes "unanswered" from "declined") were
 correct and are still here; what they could not fix is that the pairing
 had nowhere to live.
+
+### The PIN, and the exchange that proves it — **decision AV**
+
+**The code a person types is six digits** since 2026-10-14. Before that it
+was ten characters of Crockford base32 with an address typed beside it, and
+what made ten characters enough was that they were never sent: the joiner
+sent `HMAC-SHA256(secret, listener key, joiner key)` and the listener sent
+one back under a second prefix. That binding stopped a relay — one that got
+the joiner to connect to it received a proof over its own key, which the
+real listener rejected — but it did not stop the relay *testing guesses*
+against the proof it held, offline. Fifty bits is what made that hopeless
+inside five minutes. Twenty bits is a search of milliseconds. So a PIN short
+enough to read across a room and type cannot be protected by an HMAC at all,
+and **the PIN never goes into an HMAC, on any path** — that is invariant 1
+below, and the one thing in this section never to undo.
+
+**The exchange is CPace** (`internal/cpace`, draft-irtf-cfrg-cpace-21,
+CPACE-RISTR255-SHA512, with the draft's §10.4 key confirmation), written in
+the tree on `github.com/gtank/ristretto255` and tested against the draft's
+own ristretto255 vectors. A PAKE is the construction in which each run
+leaks one online guess and nothing that can be searched afterwards. SPAKE2
+was the alternative and was not chosen: it needs fixed group elements whose
+discrete logs nobody may know, and its one Go implementation has not changed
+since 2021. The one maintained Go CPace (`the-sarge/cpace`) is unreviewed by
+its own account and declares a newer Go than this module; two hundred lines
+that follow the draft step by step were cheaper to review than a dependency.
+It runs inside the TLS channel, never instead of it: the identity keys still
+authenticate the channel (decision A), and the PIN only proves that the two
+ends are looking at one screen.
+
+How it is bound, which is where the security argument lives (the wire's
+copy is the comment above `PairStartRequest` in `service.proto`):
+
+* **Roles.** The listener is CPace's initiator and the joiner its
+  responder, so the listener speaks first with a share that reveals nothing,
+  and the joiner sends its share *and its confirmation tag together* — it
+  commits before it has received anything derived from the key. The
+  listener verifies that tag before it sends its own and before it reads
+  anything else the joiner said. An attacking joiner learns nothing it can
+  check a guess against until it has spent an attempt; an impostor listener
+  gets one guess, the joiner's tag.
+* **Party identities** are both identity keys, as each side's TLS handshake
+  presented them, in SSH wire format, framed with the draft's `lv_cat`, in
+  CI — joiner first, then listener. The draft recommends the initiator
+  first; what it requires is that the encoding ties each identity to its
+  role, which a fixed order does, and the order was settled before the roles
+  were, so it was kept. A relay computes over its own key and arrives at a
+  different key altogether.
+* **Associated data** is `ladulas-pairing-v2/listener` and
+  `ladulas-pairing-v2/joiner`: the protocol version, so it cannot be
+  negotiated down, and the direction, as the older proof's two prefixes had.
+  The draft's tags are already over different messages, so a tag cannot be
+  reflected; the labels make the associated data differ as well.
+* **Session id.** The listener mints sixteen random bytes per run and sends
+  them in round one. It is not the pairing's session id, which is minted
+  when the code is spent.
+* **Both rounds belong to one TLS identity.** The two rounds are two RPCs
+  and may arrive on two connections, so the listener keeps round one's state
+  under the identity that made it and refuses a round two from any other.
+  A TLS exporter binding was considered and rejected because it cannot span
+  connections; a bidirectional stream could have had one, at the price of a
+  streaming RPC in the pairing path.
+* **What the joiner says about itself** — its name, its addresses — rides in
+  round two and is read only after its tag has verified.
+
+**An attempt is charged when it starts, and refunded only when it verifies.**
+Charging only on a wrong answer, which was enough for the HMAC, is not
+enough for a PAKE: any design in which a guesser can find out whether it was
+right and then walk away before confirming gives it free guesses, at a few
+hundred sessions a second. So round one charges, a round one never finished
+counts — it is written down as abandoned after thirty seconds, or when the
+same identity starts again — and only a verified confirmation gives the
+attempt back. The window has **one counter, five attempts**, shared by the
+PIN exchange and the older proof below, and what may be in flight is capped
+by what is left, because starting is what charges. Burning the five is a
+denial, not a break: more people can now do it than before, and the
+displaying side shows **every failed attempt with its source**, and, when
+they are spent, says *something on your network is guessing* and offers a
+new PIN rather than closing quietly.
+
+**A spent window keeps admitting until it would have expired.** A window
+used to be dropped the moment its code was spent, which turned a second
+joiner away at the TLS gate with nothing to say. Now a joiner that arrives
+at a spent window is told **"another machine used this code — reject the
+pairing on the other screen"**, because a PIN on a screen can be read by
+somebody else, and the person who typed it second is the one who can tell
+the person at the other screen that the card in front of them is not theirs.
+The extra exposure is nothing new: the same unpaired identities could reach
+the pairing service a moment earlier, while the code was live.
+It outlives the screen that displayed it, too: rejecting the card ends that
+screen, and that is precisely the case in which the second joiner has
+something to say. A window whose attempts are spent is kept the same way, so
+a joiner arriving after the guessing is told the attempts were used up rather
+than refused at the handshake. A window nobody used stops admitting the
+moment its screen goes away, because nobody is looking at its code any more.
+
+**The overlap with the older proof**, for one release, is written as
+invariants, because the obvious way to build it hands an impostor the PIN:
+a new joiner that fell back to the older `Pair` when the new RPC was
+unimplemented would send an HMAC keyed with the PIN to whoever answered.
+
+1. **The PIN never goes into an HMAC**, on any code path. The older proof's
+   functions take a `trust.Secret`, never a `trust.PIN`.
+2. **A joiner holding a PIN never calls the older `Pair`.** An unimplemented
+   `PairStart` is a hard failure; with a typed PIN it says the machine that
+   answered may be an impostor, and with a scanned code — whose key pinned
+   the real machine — it says that machine is too old for a PIN.
+3. **The window also holds an independent ten-character secret**, for older
+   joiners only, drawn separately from the PIN. The full code stays at
+   `version = 1` with the PIN in a new field, which an older decoder
+   ignores, so an older phone scanning a new QR runs the older `Pair`
+   against the ten characters. A window without that secret refuses `Pair`.
+4. **The older `Pair` and the PIN exchange draw on the one counter.**
+5. **An older typed joiner needs the ten characters**, so they are shown,
+   labelled for older versions, under the full code.
+
+After the overlap the secret and the HMAC go, `Pair` is removed, and the
+code's version moves to 2. Phones need a core release inside the overlap to
+pair after it.
+
+**What the fingerprint comparison is for now** is named rather than changed:
+**a PIN that somebody else saw.** A guesser gets five in a million; somebody
+who read the PIN off the screen gets it first time. That is what both
+fingerprints on both cards are for, and why the displaying side's card lists
+the failed attempts before the one that worked. On the QR path the PIN does
+a smaller job: the key in the QR already authenticates the listener, so what
+the PIN adds is authenticating the joiner — keeping a stranger who can reach
+the port from raising a prompt at all — and a handshake that fails the pin
+stops a wrong address from receiving a guess. A longer QR-only secret was
+considered and rejected, because the listener has to take the PIN anyway.
+
+**What is not here yet.** A joiner still needs the displaying side's address
+beside the PIN; finding the machine on the local network instead (DNS-SD)
+is the next step, and is why the joiner's messages say "address" where they
+will one day say "entry". The displaying side's card does not yet flag a
+peer name that matches an existing peer or this machine.
 
 ### What a peer's state says, and what it must not
 
@@ -1150,7 +1298,11 @@ failing, which is what the backoff is for.
 
 The protocol (sketch — to be specified precisely in a follow-up):
 
-* `Pair` — pairing handshake, direction declaration.
+* `PairStart` / `PairFinish` — the two rounds of the PIN exchange, which
+  spend the code and carry the direction the displaying side declared
+  (decision AV); `SettlePairing` converges on the pending pairing that
+  produces (decision M). `Pair`, the ten-character code's HMAC proof, stays
+  for the overlap release only.
 * `ListKeys` — keys a peer offers this requester (public halves +
   metadata), letting a keyless agent answer `SSH_AGENTC_REQUEST_IDENTITIES`.
 * `AnnounceKeys` — the same list, sent the other way, by a holder that
@@ -3002,11 +3154,21 @@ in front of it, and both are one call the daemon already served (§14).
 *Add a machine* is a screen in two states and never both. First the
 question decision AD says belongs on this side — what the pairing is for,
 as three rows worded as what each does rather than as which flag it sets.
-Then the invitation: the code, and the three ways into it, which are one
-secret seen by three kinds of machine. A terminal types the command line;
-another window pastes the full code, which carries the identity key and so
-leaves that side nothing to compare by hand; a phone points a camera at the
-QR (decision AE). The screen holds the pairing window open — the control
+Then the invitation: the six-digit PIN and the QR side by side, the full
+code to copy beneath them, and the ways in each is for. Another desktop or
+a headless box types the PIN with the address; another window that cannot
+reach this one by address pastes the full code, which carries the identity
+key and so leaves that side nothing to compare by hand; a phone points a
+camera at the QR (decision AE). For the overlap release an older version
+types the ten-character code shown under the full code, labelled for what it
+is (decision AV). This was "the code, and the three ways into it, which are
+one secret seen by three kinds of machine" until 2026-10-14; there are two
+secrets now, for two generations of joiner, and the PIN is the one a person
+is shown first. While the code is up the screen lists each failed attempt
+with where it came from, and when the attempts are spent it says something
+on the network is guessing and offers a new PIN for the same intent, rather
+than going back to the question as though nothing had happened. The screen
+holds the pairing window open — the control
 call that displays a code is a stream whose lifetime *is* the window's — so
 leaving takes the code off both, and coming back shows the code already on
 display rather than spending a second one. What arrives when the other
@@ -3014,9 +3176,10 @@ machine uses it is an ordinary approval card, drawn by the renderer that
 draws every other one.
 
 The screen has had the other end since 2026-09-04: under the question, a
-box for a code another machine is showing. The full code carries the address
-and the identity key and needs nothing beside it; a short one takes the
-address in the second field. The screen said "paste this into the other
+box for a PIN another machine is showing. The full code carries the address
+and the identity key and needs nothing beside it; a PIN takes the address in
+the second field, as the ten-character code did before it (decision AV). One
+press is one attempt, and a refusal is shown, never retried. The screen said "paste this into the other
 machine's own Add a machine screen" for two weeks before that screen could
 take a paste, which is the kind of promise a sweep finds. Joining asks
 nothing about what the pairing is for, because the side showing the code
@@ -3475,8 +3638,11 @@ The surface (existing pieces from M2/M3 plus planned):
   copies the DEK into the keychain, so it is the daemon's to do;
 * pairing — `ladulas pair --listen --intent <approver|requester|mutual>`
   starts one and says what it is for, which settles both sides (decision
-  AD); `ladulas pair <host:port> --code <code>` uses one and declares
-  nothing. Either gives the terminal back once this side's user has
+  AD), and prints the PIN, the full code and each failed attempt as it
+  happens; `ladulas pair --address <host:port> --pin <PIN>` uses one, as
+  does `--code` with the full code and no address, and declares nothing
+  (decision AV). `ladulas pair <host:port> --code <ten characters>` is an
+  older instance's code, for the overlap release. Either gives the terminal back once this side's user has
   answered. `ladulas pairings
   list|approve|reject|withdraw` is everything after that: a pairing does
   not expire and the command that raised it is usually gone, so the list
@@ -3857,7 +4023,12 @@ Threat model sketch (to be expanded in its own document):
   only trust anchor, so running over the open internet is safe in the
   cryptographic sense. The listener's unauthenticated surface is the TLS
   handshake itself; unpaired identities get no protocol access beyond the
-  pairing endpoint, which rate-limits and always prompts. Public binds are
+  pairing endpoint, and only while a code is displayed. That endpoint
+  allows five attempts per displayed PIN, charged at the start of each and
+  shared across both proofs, leaks nothing that can be searched offline
+  (decision AV), and always prompts. Anybody who can reach the port while a
+  PIN is up can spend those five, which denies the pairing and is shown on
+  the displaying screen; it does not get them in. Public binds are
   explicit opt-in (§7) — supported, never accidental.
 * **Compromised Tailscale control plane** (when Tailscale is used): outer
   layer only; app-level TOFU identities survive (§7). Tailnet Lock
@@ -4008,7 +4179,7 @@ Added 2026-08-09:
 | J | Auto-lock default | **soft-lock on suspend and session lock** (DEK retained, local approval authority suspended, remote approval keeps working); seal-on-sleep and idle timeout are config options. Mobile: biometric app unlock with passphrase fallback (1Password model) |
 | K | Headless management | **the uid-checked control socket is the complete management surface**, the CLI a thin client of it; remote administration = SSH + CLI, never the peer channel (the protocol's `admin` type stays reserved, undesigned) |
 | L | Who opens the store | **`ladulasd` and nothing else, with no exceptions** — the CLI and the GUI reach an instance only over the control socket, `ladulas init` included. Replaces the daemon-first/store-fallback rule; no `--offline` flag. Rationale in §14 |
-| M | How long a pairing lasts | **the code expires and the pairing does not.** `trust.CodeValidity` keeps its five minutes, its single use and its five wrong answers; everything after the code has been proved is a pending pairing in the encrypted store on both sides, answered locally and reconciled with the peer whenever either can reach the other. Withdrawal propagates by the side that still holds an entry asking, not by a tombstone. Rationale in §7 |
+| M | How long a pairing lasts | **the code expires and the pairing does not.** `trust.CodeValidity` keeps its five minutes, its single use and its five attempts (what the code is and how an attempt is counted are decision AV's, since 2026-10-14); everything after the code has been proved is a pending pairing in the encrypted store on both sides, answered locally and reconciled with the peer whenever either can reach the other. Withdrawal propagates by the side that still holds an entry asking, not by a tombstone. Rationale in §7 |
 | N | The keys paired peers offer | **remembered, in the store, public halves only.** What a holder offers is written down as it is learned — label, algorithm, fingerprint, comment, which peer, when it was last confirmed — so an unreachable holder's keys stay listed and legible instead of vanishing. A successful refresh replaces what is remembered about that peer; a holder that could not be asked leaves it alone; revoking a peer drops it. The agent socket advertises only what can sign; every surface a person reads shows the rest with its availability and its last-seen. Qualified by decision T on both halves of "what can sign": which keys their holder offers to an agent at all, and what reachable means for a holder that collects. Rationale in §10 |
 | O | Where the phone's UI is drawn | **the shell draws, the webview keeps the documents.** On iOS the chrome and the approval card are SwiftUI reading the same `/api/v1` JSON the bundle reads; the diff behind a commit and published markdown stay in the shared bundle, which is what a webview is for. Accepted cost: the request card exists twice. Desktop and Android are unchanged. Deployment target rises to iOS 26 (Liquid Glass). Rationale in §12 |
 | P | Where a TTL grant lives | **follow the key.** A grant over a key the requester holds is **delegated**: a signed, scoped, expiring artifact the requester applies itself, so "approve for an hour" works with the phone asleep. A grant over a key held in an approver's Secure Enclave cannot be delegated and is unchanged — the private half never moves, so the holder is in the loop per signature whatever anyone decided. Delegated use is **reported back** and shown grouped under the grant. Supersedes the 2026-08-08 "TTL grants live approver-side" resolution for the first case only. Which case a request is, is the door it came through — a peer asking for a decision holds the key, a peer sending the bytes does not — and *not* whether the approver holds a copy, which was the implementation until 2026-08-13 and kept every promise about a portable key both machines hold. Rationale in §9 |
@@ -4123,6 +4294,12 @@ Added 2026-09-29:
 |---|----------|------------|
 | AU | What the agent does with a key a program asks it to add | **it parks it: held in memory for as long as the adder asked, never in the store, never lent, and signed with unasked only by the session that parked it.** A parked key is a credential Ladulås is holding, not a key it manages — `ssh-add`'s key, or the twelve-hour certificate Teleport's `tsh` pushes into whatever `SSH_AUTH_SOCK` names on every login — and the refusal that used to meet it was right about the store's keys and wrong about the box: a policy about key management applied to something that is not key management, failing with a bare wire byte that named nothing, fatal for the whole of `tsh`, and fixable only per tool at the cost of a capability each. The lifetime and confirm constraints are honoured, the certificate's own validity counts as a lifetime, `Remove` and `RemoveAll` drop parked keys and leave managed ones standing, sealing drops them all, a soft lock keeps them and suspends the one convenience, and the set is capped at sixty-four. The adding session signs without a prompt because asking it is theatre — it has the bytes — and any other session is asked, which defends against neighbours on the box and nothing more; a deny rule and the forwarded-agent rule still win. They are never sent, by construction: not in the store, so not offered to peers, not resolved by `RemoteSign`, refused by class by `SendKey`. `keys list` gains a second section with who parked each key, `forget` and `promote` are the verbs, the desktop gets the section and a one-press forget with no sidebar count, and `AUDIT_EVENT_KEY_LOCAL` covers added, expired, forgotten and promoted. Promotion writes the private half into the store under a fourth origin, `adopted`, behind the store passphrase and without the certificate. Rejected: proxying unknown keys to a second agent, which §4 used to float and which solves the error while giving up the point of having one agent; keeping the refusal, which concedes Ladulås cannot be the only agent on a working machine; and storing what arrives, which puts twelve-hour credentials in a backed-up store. Qualifies §4's mutation bullet; bounded by decisions S and T. Rationale in §10 |
 
+Added 2026-10-14:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| AV | What the code a person types is, and what proves it | **a six-digit PIN, proved with CPace and never with an HMAC.** CPace per draft-irtf-cfrg-cpace-21 (CPACE-RISTR255-SHA512, the draft's §10.4 key confirmation), written in `internal/cpace` on `gtank/ristretto255` and tested on the draft's vectors, run inside the pinned TLS channel by two new RPCs, `PairStart` and `PairFinish`. The listener is the initiator and the joiner the responder, so the joiner commits its tag before it receives anything key-derived and the listener verifies it before answering; both identity keys go into CI, joiner first; the associated data carries `ladulas-pairing-v2` and a direction; the listener mints the session id; both rounds must come from one TLS identity; what the joiner says about itself is read only after its tag verifies. An attempt is charged when round one is accepted and refunded only on a verified confirmation, so an unfinished round counts; one counter of five per window covers the PIN and the older proof, and in-flight exchanges are capped by what is left. The displaying side shows each failed attempt with its source, and offers a new PIN when they are spent. For one release the window also holds an independent ten-character secret for older joiners, the full code stays at version 1 with the PIN as a new field, and a joiner holding a PIN never calls the older `Pair` — an unimplemented `PairStart` is a hard failure that names a possible impostor. A spent window answers late joiners "another machine used this code" until it would have expired. Supersedes decision M's *mechanism* — the ten characters, the HMAC proof and the fifty-bit bound — and leaves M's two halves exactly as they were. Rejected: keeping the ten characters and the HMAC (a code, not a PIN, and the PIN is the point); SPAKE2 (needs nothing-up-my-sleeve constants, and the Go implementation is unmaintained); vendoring `the-sarge/cpace` (unreviewed, and a newer Go than the module's); and above all an HMAC keyed with the PIN on any path, including a fallback for older listeners, because twenty bits of HMAC is an offline search of milliseconds. Rationale in §7 |
+
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
 only one. §14 used to say "daemon first, store fallback":
@@ -4153,7 +4330,9 @@ than adding one.
 **Decision M in full.** The two halves of a pairing were treated as one
 thing with one clock, and the clock belonged to the half that needed it
 least. The code's five minutes pay for walking between two machines and
-for keeping a fifty-bit secret out of reach of online guessing; the
+for keeping the code out of reach of online guessing (a fifty-bit secret
+when this was written; a six-digit PIN behind a PAKE since decision AV,
+which moved the bound from the secret's length to the attempt count); the
 confirmation asks a person whether two hashes match, which no amount of
 time makes easier to fake. Sharing a deadline between them meant that
 running out of time was a way for a pairing to fail, and running M6 on a

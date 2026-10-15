@@ -3,6 +3,7 @@ package peer
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/hugowetterberg/ladulas/internal/cpace"
 	"github.com/hugowetterberg/ladulas/pkg/identity"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
@@ -20,7 +22,7 @@ import (
 )
 
 // pairingWindow is an open invitation on the listening side: a displayed code,
-// the intent its user chose in advance, and the budget of wrong answers it will
+// the intent its user chose in advance, and the budget of attempts it will
 // tolerate.
 //
 // One window at a time. Pairing is a thing a person does deliberately at a
@@ -28,9 +30,17 @@ import (
 // it ambiguous which screen a proof was supposed to have come from.
 //
 // The window is the short-lived half of a pairing and the only half with a
-// clock on it: five minutes, single use, five wrong answers (§7). What it
-// produces is a pending pairing, and the pending pairing does not expire.
+// clock on it: five minutes, single use, five attempts (§7). What it produces
+// is a pending pairing, and the pending pairing does not expire.
+//
+// It holds two codes during the overlap release (decision AV): the PIN, which
+// every current joiner proves with the CPace exchange, and an independent
+// ten-character secret for older joiners, which they prove with the HMAC. One
+// counter covers both, because two budgets would be ten attempts.
 type pairingWindow struct {
+	pin trust.PIN
+	// secret is the older joiners' code. Empty refuses the older Pair
+	// outright, which is how the overlap ends.
 	secret  trust.Secret
 	expires time.Time
 	// intent is what this pairing is for, and it settles both sides' records
@@ -39,34 +49,95 @@ type pairingWindow struct {
 	// arrived carries the session id of the pending pairing a proof produced,
 	// back to whoever is displaying the code.
 	arrived chan string
+	// attempted carries each failed attempt to whoever is displaying the code,
+	// so the screen can say what knocked (decision AV). It is buffered and
+	// never blocks: a screen that is not reading misses a line, never a
+	// decision.
+	attempted chan *ladulasv1.PairingAttempt
+	// exhausted is closed when the attempts are spent and none is still in
+	// flight, which is somebody guessing rather than the clock running out.
+	exhausted chan struct{}
 
-	mu       sync.Mutex
-	attempts int
-	closed   bool
-	settled  bool
+	mu sync.Mutex
+	// charged is the attempts charged and not refunded, in flight included.
+	// An attempt is charged when it starts — a PIN exchange's first round, an
+	// older proof's arrival — and refunded only when it verifies. That is
+	// what makes an exchange started and walked away from count: a PAKE in
+	// which an attacker could learn whether its guess was right and then
+	// leave before confirming would otherwise give it free guesses at a few
+	// hundred a second. It also caps what is in flight at what is left.
+	charged int
+	// proving is older proofs being checked right now. They have no
+	// exchange to sit in, and count as in flight for the same reason a taken
+	// exchange does.
+	proving   int
+	failures  []*ladulasv1.PairingAttempt
+	exchanges map[string]*pinExchange
+	closed    bool
+	settled   bool
+	tired     bool
 }
 
-// settle reports the session once. A window is spent by the first proof that
-// works, whatever happens to the pairing afterwards.
-func (w *pairingWindow) settle(session string) {
-	w.mu.Lock()
+// pinExchange is a PIN exchange whose first round has been answered and whose
+// second has not arrived.
+type pinExchange struct {
+	// fingerprint is the identity that started it. The second round has to
+	// come from the same one: two rounds can arrive on two connections, and
+	// this is what makes them one exchange.
+	fingerprint string
+	remote      string
+	initiator   *cpace.Initiator
+	timer       *time.Timer
+	// taken is a second round being verified. It stays in the window's map
+	// until it resolves, because an exchange being verified is still in
+	// flight: a failure elsewhere must not find the map empty, decide the
+	// window is exhausted, and close it under an answer that is about to be
+	// right.
+	taken bool
+}
 
-	if w.settled {
-		w.mu.Unlock()
+// The ways a window refuses an attempt before it is tried.
+var (
+	errPairingSpent     = errors.New("this pairing code has already been used")
+	errPairingClosed    = errors.New("no pairing is in progress on this instance")
+	errPairingExhausted = errors.New(
+		"this pairing code has had all the attempts it allows")
+	errNoExchange = errors.New(
+		"that pairing exchange is not open here; start again")
+	errExchangeOwner = errors.New(
+		"that pairing exchange was started by another identity")
+)
 
-		return
+func newPairingWindow(
+	pin trust.PIN, secret trust.Secret, intent trust.Intent,
+) *pairingWindow {
+	return &pairingWindow{
+		pin:       pin,
+		secret:    secret,
+		expires:   time.Now().Add(trust.CodeValidity),
+		intent:    intent,
+		arrived:   make(chan string, 1),
+		attempted: make(chan *ladulasv1.PairingAttempt, 4*trust.MaxAttempts),
+		exhausted: make(chan struct{}),
+		exchanges: map[string]*pinExchange{},
 	}
+}
 
-	w.settled = true
-	w.mu.Unlock()
-
+// settle reports the session once.
+func (w *pairingWindow) settle(session string) {
 	select {
 	case w.arrived <- session:
 	default:
 	}
 }
 
-func (w *pairingWindow) live(now time.Time) bool {
+// admits says whether the window is still somebody's to knock on: open and
+// in date, spent or not. A spent window keeps admitting until it would have
+// expired anyway — after the screen that displayed it has gone, too — so that
+// a joiner arriving late is told the code was used, or its attempts were,
+// which is the loud message §7 wants, rather than refused at the handshake
+// with nothing to say.
+func (w *pairingWindow) admits(now time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -77,27 +148,220 @@ func (w *pairingWindow) close() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.closed = true
+	w.closeLocked()
 }
 
-// spendAttempt records a wrong proof and reports whether the window survives.
-//
-// The cap is what turns fifty bits of secret into something an online attacker
-// cannot work through: five wrong answers and the invitation is withdrawn, and
-// the person who was actually pairing displays a new code.
-func (w *pairingWindow) spendAttempt() bool {
+func (w *pairingWindow) closeLocked() {
+	w.closed = true
+
+	for _, exchange := range w.exchanges {
+		exchange.timer.Stop()
+	}
+}
+
+// chargeLocked charges one attempt, or says why it cannot be.
+func (w *pairingWindow) chargeLocked() error {
+	switch {
+	case w.settled:
+		return errPairingSpent
+	case w.closed:
+		return errPairingClosed
+	case w.tired, w.charged >= trust.MaxAttempts:
+		return errPairingExhausted
+	}
+
+	w.charged++
+
+	return nil
+}
+
+// chargeProof charges an attempt that is decided in the same call, the older
+// proof's. It is resolved by exactly one of failProof and passProof.
+func (w *pairingWindow) chargeProof() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.attempts++
-
-	if w.attempts >= trust.MaxAttempts {
-		w.closed = true
+	if err := w.chargeLocked(); err != nil {
+		return err
 	}
 
-	return !w.closed
+	w.proving++
+
+	return nil
 }
 
+// failProof is an older proof that did not verify. Its attempt stays spent.
+func (w *pairingWindow) failProof(source, outcome string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.proving--
+	w.failLocked(source, outcome)
+}
+
+// passProof is an older proof that verified.
+func (w *pairingWindow) passProof() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.proving--
+
+	return w.claimLocked()
+}
+
+// claimLocked gives back a verified attempt's charge and spends the code, and
+// reports whether this caller was the one who did. A window is spent by the
+// first proof that works, whatever happens to the pairing afterwards, and two
+// joiners verifying at once must not both believe they won.
+func (w *pairingWindow) claimLocked() bool {
+	if w.charged > 0 {
+		w.charged--
+	}
+
+	if w.settled || w.closed || w.tired {
+		return false
+	}
+
+	w.settled = true
+
+	for _, exchange := range w.exchanges {
+		exchange.timer.Stop()
+	}
+
+	return true
+}
+
+func (w *pairingWindow) failLocked(source, outcome string) {
+	attempt := &ladulasv1.PairingAttempt{
+		Source:  source,
+		At:      timestamppb.Now(),
+		Outcome: outcome,
+	}
+
+	w.failures = append(w.failures, attempt)
+
+	select {
+	case w.attempted <- attempt:
+	default:
+	}
+
+	// Spent attempts with nothing in flight is a window that cannot produce a
+	// pairing any more. It is marked tired here, and the screen is told, so
+	// that it offers a new PIN rather than going quiet. Tired is not closed:
+	// the window goes on admitting until it expires, so that a joiner who
+	// arrives afterwards hears that the attempts were spent.
+	if w.charged >= trust.MaxAttempts && len(w.exchanges) == 0 &&
+		w.proving == 0 && !w.settled && !w.tired {
+		w.tired = true
+
+		close(w.exhausted)
+	}
+}
+
+// failedAttempts is what the confirmation card shows.
+func (w *pairingWindow) failedAttempts() []*ladulasv1.PairingAttempt {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return append([]*ladulasv1.PairingAttempt(nil), w.failures...)
+}
+
+// startExchange charges an attempt to a PIN exchange's first round and holds
+// its state for the second.
+func (w *pairingWindow) startExchange(id string, exchange *pinExchange) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// One exchange per identity. A second first round from the same identity
+	// is the first one abandoned, and it is written down as such: it was
+	// charged when it started and stays charged.
+	for other, existing := range w.exchanges {
+		if existing.fingerprint == exchange.fingerprint && !existing.taken {
+			existing.timer.Stop()
+			delete(w.exchanges, other)
+			w.failLocked(existing.remote, "started again before finishing")
+		}
+	}
+
+	if err := w.chargeLocked(); err != nil {
+		return err
+	}
+
+	exchange.timer = time.AfterFunc(pinExchangeTimeout, func() {
+		w.abandon(id)
+	})
+	w.exchanges[id] = exchange
+
+	return nil
+}
+
+// abandon is an exchange whose second round never came.
+func (w *pairingWindow) abandon(id string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// A taken exchange belongs to failExchange or passExchange from then on.
+	// The timer can fire just as the second round takes it, and its Stop
+	// then comes too late to prevent this call; finding it taken is what
+	// keeps an answer that is about to verify from being written down as
+	// abandoned, and from tiring the window under it.
+	exchange, ok := w.exchanges[id]
+	if !ok || exchange.taken {
+		return
+	}
+
+	delete(w.exchanges, id)
+	w.failLocked(exchange.remote, "started and never finished")
+}
+
+// takeExchange hands a second round its first round's state, once, and only
+// to the identity that started it. An identity that names somebody else's
+// exchange gets nothing and leaves it where it was: it cannot have learned the
+// id except by being told it, and refusing it is the whole check.
+//
+// What it hands out is resolved by exactly one of failExchange and
+// passExchange.
+func (w *pairingWindow) takeExchange(id, fingerprint string) (*pinExchange, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	exchange, ok := w.exchanges[id]
+	if !ok || exchange.taken {
+		return nil, errNoExchange
+	}
+
+	if exchange.fingerprint != fingerprint {
+		return nil, errExchangeOwner
+	}
+
+	exchange.taken = true
+	exchange.timer.Stop()
+
+	return exchange, nil
+}
+
+// failExchange is a second round that did not verify. Its attempt stays
+// spent.
+func (w *pairingWindow) failExchange(id, source, outcome string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	delete(w.exchanges, id)
+	w.failLocked(source, outcome)
+}
+
+// passExchange is a second round that verified: its attempt is given back,
+// and the code is claimed by it if nobody has claimed it first.
+func (w *pairingWindow) passExchange(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	delete(w.exchanges, id)
+
+	return w.claimLocked()
+}
+
+// openWindow is the window, if one is still admitting anybody.
 func (n *Node) openWindow() *pairingWindow {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -106,7 +370,7 @@ func (n *Node) openWindow() *pairingWindow {
 		return nil
 	}
 
-	if !n.window.live(time.Now()) {
+	if !n.window.admits(time.Now()) {
 		n.window = nil
 
 		return nil
@@ -122,7 +386,7 @@ var ErrNoIntent = errors.New(
 	"peer: say what the pairing is for: an approver for this instance, " +
 		"an instance to approve for, or both")
 
-// beginPairing opens the window and returns the code to display.
+// beginPairing opens the window and returns it with the older joiners' code.
 //
 // An intent is required rather than defaulted (decision AD). A code displayed
 // without one would be an invitation to a pairing nobody had decided the shape
@@ -134,17 +398,20 @@ func (n *Node) beginPairing(
 		return nil, "", ErrNoIntent
 	}
 
+	pin, err := trust.NewPIN()
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Independent of the PIN, and drawn separately: nothing about one may say
+	// anything about the other, or the older joiners' HMAC would be an HMAC
+	// over the PIN after all (decision AV, invariant 1).
 	secret, err := trust.NewSecret()
 	if err != nil {
 		return nil, "", err
 	}
 
-	window := &pairingWindow{
-		secret:  secret,
-		expires: time.Now().Add(trust.CodeValidity),
-		intent:  intent,
-		arrived: make(chan string, 1),
-	}
+	window := newPairingWindow(pin, secret, intent)
 
 	n.mu.Lock()
 	previous := n.window
@@ -158,8 +425,26 @@ func (n *Node) beginPairing(
 	return window, secret, nil
 }
 
+// closeWindow is the screen that displayed a window going away.
+//
+// A window nobody used stops admitting at once: nobody is looking at its code
+// any more. A spent one — claimed, or out of attempts — stays registered until
+// it would have expired (§7), because the screen going away is exactly what
+// happens when its user rejects a card they did not expect, and the joiner
+// who typed the PIN second is still owed "another machine used this code"
+// rather than a refusal at the handshake. openWindow drops it at expiry.
 func (n *Node) closeWindow(window *pairingWindow) {
-	window.close()
+	window.mu.Lock()
+	spent := window.settled || window.tired
+
+	if !spent {
+		window.closeLocked()
+	}
+	window.mu.Unlock()
+
+	if spent {
+		return
+	}
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -169,13 +454,33 @@ func (n *Node) closeWindow(window *pairingWindow) {
 	}
 }
 
-// Pair is the listening side of the exchange, and it answers immediately.
+// windowError turns a window's refusal into what the caller is told. The codes
+// are the contract the joining side reads (pairByPIN): AlreadyExists is a code
+// somebody else used, and is reported loudly.
+func windowError(err error) error {
+	switch {
+	case errors.Is(err, errPairingSpent):
+		return connect.NewError(connect.CodeAlreadyExists, err)
+	case errors.Is(err, errPairingExhausted):
+		return connect.NewError(connect.CodeResourceExhausted, err)
+	case errors.Is(err, errExchangeOwner):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	default:
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+}
+
+// Pair is the older joiners' half of the exchange, kept for the overlap
+// release (decision AV), and it answers immediately.
 //
 // It used to hold the call open while a human was asked, which meant the whole
 // pairing lived inside one RPC and died with it. What it does now is spend the
 // code, write down a pending pairing, and say so. The confirmation is raised
 // behind it; the answer is reconciled afterwards, by whichever side can reach
 // the other (§7).
+//
+// It proves the ten-character secret and never the PIN, and it draws on the
+// same attempts as the PIN exchange.
 func (s *peerService) Pair(
 	ctx context.Context,
 	req *connect.Request[ladulasv1.PairRequest],
@@ -188,8 +493,7 @@ func (s *peerService) Pair(
 
 	window := s.node.openWindow()
 	if window == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			errors.New("no pairing is in progress on this instance"))
+		return nil, windowError(errPairingClosed)
 	}
 
 	// What the message says about the caller has to agree with what the channel
@@ -201,44 +505,40 @@ func (s *peerService) Pair(
 			errors.New("the identity in the request is not the one on the connection"))
 	}
 
+	// A window without the older code is one that has left the overlap.
+	if window.secret == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("this pairing takes the PIN; update the joining instance"))
+	}
+
+	if err := window.chargeProof(); err != nil {
+		return nil, windowError(err)
+	}
+
 	ours := s.node.identity.PublicKey()
 
 	if !trust.VerifyProof(window.secret, ours, peer.PublicKey, req.Msg.GetProof()) {
-		if !window.spendAttempt() {
-			s.node.closeWindow(window)
+		window.failProof(peer.RemoteAddr, "refused an older ten-character code")
 
-			s.node.log.Warn("closed a pairing window after too many wrong codes",
-				"peer", peer.Fingerprint)
-		}
+		s.node.log.Warn("refused a pairing proof", "peer", peer.Fingerprint,
+			"from", peer.RemoteAddr)
 
 		return nil, connect.NewError(connect.CodePermissionDenied,
 			errors.New("the pairing code does not match"))
 	}
 
-	// The code is single use, and this is where it is used. Closing the window
-	// here rather than when the pairing settles is what keeps one displayed code
+	// The code is single use, and this is where it is used. Claiming it here
+	// rather than when the pairing settles is what keeps one displayed code
 	// worth exactly one pending pairing, however long the pairing then takes.
-	s.node.closeWindow(window)
-
-	session := identity.NewRequestID()
-
-	pending := &storepb.PendingPairing{
-		SessionId:         session,
-		Fingerprint:       peer.Fingerprint,
-		Name:              req.Msg.GetInstanceName(),
-		IdentityPublicKey: peer.PublicKey.Marshal(),
-		Addresses:         req.Msg.GetListenAddresses(),
-		MayApprove:        window.intent.PeerMayApprove(),
-		MayRequest:        window.intent.PeerMayRequest(),
-		RemoteAddress:     peer.RemoteAddr,
-		StartedAt:         timestamppb.Now(),
+	if !window.passProof() {
+		return nil, windowError(errPairingSpent)
 	}
 
-	if err := s.node.recordPending(pending); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	session, err := s.node.recordListened(window, peer,
+		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses())
+	if err != nil {
+		return nil, err
 	}
-
-	window.settle(session)
 
 	// The answer carries the intent as this side wrote it down, and the caller
 	// records the mirror of it. That is the whole of how one answer on one
@@ -253,6 +553,152 @@ func (s *peerService) Pair(
 		ListenAddresses:   s.node.Advertised(),
 		Confirmation:      trust.Confirmation(window.secret, ours, peer.PublicKey),
 	}), nil
+}
+
+// PairStart is the first round of the PIN exchange (decision AV): charge an
+// attempt, mint a session id, answer with the listener's share.
+//
+// Nothing in the answer lets the caller test a guess — a CPace share is a
+// random group element to anybody without the scalar — and the attempt is
+// spent from here until a confirmation verifies.
+func (s *peerService) PairStart(
+	ctx context.Context,
+	_ *connect.Request[ladulasv1.PairStartRequest],
+) (*connect.Response[ladulasv1.PairStartResponse], error) {
+	peer := transport.PeerFrom(ctx)
+	if peer == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("the connection is not authenticated"))
+	}
+
+	window := s.node.openWindow()
+	if window == nil {
+		return nil, windowError(errPairingClosed)
+	}
+
+	sid, err := newPAKESessionID()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	initiator, err := cpace.NewInitiator(pinInputs(window.pin,
+		peer.PublicKey, s.node.identity.PublicKey(), sid), []byte(adListener))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	err = window.startExchange(hex.EncodeToString(sid), &pinExchange{
+		fingerprint: peer.Fingerprint,
+		remote:      peer.RemoteAddr,
+		initiator:   initiator,
+	})
+	if err != nil {
+		return nil, windowError(err)
+	}
+
+	return connect.NewResponse(&ladulasv1.PairStartResponse{
+		SessionId: sid,
+		Share:     initiator.Share(),
+	}), nil
+}
+
+// PairFinish is the second round: verify the joiner's tag, and only then act.
+//
+// The order inside is the security argument. Nothing the joiner sent is read —
+// not its name, not its addresses — and nothing derived from the key is sent,
+// until its tag has verified. A tag that does not verify is a refused PIN, and
+// its attempt stays spent.
+func (s *peerService) PairFinish(
+	ctx context.Context,
+	req *connect.Request[ladulasv1.PairFinishRequest],
+) (*connect.Response[ladulasv1.PairFinishResponse], error) {
+	peer := transport.PeerFrom(ctx)
+	if peer == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("the connection is not authenticated"))
+	}
+
+	window := s.node.openWindow()
+	if window == nil {
+		return nil, windowError(errPairingClosed)
+	}
+
+	id := hex.EncodeToString(req.Msg.GetSessionId())
+
+	exchange, err := window.takeExchange(id, peer.Fingerprint)
+	if err != nil {
+		return nil, windowError(err)
+	}
+
+	session, err := exchange.initiator.Finish(req.Msg.GetShare(), []byte(adJoiner))
+	if err != nil {
+		window.failExchange(id, peer.RemoteAddr,
+			"sent a share that is not a group element")
+
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	if !session.Verify(req.Msg.GetConfirmation()) {
+		window.failExchange(id, peer.RemoteAddr, "refused PIN")
+
+		s.node.log.Warn("refused a pairing PIN", "peer", peer.Fingerprint,
+			"from", peer.RemoteAddr)
+
+		return nil, connect.NewError(connect.CodePermissionDenied,
+			errors.New("the PIN does not match"))
+	}
+
+	// Verified. From here what the joiner said is believed, and this side's
+	// own tag may go back — unless somebody else's verified first, in which
+	// case this one is told so and nothing derived from the key leaves.
+	if !window.passExchange(id) {
+		return nil, windowError(errPairingSpent)
+	}
+
+	pairing, err := s.node.recordListened(window, peer,
+		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses())
+	if err != nil {
+		return nil, err
+	}
+
+	return connect.NewResponse(&ladulasv1.PairFinishResponse{
+		Confirmation:    session.Confirmation(),
+		SessionId:       pairing,
+		InstanceName:    s.node.identity.Name(),
+		MayApprove:      window.intent.PeerMayApprove(),
+		MayRequest:      window.intent.PeerMayRequest(),
+		ListenAddresses: s.node.Advertised(),
+	}), nil
+}
+
+// recordListened writes down the pending pairing a spent code produced on the
+// listening side, and tells whoever is displaying the code.
+func (n *Node) recordListened(
+	window *pairingWindow, peer *transport.PeerIdentity,
+	name string, addresses []string,
+) (string, error) {
+	session := identity.NewRequestID()
+
+	pending := &storepb.PendingPairing{
+		SessionId:         session,
+		Fingerprint:       peer.Fingerprint,
+		Name:              name,
+		IdentityPublicKey: peer.PublicKey.Marshal(),
+		Addresses:         addresses,
+		MayApprove:        window.intent.PeerMayApprove(),
+		MayRequest:        window.intent.PeerMayRequest(),
+		RemoteAddress:     peer.RemoteAddr,
+		StartedAt:         timestamppb.Now(),
+		FailedAttempts:    window.failedAttempts(),
+	}
+
+	if err := n.recordPending(pending); err != nil {
+		return "", connect.NewError(connect.CodeInternal, err)
+	}
+
+	window.settle(session)
+
+	return session, nil
 }
 
 // SettlePairing reconciles one pending pairing, from either side, as often as
@@ -351,8 +797,8 @@ func (n *Node) settleAgainst(
 	}, nil
 }
 
-// PairWith is the dialling side of the exchange, driven by the command line and
-// by the phone.
+// PairWith is the joining side of the exchange, driven by the command line, the
+// window and the phone.
 //
 // It reads as a sequence of refusals, which is what a pairing is: each step is
 // a way for this not to be the machine whose screen the user is looking at. It
@@ -364,11 +810,24 @@ func (n *Node) settleAgainst(
 // was chosen on the screen the code is on, and this side learns it from the
 // answer and records the mirror — so the user here confirms a pairing whose
 // shape is already on the card, rather than choosing half of one blind.
+//
+// A code with a PIN in it is proved with the PIN exchange and nothing else.
+// The older proof is used only when there is no PIN at all — a code from an
+// older instance — and then only with the ten-character secret (decision AV).
 func (n *Node) PairWith(
 	ctx context.Context, address string, code *ladulasv1.PairingCode,
 ) (*storepb.PendingPairing, error) {
-	secret, err := trust.ParseSecret(code.GetSecret())
-	if err != nil {
+	var (
+		pin    trust.PIN
+		secret trust.Secret
+		err    error
+	)
+
+	if code.GetPin() != "" {
+		if pin, err = trust.ParsePIN(code.GetPin()); err != nil {
+			return nil, err
+		}
+	} else if secret, err = trust.ParseSecret(code.GetSecret()); err != nil {
 		return nil, err
 	}
 
@@ -396,57 +855,32 @@ func (n *Node) PairWith(
 
 	defer client.CloseIdle()
 
-	// The handshake first, on its own, because the proof has to be computed
-	// over the key the far end actually presents. A code that carried the key
-	// has already pinned it and this only confirms it; a typed code learns it
-	// here, and everything after is pinned to what was learned.
+	// The handshake first, on its own, because everything after it is bound to
+	// the key the far end actually presents. A code that carried the key has
+	// pinned it, and a handshake that fails the pin ends this before any
+	// guess has gone anywhere; a typed code learns the key here, and
+	// everything after is bound to what was learned.
 	peer, err := client.Handshake(ctx, address)
 	if err != nil {
 		return nil, fmt.Errorf("peer: reach %s: %w", address, err)
 	}
 
-	ours := n.identity.PublicKey()
-
 	pairing := ladulasv1connect.NewPairingServiceClient(
 		client.HTTP(), client.URL(address))
 
-	resp, err := pairing.Pair(ctx, connect.NewRequest(&ladulasv1.PairRequest{
-		Proof:             trust.Proof(secret, peer.PublicKey, ours),
-		InstanceName:      n.identity.Name(),
-		IdentityPublicKey: ours.Marshal(),
-		ListenAddresses:   n.Advertised(),
-	}))
+	var answer *joinAnswer
+
+	if pin != "" {
+		answer, err = n.pairByPIN(ctx, pairing, peer, pin, expected != nil)
+	} else {
+		answer, err = n.pairByProof(ctx, pairing, peer, secret)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("peer: pair with %s: %w", address, err)
 	}
 
-	if !resp.Msg.GetAccepted() {
-		reason := resp.Msg.GetReason()
-		if reason == "" {
-			reason = "the other side declined"
-		}
-
-		return nil, errors.New("peer: " + reason)
-	}
-
-	// The far end proves it is the machine displaying the code. Without this a
-	// mistyped address would show the user a stranger's fingerprint and ask
-	// them to confirm it, which is the one moment a fingerprint cannot be
-	// checked against anything.
-	if !trust.VerifyConfirmation(
-		secret, peer.PublicKey, ours, resp.Msg.GetConfirmation()) {
-		return nil, errors.New(
-			"peer: the instance answered without knowing the pairing code; " +
-				"check the address")
-	}
-
-	if claimed := resp.Msg.GetIdentityPublicKey(); len(claimed) > 0 &&
-		!bytes.Equal(claimed, peer.PublicKey.Marshal()) {
-		return nil, errors.New(
-			"peer: the identity in the answer is not the one on the connection")
-	}
-
-	if resp.Msg.GetSessionId() == "" {
+	if answer.session == "" {
 		return nil, errors.New(
 			"peer: the other instance named no pairing session")
 	}
@@ -454,8 +888,7 @@ func (n *Node) PairWith(
 	// The intent as the other side wrote it down, mirrored into what this side
 	// writes down. A pairing that says the peer may do nothing is one whose
 	// shape was never chosen, and there is nothing to confirm about it.
-	intent := trust.IntentOf(
-		resp.Msg.GetMayApprove(), resp.Msg.GetMayRequest()).Mirror()
+	intent := trust.IntentOf(answer.mayApprove, answer.mayRequest).Mirror()
 
 	if intent == trust.IntentUnspecified {
 		return nil, errors.New(
@@ -463,11 +896,11 @@ func (n *Node) PairWith(
 	}
 
 	pending := &storepb.PendingPairing{
-		SessionId:         resp.Msg.GetSessionId(),
+		SessionId:         answer.session,
 		Fingerprint:       peer.Fingerprint,
-		Name:              resp.Msg.GetInstanceName(),
+		Name:              answer.name,
 		IdentityPublicKey: peer.PublicKey.Marshal(),
-		Addresses:         peerAddresses(resp.Msg.GetListenAddresses(), address),
+		Addresses:         peerAddresses(answer.addresses, address),
 		MayApprove:        intent.PeerMayApprove(),
 		MayRequest:        intent.PeerMayRequest(),
 		WeDialled:         true,
@@ -481,6 +914,161 @@ func (n *Node) PairWith(
 	}
 
 	return pending, nil
+}
+
+// joinAnswer is what either proof brings back from the listener, once it has
+// been checked.
+type joinAnswer struct {
+	session    string
+	name       string
+	addresses  []string
+	mayApprove bool
+	mayRequest bool
+}
+
+// pairByPIN is the joining side of the PIN exchange (decision AV).
+//
+// It is one run per call: a refusal is reported, never retried with the same
+// PIN, because each run is a guess the listener counts and a second one at
+// another address would be a guess at a machine the user did not pick.
+//
+// And it never falls back. A listener that does not implement the exchange is
+// not given the older proof instead — that would be an HMAC keyed with the
+// PIN, handed to whoever answered, and twenty bits of HMAC is an offline search
+// of milliseconds. It is reported as what it may be.
+func (n *Node) pairByPIN(
+	ctx context.Context, pairing ladulasv1connect.PairingServiceClient,
+	peer *transport.PeerIdentity, pin trust.PIN, pinned bool,
+) (*joinAnswer, error) {
+	ours := n.identity.PublicKey()
+
+	start, err := pairing.PairStart(ctx, connect.NewRequest(&ladulasv1.PairStartRequest{}))
+	if err != nil {
+		return nil, joinError(err, pinned)
+	}
+
+	share, session, err := cpace.Respond(
+		pinInputs(pin, ours, peer.PublicKey, start.Msg.GetSessionId()),
+		[]byte(adJoiner), start.Msg.GetShare(), []byte(adListener))
+	if err != nil {
+		return nil, fmt.Errorf("%w: it sent a share that is not a group element (%w)",
+			ErrPossibleImpostor, err)
+	}
+
+	// The commitment: this side's share and tag, sent together, before
+	// anything derived from the key has come back. Name and addresses ride
+	// along and are read by the listener only once the tag has verified.
+	finish, err := pairing.PairFinish(ctx, connect.NewRequest(&ladulasv1.PairFinishRequest{
+		SessionId:       start.Msg.GetSessionId(),
+		Share:           share,
+		Confirmation:    session.Confirmation(),
+		InstanceName:    n.identity.Name(),
+		ListenAddresses: n.Advertised(),
+	}))
+	if err != nil {
+		return nil, joinError(err, pinned)
+	}
+
+	// The far end proves it knew the PIN too. A real listener only sends its
+	// tag after verifying ours, so a tag that does not verify is something
+	// that is not the machine displaying the PIN.
+	if !session.Verify(finish.Msg.GetConfirmation()) {
+		return nil, fmt.Errorf("%w: it accepted the PIN without proving it "+
+			"knew it", ErrPossibleImpostor)
+	}
+
+	return &joinAnswer{
+		session:    finish.Msg.GetSessionId(),
+		name:       finish.Msg.GetInstanceName(),
+		addresses:  finish.Msg.GetListenAddresses(),
+		mayApprove: finish.Msg.GetMayApprove(),
+		mayRequest: finish.Msg.GetMayRequest(),
+	}, nil
+}
+
+// joinError is what a refusal from the listener means to the person who typed
+// the PIN.
+func joinError(err error, pinned bool) error {
+	switch connect.CodeOf(err) {
+	case connect.CodeAlreadyExists:
+		return ErrCodeSpent
+	case connect.CodePermissionDenied:
+		return ErrPINRefused
+	case connect.CodeResourceExhausted:
+		return ErrAttemptsSpent
+	case connect.CodeUnimplemented:
+		// With the key from a scanned or pasted code this is the real machine,
+		// just an older one; with a typed PIN nothing says it is the machine at
+		// all (decision AV, invariant 2).
+		if pinned {
+			return errors.New("that machine is too old to take a PIN; " +
+				"update it, or pair from it with its ten-character code")
+		}
+
+		return fmt.Errorf("%w: it does not speak PIN pairing, which every "+
+			"version that shows a PIN does — check the address, or use the "+
+			"full code from the other screen", ErrPossibleImpostor)
+	default:
+		return err
+	}
+}
+
+// pairByProof is the older joiners' proof (decision AV): an HMAC keyed with the
+// ten-character secret, which only ever arrives here from a code an older
+// instance displayed.
+func (n *Node) pairByProof(
+	ctx context.Context, pairing ladulasv1connect.PairingServiceClient,
+	peer *transport.PeerIdentity, secret trust.Secret,
+) (*joinAnswer, error) {
+	ours := n.identity.PublicKey()
+
+	resp, err := pairing.Pair(ctx, connect.NewRequest(&ladulasv1.PairRequest{
+		Proof:             trust.Proof(secret, peer.PublicKey, ours),
+		InstanceName:      n.identity.Name(),
+		IdentityPublicKey: ours.Marshal(),
+		ListenAddresses:   n.Advertised(),
+	}))
+	if err != nil {
+		if connect.CodeOf(err) == connect.CodeAlreadyExists {
+			return nil, ErrCodeSpent
+		}
+
+		return nil, err
+	}
+
+	if !resp.Msg.GetAccepted() {
+		reason := resp.Msg.GetReason()
+		if reason == "" {
+			reason = "the other side declined"
+		}
+
+		return nil, errors.New(reason)
+	}
+
+	// The far end proves it is the machine displaying the code. Without this a
+	// mistyped address would show the user a stranger's fingerprint and ask
+	// them to confirm it, which is the one moment a fingerprint cannot be
+	// checked against anything.
+	if !trust.VerifyConfirmation(
+		secret, peer.PublicKey, ours, resp.Msg.GetConfirmation()) {
+		return nil, errors.New(
+			"the instance answered without knowing the pairing code; " +
+				"check the address")
+	}
+
+	if claimed := resp.Msg.GetIdentityPublicKey(); len(claimed) > 0 &&
+		!bytes.Equal(claimed, peer.PublicKey.Marshal()) {
+		return nil, errors.New(
+			"the identity in the answer is not the one on the connection")
+	}
+
+	return &joinAnswer{
+		session:    resp.Msg.GetSessionId(),
+		name:       resp.Msg.GetInstanceName(),
+		addresses:  resp.Msg.GetListenAddresses(),
+		mayApprove: resp.Msg.GetMayApprove(),
+		mayRequest: resp.Msg.GetMayRequest(),
+	}, nil
 }
 
 // peerAddresses puts the address that actually worked first, since it demonstrably
@@ -537,6 +1125,7 @@ func (n *Node) pendingConfirmation(
 				PeerAddresses:    pending.GetAddresses(),
 				InitiatedLocally: pending.GetWeDialled(),
 				KeyFromCode:      pending.GetKeyFromCode(),
+				FailedAttempts:   pending.GetFailedAttempts(),
 			},
 		},
 	}

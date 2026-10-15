@@ -358,6 +358,17 @@ func renderPairing(b *builder, view bridge.RequestView) {
 			"identity, so its fingerprint has already been checked against "+
 			"the code.")
 	}
+
+	// What else knocked while the code was up (decision AV).
+	if len(pairing.FailedAttempts) > 0 {
+		b.blank()
+		b.wrap(b.st.note, "Other attempts at this code failed first. Check "+
+			"the name and the address above before agreeing.")
+
+		for _, attempt := range pairing.FailedAttempts {
+			b.fact("Failed attempt", attempt.Source+"  "+attempt.Outcome, false)
+		}
+	}
 }
 
 func renderGeneric(b *builder, view bridge.RequestView) {

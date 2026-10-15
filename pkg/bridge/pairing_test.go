@@ -61,6 +61,7 @@ func (h *pairingHost) Invite(
 	h.asked = append(h.asked, intent)
 
 	invitation := bridge.Invitation{
+		PIN:       "042917",
 		Code:      "k7n41-9qra0",
 		FullCode:  "ladulas-pair-v1.AAAA",
 		Addresses: []string{"guppy:7373", "100.64.0.2:7373"},
@@ -172,13 +173,20 @@ func TestAnInvitationCarriesEveryWayIn(t *testing.T) {
 		t.Fatalf("decode: %v\n%s", err, body)
 	}
 
-	if view.Code != "k7n41-9qra0" {
-		t.Errorf("the code is %q", view.Code)
+	if view.PIN != "042 917" || view.Code != "k7n41-9qra0" {
+		t.Errorf("the PIN is %q and the older code %q", view.PIN, view.Code)
 	}
 
 	if !strings.Contains(view.Join, "guppy:7373") ||
-		!strings.Contains(view.Join, view.Code) {
+		!strings.Contains(view.Join, "--pin 042917") {
 		t.Errorf("the command to run elsewhere is %q", view.Join)
+	}
+
+	// The older code is there for an older version, and only in its own
+	// command (decision AV).
+	if strings.Contains(view.Join, view.Code) ||
+		!strings.Contains(view.OlderJoin, view.Code) {
+		t.Errorf("the commands are %q and %q", view.Join, view.OlderJoin)
 	}
 
 	// The command carries no direction of its own: what the pairing is for was

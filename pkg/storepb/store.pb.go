@@ -770,7 +770,8 @@ func (x *TrustRecord) GetPairingSessionId() string {
 type PendingPairing struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The session id both sides know the attempt by. Minted by the listening
-	// side and returned to the dialling side by PairResponse.
+	// side and returned to the dialling side by PairFinishResponse, or by
+	// PairResponse for an older joiner.
 	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// The peer as the exchange established it. The identity key is the record and
 	// the fingerprint is derived from it, exactly as in TrustRecord.
@@ -806,8 +807,12 @@ type PendingPairing struct {
 	// surface showing the prompt and a surface showing the pending list are
 	// talking about the same thing.
 	ConfirmationRequestId string `protobuf:"bytes,17,opt,name=confirmation_request_id,json=confirmationRequestId,proto3" json:"confirmation_request_id,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// The failed attempts at the code before it was spent, on the side that
+	// displayed it, so the confirmation can say so after a restart as well as
+	// before one (decision AV).
+	FailedAttempts []*ladulasv1.PairingAttempt `protobuf:"bytes,18,rep,name=failed_attempts,json=failedAttempts,proto3" json:"failed_attempts,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PendingPairing) Reset() {
@@ -943,6 +948,13 @@ func (x *PendingPairing) GetConfirmationRequestId() string {
 		return x.ConfirmationRequestId
 	}
 	return ""
+}
+
+func (x *PendingPairing) GetFailedAttempts() []*ladulasv1.PairingAttempt {
+	if x != nil {
+		return x.FailedAttempts
+	}
+	return nil
 }
 
 // BorrowedKey is the public half of a key a paired peer offers this instance
@@ -1891,7 +1903,7 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"\x12pairing_session_id\x18\f \x01(\tR\x10pairingSessionId\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb7\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfc\x05\n" +
 	"\x0ePendingPairing\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12 \n" +
@@ -1915,7 +1927,8 @@ const file_ladulas_store_v1_store_proto_rawDesc = "" +
 	"started_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vanswered_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"answeredAt\x126\n" +
-	"\x17confirmation_request_id\x18\x11 \x01(\tR\x15confirmationRequestIdJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\x17confirmation_request_id\x18\x11 \x01(\tR\x15confirmationRequestId\x12C\n" +
+	"\x0ffailed_attempts\x18\x12 \x03(\v2\x1a.ladulas.v1.PairingAttemptR\x0efailedAttemptsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"R\x10peer_may_approveR\x10peer_may_request\"\x9c\x01\n" +
 	"\vBorrowedKey\x12)\n" +
 	"\x10peer_fingerprint\x18\x01 \x01(\tR\x0fpeerFingerprint\x12$\n" +
@@ -2034,18 +2047,19 @@ var file_ladulas_store_v1_store_proto_goTypes = []any{
 	nil,                                 // 15: ladulas.store.v1.TrustRecord.AttributesEntry
 	(*timestamppb.Timestamp)(nil),       // 16: google.protobuf.Timestamp
 	(ladulasv1.PairingAnswer)(0),        // 17: ladulas.v1.PairingAnswer
-	(*ladulasv1.KeyRef)(nil),            // 18: ladulas.v1.KeyRef
-	(*ladulasv1.WakeupRoute)(nil),       // 19: ladulas.v1.WakeupRoute
-	(ladulasv1.PushPlatform)(0),         // 20: ladulas.v1.PushPlatform
-	(*ladulasv1.Grant)(nil),             // 21: ladulas.v1.Grant
-	(*ladulasv1.Publication)(nil),       // 22: ladulas.v1.Publication
-	(*ladulasv1.SignedEndorsement)(nil), // 23: ladulas.v1.SignedEndorsement
-	(*ladulasv1.Endorsement)(nil),       // 24: ladulas.v1.Endorsement
-	(*ladulasv1.GrantUse)(nil),          // 25: ladulas.v1.GrantUse
-	(*ladulasv1.SignedRetraction)(nil),  // 26: ladulas.v1.SignedRetraction
-	(*ladulasv1.Retraction)(nil),        // 27: ladulas.v1.Retraction
-	(*ladulasv1.SignedDelegation)(nil),  // 28: ladulas.v1.SignedDelegation
-	(*ladulasv1.Delegation)(nil),        // 29: ladulas.v1.Delegation
+	(*ladulasv1.PairingAttempt)(nil),    // 18: ladulas.v1.PairingAttempt
+	(*ladulasv1.KeyRef)(nil),            // 19: ladulas.v1.KeyRef
+	(*ladulasv1.WakeupRoute)(nil),       // 20: ladulas.v1.WakeupRoute
+	(ladulasv1.PushPlatform)(0),         // 21: ladulas.v1.PushPlatform
+	(*ladulasv1.Grant)(nil),             // 22: ladulas.v1.Grant
+	(*ladulasv1.Publication)(nil),       // 23: ladulas.v1.Publication
+	(*ladulasv1.SignedEndorsement)(nil), // 24: ladulas.v1.SignedEndorsement
+	(*ladulasv1.Endorsement)(nil),       // 25: ladulas.v1.Endorsement
+	(*ladulasv1.GrantUse)(nil),          // 26: ladulas.v1.GrantUse
+	(*ladulasv1.SignedRetraction)(nil),  // 27: ladulas.v1.SignedRetraction
+	(*ladulasv1.Retraction)(nil),        // 28: ladulas.v1.Retraction
+	(*ladulasv1.SignedDelegation)(nil),  // 29: ladulas.v1.SignedDelegation
+	(*ladulasv1.Delegation)(nil),        // 30: ladulas.v1.Delegation
 }
 var file_ladulas_store_v1_store_proto_depIdxs = []int32{
 	16, // 0: ladulas.store.v1.KeyTransfer.at:type_name -> google.protobuf.Timestamp
@@ -2061,45 +2075,46 @@ var file_ladulas_store_v1_store_proto_depIdxs = []int32{
 	17, // 10: ladulas.store.v1.PendingPairing.their_answer:type_name -> ladulas.v1.PairingAnswer
 	16, // 11: ladulas.store.v1.PendingPairing.started_at:type_name -> google.protobuf.Timestamp
 	16, // 12: ladulas.store.v1.PendingPairing.answered_at:type_name -> google.protobuf.Timestamp
-	18, // 13: ladulas.store.v1.BorrowedKey.key:type_name -> ladulas.v1.KeyRef
-	16, // 14: ladulas.store.v1.BorrowedKey.last_seen_at:type_name -> google.protobuf.Timestamp
-	19, // 15: ladulas.store.v1.PeerWakeup.route:type_name -> ladulas.v1.WakeupRoute
-	16, // 16: ladulas.store.v1.PeerWakeup.announced_at:type_name -> google.protobuf.Timestamp
-	16, // 17: ladulas.store.v1.PeerWakeup.quiet_until:type_name -> google.protobuf.Timestamp
-	20, // 18: ladulas.store.v1.WakeupSettings.platform:type_name -> ladulas.v1.PushPlatform
-	16, // 19: ladulas.store.v1.WakeupSettings.registered_at:type_name -> google.protobuf.Timestamp
-	16, // 20: ladulas.store.v1.PeerListenSettings.updated_at:type_name -> google.protobuf.Timestamp
-	16, // 21: ladulas.store.v1.StoreDocument.created_at:type_name -> google.protobuf.Timestamp
-	2,  // 22: ladulas.store.v1.StoreDocument.keys:type_name -> ladulas.store.v1.StoredKey
-	21, // 23: ladulas.store.v1.StoreDocument.grants:type_name -> ladulas.v1.Grant
-	5,  // 24: ladulas.store.v1.StoreDocument.peers:type_name -> ladulas.store.v1.TrustRecord
-	6,  // 25: ladulas.store.v1.StoreDocument.pending_pairings:type_name -> ladulas.store.v1.PendingPairing
-	22, // 26: ladulas.store.v1.StoreDocument.publications:type_name -> ladulas.v1.Publication
-	8,  // 27: ladulas.store.v1.StoreDocument.peer_wakeups:type_name -> ladulas.store.v1.PeerWakeup
-	9,  // 28: ladulas.store.v1.StoreDocument.wakeups:type_name -> ladulas.store.v1.WakeupSettings
-	7,  // 29: ladulas.store.v1.StoreDocument.borrowed_keys:type_name -> ladulas.store.v1.BorrowedKey
-	14, // 30: ladulas.store.v1.StoreDocument.held_delegations:type_name -> ladulas.store.v1.HeldDelegation
-	3,  // 31: ladulas.store.v1.StoreDocument.pending_key_offers:type_name -> ladulas.store.v1.PendingKeyOffer
-	4,  // 32: ladulas.store.v1.StoreDocument.queued_key_handovers:type_name -> ladulas.store.v1.QueuedKeyHandover
-	12, // 33: ladulas.store.v1.StoreDocument.held_endorsements:type_name -> ladulas.store.v1.HeldEndorsement
-	10, // 34: ladulas.store.v1.StoreDocument.peer_listen:type_name -> ladulas.store.v1.PeerListenSettings
-	13, // 35: ladulas.store.v1.StoreDocument.retractions:type_name -> ladulas.store.v1.HeldRetraction
-	23, // 36: ladulas.store.v1.HeldEndorsement.signed:type_name -> ladulas.v1.SignedEndorsement
-	24, // 37: ladulas.store.v1.HeldEndorsement.endorsement:type_name -> ladulas.v1.Endorsement
-	16, // 38: ladulas.store.v1.HeldEndorsement.received_at:type_name -> google.protobuf.Timestamp
-	25, // 39: ladulas.store.v1.HeldEndorsement.unreported_uses:type_name -> ladulas.v1.GrantUse
-	26, // 40: ladulas.store.v1.HeldRetraction.signed:type_name -> ladulas.v1.SignedRetraction
-	27, // 41: ladulas.store.v1.HeldRetraction.retraction:type_name -> ladulas.v1.Retraction
-	16, // 42: ladulas.store.v1.HeldRetraction.received_at:type_name -> google.protobuf.Timestamp
-	28, // 43: ladulas.store.v1.HeldDelegation.signed:type_name -> ladulas.v1.SignedDelegation
-	29, // 44: ladulas.store.v1.HeldDelegation.delegation:type_name -> ladulas.v1.Delegation
-	16, // 45: ladulas.store.v1.HeldDelegation.received_at:type_name -> google.protobuf.Timestamp
-	25, // 46: ladulas.store.v1.HeldDelegation.unreported_uses:type_name -> ladulas.v1.GrantUse
-	47, // [47:47] is the sub-list for method output_type
-	47, // [47:47] is the sub-list for method input_type
-	47, // [47:47] is the sub-list for extension type_name
-	47, // [47:47] is the sub-list for extension extendee
-	0,  // [0:47] is the sub-list for field type_name
+	18, // 13: ladulas.store.v1.PendingPairing.failed_attempts:type_name -> ladulas.v1.PairingAttempt
+	19, // 14: ladulas.store.v1.BorrowedKey.key:type_name -> ladulas.v1.KeyRef
+	16, // 15: ladulas.store.v1.BorrowedKey.last_seen_at:type_name -> google.protobuf.Timestamp
+	20, // 16: ladulas.store.v1.PeerWakeup.route:type_name -> ladulas.v1.WakeupRoute
+	16, // 17: ladulas.store.v1.PeerWakeup.announced_at:type_name -> google.protobuf.Timestamp
+	16, // 18: ladulas.store.v1.PeerWakeup.quiet_until:type_name -> google.protobuf.Timestamp
+	21, // 19: ladulas.store.v1.WakeupSettings.platform:type_name -> ladulas.v1.PushPlatform
+	16, // 20: ladulas.store.v1.WakeupSettings.registered_at:type_name -> google.protobuf.Timestamp
+	16, // 21: ladulas.store.v1.PeerListenSettings.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 22: ladulas.store.v1.StoreDocument.created_at:type_name -> google.protobuf.Timestamp
+	2,  // 23: ladulas.store.v1.StoreDocument.keys:type_name -> ladulas.store.v1.StoredKey
+	22, // 24: ladulas.store.v1.StoreDocument.grants:type_name -> ladulas.v1.Grant
+	5,  // 25: ladulas.store.v1.StoreDocument.peers:type_name -> ladulas.store.v1.TrustRecord
+	6,  // 26: ladulas.store.v1.StoreDocument.pending_pairings:type_name -> ladulas.store.v1.PendingPairing
+	23, // 27: ladulas.store.v1.StoreDocument.publications:type_name -> ladulas.v1.Publication
+	8,  // 28: ladulas.store.v1.StoreDocument.peer_wakeups:type_name -> ladulas.store.v1.PeerWakeup
+	9,  // 29: ladulas.store.v1.StoreDocument.wakeups:type_name -> ladulas.store.v1.WakeupSettings
+	7,  // 30: ladulas.store.v1.StoreDocument.borrowed_keys:type_name -> ladulas.store.v1.BorrowedKey
+	14, // 31: ladulas.store.v1.StoreDocument.held_delegations:type_name -> ladulas.store.v1.HeldDelegation
+	3,  // 32: ladulas.store.v1.StoreDocument.pending_key_offers:type_name -> ladulas.store.v1.PendingKeyOffer
+	4,  // 33: ladulas.store.v1.StoreDocument.queued_key_handovers:type_name -> ladulas.store.v1.QueuedKeyHandover
+	12, // 34: ladulas.store.v1.StoreDocument.held_endorsements:type_name -> ladulas.store.v1.HeldEndorsement
+	10, // 35: ladulas.store.v1.StoreDocument.peer_listen:type_name -> ladulas.store.v1.PeerListenSettings
+	13, // 36: ladulas.store.v1.StoreDocument.retractions:type_name -> ladulas.store.v1.HeldRetraction
+	24, // 37: ladulas.store.v1.HeldEndorsement.signed:type_name -> ladulas.v1.SignedEndorsement
+	25, // 38: ladulas.store.v1.HeldEndorsement.endorsement:type_name -> ladulas.v1.Endorsement
+	16, // 39: ladulas.store.v1.HeldEndorsement.received_at:type_name -> google.protobuf.Timestamp
+	26, // 40: ladulas.store.v1.HeldEndorsement.unreported_uses:type_name -> ladulas.v1.GrantUse
+	27, // 41: ladulas.store.v1.HeldRetraction.signed:type_name -> ladulas.v1.SignedRetraction
+	28, // 42: ladulas.store.v1.HeldRetraction.retraction:type_name -> ladulas.v1.Retraction
+	16, // 43: ladulas.store.v1.HeldRetraction.received_at:type_name -> google.protobuf.Timestamp
+	29, // 44: ladulas.store.v1.HeldDelegation.signed:type_name -> ladulas.v1.SignedDelegation
+	30, // 45: ladulas.store.v1.HeldDelegation.delegation:type_name -> ladulas.v1.Delegation
+	16, // 46: ladulas.store.v1.HeldDelegation.received_at:type_name -> google.protobuf.Timestamp
+	26, // 47: ladulas.store.v1.HeldDelegation.unreported_uses:type_name -> ladulas.v1.GrantUse
+	48, // [48:48] is the sub-list for method output_type
+	48, // [48:48] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_store_v1_store_proto_init() }

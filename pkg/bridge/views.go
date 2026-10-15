@@ -379,6 +379,10 @@ type PairingView struct {
 	// nothing to compare by hand.
 	KeyFromCode bool     `json:"keyFromCode,omitempty"`
 	Addresses   []string `json:"addresses,omitempty"`
+	// FailedAttempts are the attempts at the code that failed before this one,
+	// on the side that displayed it (decision AV). A card with any is a card
+	// to read twice: a PIN can be seen across a room.
+	FailedAttempts []PairingAttemptView `json:"failedAttempts,omitempty"`
 }
 
 // PeerView is a paired instance in the status pane.
@@ -419,16 +423,22 @@ type PeerView struct {
 	LastSeen string `json:"lastSeen,omitempty"`
 }
 
-// InvitationView is a pairing code as a screen shows it (§7, decision AD).
+// InvitationView is a pairing code as a screen shows it (§7, decisions AD and
+// AV).
 //
-// The three ways in are all here because they are one invitation seen by three
-// kinds of machine: a terminal somewhere types the command, a window somewhere
-// else pastes the full code, and a phone points a camera at the QR. Every one
-// of them carries the same secret, and which is easiest depends on what the
-// person is holding rather than on anything this instance knows.
+// The ways in are all here because they are one invitation seen by different
+// kinds of machine: another desktop or a headless box types the PIN with the
+// address beside it, a window somewhere else pastes the full code, a phone
+// points a camera at the QR, and for the overlap release an older version
+// types the ten-character code. Which is easiest depends on what the person is
+// holding rather than on anything this instance knows.
 type InvitationView struct {
-	// Code is what somebody types, in the two groups it is displayed in.
-	Code string `json:"code"`
+	// PIN is the six digits, in the two groups they are displayed in. It is
+	// what a joining desktop or box types.
+	PIN string `json:"pin,omitempty"`
+	// Code is the ten characters an older version types, labelled as such
+	// wherever it is shown.
+	Code string `json:"code,omitempty"`
 	// FullCode is the string behind the QR, and the one to paste into another
 	// window. It carries the identity key, so a side that has it pins before
 	// it connects and has nothing left to compare by hand.
@@ -445,17 +455,43 @@ type InvitationView struct {
 	Intent    string `json:"intent"`
 	Direction string `json:"direction"`
 	// Join is the command line to run on the other machine, ready to be copied
-	// — the address that is most likely to work and the code in it.
+	// — the address that is most likely to work and the PIN.
 	Join string `json:"join,omitempty"`
+	// OlderJoin is the same for an older version, with the ten-character code.
+	OlderJoin string `json:"olderJoin,omitempty"`
+	// Attempts are the failed attempts so far, newest last.
+	Attempts []PairingAttemptView `json:"attempts,omitempty"`
+	// Ended is why the code was withdrawn early, when it was: its attempts
+	// were spent, and the screen offers a new PIN.
+	Ended string `json:"ended,omitempty"`
+}
+
+// PairingAttemptView is a failed attempt at a displayed code.
+type PairingAttemptView struct {
+	Source  string `json:"source"`
+	At      string `json:"at,omitempty"`
+	Outcome string `json:"outcome"`
 }
 
 func invitationView(invitation Invitation) InvitationView {
 	view := InvitationView{
+		PIN:       trust.PIN(invitation.PIN).Display(),
 		Code:      invitation.Code,
 		FullCode:  invitation.FullCode,
 		Addresses: invitation.Addresses,
 		Intent:    invitation.Intent.String(),
 		Direction: invitation.Intent.Describe(),
+		Ended:     invitation.Ended,
+	}
+
+	for _, attempt := range invitation.Attempts {
+		entry := PairingAttemptView{Source: attempt.Source, Outcome: attempt.Outcome}
+
+		if !attempt.At.IsZero() {
+			entry.At = attempt.At.Format(time.RFC3339)
+		}
+
+		view.Attempts = append(view.Attempts, entry)
 	}
 
 	if invitation.FullCode != "" {
@@ -475,7 +511,15 @@ func invitationView(invitation Invitation) InvitationView {
 		address = invitation.Addresses[0]
 	}
 
-	view.Join = fmt.Sprintf("ladulas pair %s --code %s", address, invitation.Code)
+	if invitation.PIN != "" {
+		view.Join = fmt.Sprintf("ladulas pair --address %s --pin %s",
+			address, invitation.PIN)
+	}
+
+	if invitation.Code != "" {
+		view.OlderJoin = fmt.Sprintf("ladulas pair %s --code %s",
+			address, invitation.Code)
+	}
 
 	return view
 }
@@ -861,8 +905,8 @@ func localTierWord(bound []string) string {
 	return "the tailnet and local network addresses"
 }
 
-// JoinView is what a screen is told when a pasted code reached the machine
-// that displayed it: which confirmation to look for, when one was raised, and
+// JoinView is what a screen is told when a typed PIN or a pasted code reached
+// the machine that displayed it: which confirmation to look for, when one was raised, and
 // the daemon's own sentence about where things stand. The fingerprints are not
 // here on purpose — they are on the card, beside the other side's, which is the
 // only place comparing them means anything (§7).
@@ -1405,8 +1449,32 @@ func attachOperation(view *RequestView, msg *ladulasv1.ApprovalRequest) {
 			InitiatedLocally: pairing.GetInitiatedLocally(),
 			KeyFromCode:      pairing.GetKeyFromCode(),
 			Addresses:        pairing.GetPeerAddresses(),
+			FailedAttempts:   attemptViews(pairing.GetFailedAttempts()),
 		}
 	}
+}
+
+func attemptViews(attempts []*ladulasv1.PairingAttempt) []PairingAttemptView {
+	views := make([]PairingAttemptView, 0, len(attempts))
+
+	for _, attempt := range attempts {
+		view := PairingAttemptView{
+			Source:  attempt.GetSource(),
+			Outcome: attempt.GetOutcome(),
+		}
+
+		if at := attempt.GetAt(); at != nil {
+			view.At = at.AsTime().Format(time.RFC3339)
+		}
+
+		views = append(views, view)
+	}
+
+	if len(views) == 0 {
+		return nil
+	}
+
+	return views
 }
 
 func sshAuthView(

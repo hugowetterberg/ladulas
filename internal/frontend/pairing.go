@@ -14,7 +14,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
-// Displaying a pairing code from the window (§7, decision AD).
+// Displaying a pairing PIN from the window (§7, decisions AD and AV).
 //
 // The daemon owns the pairing window and the listener, so starting one is a
 // call — and it is a *streamed* call whose lifetime is the window's: the code
@@ -43,6 +43,11 @@ type pairingControl struct {
 	live    *bridge.Invitation
 	cancel  context.CancelFunc
 	expires time.Time
+	// ended is the invitation the daemon withdrew because its attempts were
+	// spent, kept so the screen can say so and offer a new PIN rather than
+	// going back to the question as though nothing had happened (decision
+	// AV). Cleared by Stop and by the next Invite.
+	ended *bridge.Invitation
 	// window counts the codes this front end has displayed, so that a stream
 	// ending after a second one was opened cannot take the second one off the
 	// screen on its way out.
@@ -91,6 +96,7 @@ func (p *pairingControl) Invite(
 	p.live = &invitation
 	p.cancel = cancel
 	p.expires = invitation.Expires
+	p.ended = nil
 	p.mu.Unlock()
 
 	// The rest of the stream is read and thrown away — the pairing itself is
@@ -157,6 +163,7 @@ func firstCode(
 
 func invitationFrom(progress *ladulasv1.PairingProgress) bridge.Invitation {
 	invitation := bridge.Invitation{
+		PIN:       progress.GetPin(),
 		Code:      progress.GetCode(),
 		FullCode:  progress.GetFullCode(),
 		Addresses: progress.GetListenAddresses(),
@@ -170,7 +177,9 @@ func invitationFrom(progress *ladulasv1.PairingProgress) bridge.Invitation {
 	return invitation
 }
 
-// follow drains the stream and forgets the code when it ends.
+// follow reads the rest of the stream for the two things the screen shows
+// while a code is up — failed attempts, and the code being withdrawn because
+// they were spent — and forgets the code when the stream ends.
 func (p *pairingControl) follow(
 	stream *connect.ServerStreamForClient[ladulasv1.PairingProgress],
 	cancel context.CancelFunc,
@@ -185,20 +194,80 @@ func (p *pairingControl) follow(
 	}()
 
 	for stream.Receive() {
-		if stream.Msg().GetKind() ==
-			ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED {
+		progress := stream.Msg()
+
+		switch progress.GetKind() {
+		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_ATTEMPT:
+			p.attempted(window, progress.GetAttempt())
+		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_FAILED:
 			p.front.log.Info("the pairing code is no longer on offer",
-				"reason", stream.Msg().GetMessage())
+				"reason", progress.GetMessage())
+
+			if progress.GetExhausted() {
+				p.exhausted(window, progress.GetMessage())
+			}
+		default:
 		}
 	}
 
 	p.forget(window)
 }
 
+// attempted adds a failed attempt to the code on screen, if it is still the
+// one this stream belongs to.
+func (p *pairingControl) attempted(window int, attempt *ladulasv1.PairingAttempt) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.window != window || p.live == nil || attempt == nil {
+		return
+	}
+
+	entry := bridge.PairingAttempt{
+		Source:  attempt.GetSource(),
+		Outcome: attempt.GetOutcome(),
+	}
+
+	if at := attempt.GetAt(); at != nil {
+		entry.At = at.AsTime()
+	}
+
+	// A new slice rather than an append to the old one: Invitation hands the
+	// struct out by value, and a caller holding the previous one must not see
+	// it change under it.
+	updated := *p.live
+	updated.Attempts = append(append([]bridge.PairingAttempt(nil),
+		p.live.Attempts...), entry)
+	p.live = &updated
+}
+
+// exhausted keeps what the screen needs to say the code was withdrawn.
+func (p *pairingControl) exhausted(window int, message string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.window != window || p.live == nil {
+		return
+	}
+
+	p.ended = &bridge.Invitation{
+		Intent:   p.live.Intent,
+		Attempts: p.live.Attempts,
+		Ended:    message,
+	}
+}
+
 // Invitation is the code on display, if it is still worth displaying.
 func (p *pairingControl) Invitation() (bridge.Invitation, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// A code withdrawn for being guessed at is reported until somebody does
+	// something about it, because "the screen went back to the question" is
+	// how nobody would find out (decision AV).
+	if p.ended != nil {
+		return *p.ended, true
+	}
 
 	// A code past its five minutes is not one to show. The daemon closes the
 	// window on the same clock, so this is the screen agreeing with it rather
@@ -214,7 +283,7 @@ func (p *pairingControl) Invitation() (bridge.Invitation, bool) {
 func (p *pairingControl) Stop() {
 	p.mu.Lock()
 	cancel := p.cancel
-	p.live, p.cancel = nil, nil
+	p.live, p.cancel, p.ended = nil, nil, nil
 	p.mu.Unlock()
 
 	if cancel != nil {

@@ -158,8 +158,13 @@ func TestFullCodeCarriesTheIdentity(t *testing.T) {
 	key := newKey(t, "desktop")
 	addresses := []string{"100.64.0.2:7373", "127.0.0.1:7373"}
 
+	pin, err := trust.NewPIN()
+	if err != nil {
+		t.Fatalf("generate a PIN: %v", err)
+	}
+
 	encoded, err := trust.EncodeCode(trust.NewCode(
-		secret, "desktop", key, addresses, time.Now().Add(trust.CodeValidity)))
+		pin, secret, "desktop", key, addresses, time.Now().Add(trust.CodeValidity)))
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -171,6 +176,10 @@ func TestFullCodeCarriesTheIdentity(t *testing.T) {
 
 	if decoded.GetSecret() != string(secret) {
 		t.Errorf("the code carries the secret %q", decoded.GetSecret())
+	}
+
+	if decoded.GetPin() != string(pin) {
+		t.Errorf("the code carries the PIN %q", decoded.GetPin())
 	}
 
 	if decoded.GetInstanceName() != "desktop" {
@@ -226,7 +235,7 @@ func TestExpiredCodeIsRefused(t *testing.T) {
 	}
 
 	encoded, err := trust.EncodeCode(trust.NewCode(
-		secret, "desktop", newKey(t, "desktop"),
+		"123456", secret, "desktop", newKey(t, "desktop"),
 		[]string{"127.0.0.1:7373"}, time.Now().Add(-time.Second)))
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -441,5 +450,90 @@ func TestReaddressedLeavesTheOldOneAlone(t *testing.T) {
 
 	if !revised.GetMayApprove() || revised.GetMayRequest() {
 		t.Error("Readdressed changed the directions")
+	}
+}
+
+// TestAPINIsSixDigits: uniform, zero-padded, and forgiving only of the
+// separators a person types.
+func TestAPINIsSixDigits(t *testing.T) {
+	for range 200 {
+		pin, err := trust.NewPIN()
+		if err != nil {
+			t.Fatalf("generate a PIN: %v", err)
+		}
+
+		parsed, err := trust.ParsePIN(pin.Display())
+		if err != nil || parsed != pin {
+			t.Fatalf("%q displayed as %q parsed back as %q, %v",
+				pin, pin.Display(), parsed, err)
+		}
+	}
+
+	for _, typed := range []string{"012 345", "012-345", " 012345 "} {
+		if pin, err := trust.ParsePIN(typed); err != nil || pin != "012345" {
+			t.Errorf("%q parsed as %q, %v", typed, pin, err)
+		}
+	}
+
+	for _, wrong := range []string{"", "12345", "1234567", "12345a", "١٢٣٤٥٦"} {
+		if _, err := trust.ParsePIN(wrong); !errors.Is(err, trust.ErrBadPIN) {
+			t.Errorf("%q was accepted as a PIN (%v)", wrong, err)
+		}
+	}
+}
+
+// TestATypedPINIsAPIN: six digits decode to a code with the PIN and nothing
+// else in it — in particular no ten-character secret, so nothing can send the
+// older proof for it.
+func TestATypedPINIsAPIN(t *testing.T) {
+	decoded, err := trust.DecodeCode("123 456")
+	if err != nil {
+		t.Fatalf("decode a typed PIN: %v", err)
+	}
+
+	if decoded.GetPin() != "123456" || decoded.GetSecret() != "" {
+		t.Errorf("a typed PIN decoded to pin %q secret %q",
+			decoded.GetPin(), decoded.GetSecret())
+	}
+}
+
+// TestAnOlderBuildStillReadsTheCode is overlap invariant 3 (decision AV): an
+// older build refuses any version but 1 and any secret that is not ten
+// characters, and ignores fields it does not know. So a new code has to be
+// version 1 with a ten-character secret, the PIN in a field of its own.
+func TestAnOlderBuildStillReadsTheCode(t *testing.T) {
+	secret, err := trust.NewSecret()
+	if err != nil {
+		t.Fatalf("generate a secret: %v", err)
+	}
+
+	code := trust.NewCode("654321", secret, "desktop", newKey(t, "desktop"),
+		[]string{"127.0.0.1:7373"}, time.Now().Add(trust.CodeValidity))
+
+	if code.GetVersion() != 1 {
+		t.Errorf("the code is version %d", code.GetVersion())
+	}
+
+	if len(code.GetSecret()) != 10 || code.GetSecret() == code.GetPin() {
+		t.Errorf("the older secret is %q beside the PIN %q",
+			code.GetSecret(), code.GetPin())
+	}
+
+	// And a code from an older instance, which has no PIN, still decodes.
+	code.Pin = ""
+
+	encoded, err := trust.EncodeCode(code)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	decoded, err := trust.DecodeCode(encoded)
+	if err != nil {
+		t.Fatalf("decode an older code: %v", err)
+	}
+
+	if decoded.GetSecret() != string(secret) || decoded.GetPin() != "" {
+		t.Errorf("an older code decoded to pin %q secret %q",
+			decoded.GetPin(), decoded.GetSecret())
 	}
 }

@@ -112,14 +112,17 @@ type Location struct {
 // where to dial, and what the pairing it opens is for (§7).
 //
 // It is the code half of a pairing and the only half with a clock on it —
-// `trust.CodeValidity`, single use, five wrong answers — which is why Expires
+// `trust.CodeValidity`, single use, five attempts (decision AV) — which is why Expires
 // is here and why nothing that draws one may cache it.
 type Invitation struct {
-	// Code is the ten characters somebody types, in the two groups they are
-	// displayed in.
+	// PIN is the six digits somebody types on the other machine (decision
+	// AV). It is what the screen shows first.
+	PIN string
+	// Code is the ten characters an older version types, in the two groups
+	// they are displayed in. Overlap release only.
 	Code string
-	// FullCode is the string a QR carries: the same secret plus the identity
-	// key and the addresses, so a camera pins before it connects.
+	// FullCode is the string a QR carries: the PIN and the older code plus the
+	// identity key and the addresses, so a camera pins before it connects.
 	FullCode string
 	// Addresses are where the other machine dials.
 	Addresses []string
@@ -127,6 +130,21 @@ type Invitation struct {
 	// Intent is what the pairing this opens will be for, on both sides
 	// (decision AD).
 	Intent trust.Intent
+	// Attempts are the attempts at this code that failed so far, with where
+	// each came from. A PIN can be read across a room; this is how the person
+	// at the screen finds out somebody else is trying it.
+	Attempts []PairingAttempt
+	// Ended is set, with nothing else to show, when the code was withdrawn
+	// because its attempts were spent (decision AV): the screen says
+	// something is guessing and offers a new PIN rather than going quiet.
+	Ended string
+}
+
+// PairingAttempt is one failed attempt at a displayed code.
+type PairingAttempt struct {
+	Source  string
+	At      time.Time
+	Outcome string
 }
 
 // Pairing is the half of §7 that a window has to be able to drive: putting a
@@ -391,9 +409,9 @@ type Options struct {
 	// without it lists what is under way and cannot open a new one, which is
 	// what every host did until there was a screen for it.
 	Pairing Pairing
-	// Join is the other end of a pairing: a code displayed elsewhere, pasted
-	// here (§7). The full code carries the address and the identity key; a
-	// short one needs the address beside it. It returns once the other machine
+	// Join is the other end of a pairing: a PIN displayed elsewhere and typed
+	// here, or a full code pasted (§7). The full code carries the address and
+	// the identity key; a PIN needs the address beside it. It returns once the other machine
 	// has answered the dial and the confirmation is on its way as a card, or
 	// with why it did not — it does not wait for anybody to answer the card,
 	// because the pairing is on disk on both sides by then and outlives every

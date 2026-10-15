@@ -1183,8 +1183,8 @@ message PairWithPeerRequest {
   // host:port of the instance displaying the code. May be empty when the code
   // is a full one, which carries the address.
   string address = 1;
-  // The code as it was displayed: either the short typed secret or the full
-  // string a QR would carry.
+  // The code as it was displayed: the six-digit PIN, the ten-character code
+  // an older instance shows, or the full string a QR carries.
   string code = 2;
 
   // 3 and 4 were this side's own directions. The code's owner declares them
@@ -1211,12 +1211,18 @@ enum PairingProgressKind {
   // terminal back rather than occupying it until somebody walks to the other
   // machine (§7).
   PAIRING_PROGRESS_KIND_WAITING = 5;
+  // An attempt at the displayed code failed, and `attempt` says from where.
+  // Only on BeginPairing, and not an end: the code is still on offer until the
+  // window's attempts are spent, when FAILED follows with `exhausted` set
+  // (decision AV).
+  PAIRING_PROGRESS_KIND_ATTEMPT = 6;
 }
 
 message PairingProgress {
   PairingProgressKind kind = 1;
-  // The short typed code, and the full string a QR would carry. Both name the
-  // same secret; the full one also carries the address and the identity key.
+  // The ten-character code an older joiner types, and the full string a QR
+  // carries, which holds the PIN, the ten-character code, the addresses and
+  // the identity key. The PIN is in `pin`.
   string code = 2;
   string full_code = 3;
   google.protobuf.Timestamp expires_at = 4;
@@ -1230,6 +1236,15 @@ message PairingProgress {
   // What the pairing on offer is for, on CODE, so that the surface displaying
   // the code can go on saying what somebody chose (decision AD).
   PairingIntent intent = 9;
+  // The six-digit PIN, on CODE. It is what a joiner types and what the
+  // displaying side shows first (decision AV).
+  string pin = 10;
+  // The failed attempt, on ATTEMPT.
+  PairingAttempt attempt = 11;
+  // On FAILED: the window's attempts are spent, which is somebody guessing
+  // rather than the clock running out, and the surface offers a new PIN
+  // rather than closing quietly.
+  bool exhausted = 12;
 }
 
 message AnswerPairingRequest {

@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -26,7 +27,7 @@ import (
 // screen the user is looking at. Two mechanisms carry that, and they do
 // different jobs.
 //
-// The code proves the dialling side saw the listening side's screen. That is
+// The code proves the joining side saw the listening side's screen. That is
 // what keeps a stranger who can reach the listening port from raising a prompt
 // on it at all — without it, pairing would be an unauthenticated way to make
 // somebody's desktop ask them a question, which is approval fatigue delivered
@@ -34,31 +35,50 @@ import (
 //
 // The confirmation on each side proves a human agreed. The code cannot replace
 // it and does not try to: pairing always prompts, and no policy can turn that
-// off (§9).
+// off (§9). What the confirmation defends now is a PIN somebody else saw.
 //
-// What makes a ten-character code enough is that it is never sent. What is sent
-// is an HMAC over both identity keys of the channel it travels on, so a relay
-// that persuaded the dialling side to connect to it computes its proof over its
-// own key, which the real listener rejects, and it cannot compute the right one
-// without the secret. An attacker who can reach the listener directly is left
-// with online guessing against a single-use secret that expires in five minutes
-// and dies after a handful of wrong answers.
+// The code is a six-digit PIN (decision AV). Twenty bits is what a person will
+// actually type, and it is safe only because it is never fed to anything that
+// can be searched offline: it is the password of a CPace exchange (see
+// pkg/peer's pake.go and internal/cpace), where each run is one online guess,
+// and the window allows five. That is five in a million per code. **The PIN
+// never goes into an HMAC**, on any path — an HMAC over twenty bits falls to an
+// offline search in milliseconds, and an impostor that answered a joiner in the
+// listener's place would hold one.
+//
+// For one release the window also holds a ten-character secret, independent of
+// the PIN, for joiners that predate it: an older phone scanning a new QR, an
+// older box typing a code. That one is proved the old way — an HMAC over both
+// identity keys of the channel, so a relay computes its proof over its own key
+// and the real listener rejects it — and fifty bits is what makes the offline
+// search that relay could run hopeless inside five minutes. Both draw on the
+// window's one attempt counter.
 const (
 	// CodeValidity is how long a displayed code stays good. Long enough to walk
 	// to the other machine, short enough that a code left on a screen over
 	// lunch is not a standing invitation.
 	CodeValidity = 5 * time.Minute
 
-	// MaxAttempts is how many wrong proofs a pairing window survives. Guessing
-	// fifty bits needs rather more than five tries, so the cap costs an honest
-	// user nothing and takes online guessing off the table entirely.
+	// MaxAttempts is how many attempts a pairing window allows, across the PIN
+	// exchange and the older proof together. An attempt is charged when it
+	// starts and refunded only when it is verified, so an exchange that is
+	// started and abandoned counts. Against a six-digit PIN five is five in a
+	// million per code: enough that a typo costs an honest user nothing, few
+	// enough that guessing is not a plan. Exhausting them is a denial, not a
+	// break, and the displaying side offers a new PIN.
 	MaxAttempts = 5
 
-	// secretLength is the typed code's length in characters. Each character is
-	// five bits of the alphabet below, so ten of them is fifty bits.
+	// PINLength is the PIN's length in digits.
+	PINLength = 6
+
+	// secretLength is the older typed code's length in characters. Each
+	// character is five bits of the alphabet below, so ten of them is fifty
+	// bits.
 	secretLength = 10
 
-	// codeVersion is the version of the full code's encoding.
+	// codeVersion is the version of the full code's encoding. It stays at 1
+	// through the overlap release, because an older build refuses any other;
+	// the PIN is a field an older decoder ignores (decision AV).
 	codeVersion = 1
 
 	// codePrefix marks a full code, which is what a QR carries (M5) and what
@@ -78,7 +98,58 @@ var ErrBadCode = errors.New("trust: the pairing code is not readable")
 // useful before it connects.
 var ErrCodeExpired = errors.New("trust: the pairing code has expired")
 
-// Secret is the material a pairing code carries: ten characters, normalised.
+// ErrBadPIN is returned when a typed PIN is not six digits.
+var ErrBadPIN = errors.New("trust: a pairing PIN is six digits")
+
+// PIN is the six-digit code a joining machine types (decision AV), as six
+// ASCII digits. It is a CPace password and nothing else.
+type PIN string
+
+// NewPIN draws a PIN uniformly from the million there are.
+func NewPIN() (PIN, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", fmt.Errorf("trust: no randomness for a pairing PIN: %w", err)
+	}
+
+	return PIN(fmt.Sprintf("%06d", n.Int64())), nil
+}
+
+// Display renders a PIN in two groups of three, which is how it is read off a
+// screen without losing your place.
+func (p PIN) Display() string {
+	if len(p) != PINLength {
+		return string(p)
+	}
+
+	return string(p[:3]) + " " + string(p[3:])
+}
+
+// ParsePIN normalises a typed PIN: spaces and dashes are forgiven, and
+// anything that is not six digits is refused.
+func ParsePIN(text string) (PIN, error) {
+	var b strings.Builder
+
+	for _, r := range strings.TrimSpace(text) {
+		switch {
+		case r == ' ' || r == '-' || r == '\t':
+			continue
+		case r < '0' || r > '9':
+			return "", fmt.Errorf("%w: %q is not a digit", ErrBadPIN, r)
+		}
+
+		b.WriteRune(r)
+	}
+
+	if b.Len() != PINLength {
+		return "", fmt.Errorf("%w, and this is %d", ErrBadPIN, b.Len())
+	}
+
+	return PIN(b.String()), nil
+}
+
+// Secret is the ten-character code an older joiner types, normalised. It is
+// the overlap release's v1 secret (decision AV), independent of the PIN.
 //
 // The secret is the string, not a decoding of it, so there is no encoding to
 // disagree about between the side that displays it and the side that types it.
@@ -153,9 +224,15 @@ func (s Secret) Equal(other Secret) bool {
 	return subtle.ConstantTimeCompare([]byte(s), []byte(other)) == 1
 }
 
-// The two domain separators. A proof and a confirmation are HMACs over the same
-// material, and being able to replay one as the other would let a relay that
-// captured a dialler's proof turn it round and pose as the listener.
+// The two domain separators of the older proof. A proof and a confirmation are
+// HMACs over the same material, and being able to replay one as the other would
+// let a relay that captured a dialler's proof turn it round and pose as the
+// listener.
+//
+// Everything from here to EncodeCode is the overlap release's v1 proof
+// (decision AV). It is keyed with the ten-character Secret and never with a
+// PIN, which the type of its first argument is there to make hard to get
+// wrong.
 const (
 	proofPrefix        = "ladulas-pairing-v1"
 	confirmationPrefix = "ladulas-pairing-v1-response"
@@ -215,9 +292,10 @@ func mac(secret Secret, prefix string, listener, dialler ssh.PublicKey) []byte {
 	return h.Sum(nil)
 }
 
-// EncodeCode renders the full code: the same secret, plus the address and the
-// identity key, so that a dialler that has it needs to type nothing and knows
-// who it is connecting to before it connects. This is what a QR will carry.
+// EncodeCode renders the full code: the PIN and the older secret, plus the
+// addresses and the identity key, so that a joiner that has it needs to type
+// nothing and knows who it is connecting to before it connects. This is what a
+// QR carries.
 func EncodeCode(code *ladulasv1.PairingCode) (string, error) {
 	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(code)
 	if err != nil {
@@ -229,11 +307,12 @@ func EncodeCode(code *ladulasv1.PairingCode) (string, error) {
 
 // NewCode builds the full code for a pairing window.
 func NewCode(
-	secret Secret, name string, pub ssh.PublicKey,
+	pin PIN, secret Secret, name string, pub ssh.PublicKey,
 	addresses []string, expires time.Time,
 ) *ladulasv1.PairingCode {
 	return &ladulasv1.PairingCode{
 		Version:           codeVersion,
+		Pin:               string(pin),
 		Secret:            string(secret),
 		IdentityPublicKey: pub.Marshal(),
 		Addresses:         addresses,
@@ -244,16 +323,24 @@ func NewCode(
 
 // DecodeCode reads whatever the user pasted or typed.
 //
-// A full code yields everything; a typed secret yields a code with nothing in
-// it but the secret, and the caller supplies the address it was told separately.
-// Both are the same exchange from there on.
+// A full code yields everything; a typed PIN yields a code with nothing in it
+// but the PIN, and a typed ten-character code one with nothing but the older
+// secret. For the typed ones the caller supplies the address it was told
+// separately. From there each is the same exchange as the full code would
+// have been — the PIN exchange when there is a PIN, the older proof only when
+// there is not.
 func DecodeCode(text string) (*ladulasv1.PairingCode, error) {
 	text = strings.TrimSpace(text)
 
 	if !strings.HasPrefix(text, codePrefix) {
+		if pin, err := ParsePIN(text); err == nil {
+			return &ladulasv1.PairingCode{Version: codeVersion, Pin: string(pin)}, nil
+		}
+
 		secret, err := ParseSecret(text)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: it is neither a six-digit PIN nor a "+
+				"ten-character code", ErrBadCode)
 		}
 
 		return &ladulasv1.PairingCode{
@@ -278,12 +365,29 @@ func DecodeCode(text string) (*ladulasv1.PairingCode, error) {
 			ErrBadCode, code.GetVersion(), codeVersion)
 	}
 
-	secret, err := ParseSecret(code.GetSecret())
-	if err != nil {
-		return nil, err
+	// A code from an older instance has no PIN, and one from a later one may
+	// have no ten-character secret. Either is enough; neither is not.
+	if code.GetPin() == "" && code.GetSecret() == "" {
+		return nil, fmt.Errorf("%w: it carries neither a PIN nor a secret", ErrBadCode)
 	}
 
-	code.Secret = string(secret)
+	if code.GetPin() != "" {
+		pin, err := ParsePIN(code.GetPin())
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrBadCode, err)
+		}
+
+		code.Pin = string(pin)
+	}
+
+	if code.GetSecret() != "" {
+		secret, err := ParseSecret(code.GetSecret())
+		if err != nil {
+			return nil, err
+		}
+
+		code.Secret = string(secret)
+	}
 
 	if expires := code.GetExpiresAt(); expires != nil &&
 		!expires.AsTime().After(time.Now()) {
@@ -296,11 +400,13 @@ func DecodeCode(text string) (*ladulasv1.PairingCode, error) {
 // CodeKey parses the identity key a full code carries, or returns nil when the
 // code was typed and carries none.
 //
-// A code that carries the key is the stronger pairing: the dialling side pins
+// A code that carries the key is the stronger pairing: the joining side pins
 // before it connects, so the visual channel is the integrity root and there is
-// nothing left for the user to compare character by character. A typed code
-// leaves that comparison to the two screens, which is what §7 describes and
-// what a headless box gets.
+// nothing left for the user to compare character by character. On that path
+// the PIN's remaining job is the other direction — authenticating the joiner
+// to the listener — and a pinned handshake that fails stops a wrong address
+// from ever receiving a guess. A typed PIN leaves the comparison to the two
+// screens, which is what §7 describes and what a headless box gets.
 func CodeKey(code *ladulasv1.PairingCode) (ssh.PublicKey, error) {
 	blob := code.GetIdentityPublicKey()
 	if len(blob) == 0 {

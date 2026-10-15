@@ -305,6 +305,11 @@ const (
 	// terminal back rather than occupying it until somebody walks to the other
 	// machine (§7).
 	PairingProgressKind_PAIRING_PROGRESS_KIND_WAITING PairingProgressKind = 5
+	// An attempt at the displayed code failed, and `attempt` says from where.
+	// Only on BeginPairing, and not an end: the code is still on offer until the
+	// window's attempts are spent, when FAILED follows with `exhausted` set
+	// (decision AV).
+	PairingProgressKind_PAIRING_PROGRESS_KIND_ATTEMPT PairingProgressKind = 6
 )
 
 // Enum value maps for PairingProgressKind.
@@ -316,6 +321,7 @@ var (
 		3: "PAIRING_PROGRESS_KIND_DONE",
 		4: "PAIRING_PROGRESS_KIND_FAILED",
 		5: "PAIRING_PROGRESS_KIND_WAITING",
+		6: "PAIRING_PROGRESS_KIND_ATTEMPT",
 	}
 	PairingProgressKind_value = map[string]int32{
 		"PAIRING_PROGRESS_KIND_UNSPECIFIED": 0,
@@ -324,6 +330,7 @@ var (
 		"PAIRING_PROGRESS_KIND_DONE":        3,
 		"PAIRING_PROGRESS_KIND_FAILED":      4,
 		"PAIRING_PROGRESS_KIND_WAITING":     5,
+		"PAIRING_PROGRESS_KIND_ATTEMPT":     6,
 	}
 )
 
@@ -5112,8 +5119,8 @@ type PairWithPeerRequest struct {
 	// host:port of the instance displaying the code. May be empty when the code
 	// is a full one, which carries the address.
 	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
-	// The code as it was displayed: either the short typed secret or the full
-	// string a QR would carry.
+	// The code as it was displayed: the six-digit PIN, the ten-character code
+	// an older instance shows, or the full string a QR carries.
 	Code          string `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5166,8 +5173,9 @@ func (x *PairWithPeerRequest) GetCode() string {
 type PairingProgress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Kind  PairingProgressKind    `protobuf:"varint,1,opt,name=kind,proto3,enum=ladulas.v1.PairingProgressKind" json:"kind,omitempty"`
-	// The short typed code, and the full string a QR would carry. Both name the
-	// same secret; the full one also carries the address and the identity key.
+	// The ten-character code an older joiner types, and the full string a QR
+	// carries, which holds the PIN, the ten-character code, the addresses and
+	// the identity key. The PIN is in `pin`.
 	Code            string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
 	FullCode        string                 `protobuf:"bytes,3,opt,name=full_code,json=fullCode,proto3" json:"full_code,omitempty"`
 	ExpiresAt       *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
@@ -5180,7 +5188,16 @@ type PairingProgress struct {
 	Message string      `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`
 	// What the pairing on offer is for, on CODE, so that the surface displaying
 	// the code can go on saying what somebody chose (decision AD).
-	Intent        PairingIntent `protobuf:"varint,9,opt,name=intent,proto3,enum=ladulas.v1.PairingIntent" json:"intent,omitempty"`
+	Intent PairingIntent `protobuf:"varint,9,opt,name=intent,proto3,enum=ladulas.v1.PairingIntent" json:"intent,omitempty"`
+	// The six-digit PIN, on CODE. It is what a joiner types and what the
+	// displaying side shows first (decision AV).
+	Pin string `protobuf:"bytes,10,opt,name=pin,proto3" json:"pin,omitempty"`
+	// The failed attempt, on ATTEMPT.
+	Attempt *PairingAttempt `protobuf:"bytes,11,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// On FAILED: the window's attempts are spent, which is somebody guessing
+	// rather than the clock running out, and the surface offers a new PIN
+	// rather than closing quietly.
+	Exhausted     bool `protobuf:"varint,12,opt,name=exhausted,proto3" json:"exhausted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5276,6 +5293,27 @@ func (x *PairingProgress) GetIntent() PairingIntent {
 		return x.Intent
 	}
 	return PairingIntent_PAIRING_INTENT_UNSPECIFIED
+}
+
+func (x *PairingProgress) GetPin() string {
+	if x != nil {
+		return x.Pin
+	}
+	return ""
+}
+
+func (x *PairingProgress) GetAttempt() *PairingAttempt {
+	if x != nil {
+		return x.Attempt
+	}
+	return nil
+}
+
+func (x *PairingProgress) GetExhausted() bool {
+	if x != nil {
+		return x.Exhausted
+	}
+	return false
 }
 
 type AnswerPairingRequest struct {
@@ -9038,7 +9076,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\x06intent\x18\x03 \x01(\x0e2\x19.ladulas.v1.PairingIntentR\x06intentJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x10peer_may_approveR\x10peer_may_request\"s\n" +
 	"\x13PairWithPeerRequest\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x12\n" +
-	"\x04code\x18\x02 \x01(\tR\x04codeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x10peer_may_approveR\x10peer_may_request\"\x97\x03\n" +
+	"\x04code\x18\x02 \x01(\tR\x04codeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\x10peer_may_approveR\x10peer_may_request\"\xfd\x03\n" +
 	"\x0fPairingProgress\x123\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1f.ladulas.v1.PairingProgressKindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x1b\n" +
@@ -9049,7 +9087,11 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\fconfirmation\x18\x06 \x01(\v2\x1b.ladulas.v1.ApprovalRequestR\fconfirmation\x12*\n" +
 	"\x04peer\x18\a \x01(\v2\x16.ladulas.v1.PeerStatusR\x04peer\x12\x18\n" +
 	"\amessage\x18\b \x01(\tR\amessage\x121\n" +
-	"\x06intent\x18\t \x01(\x0e2\x19.ladulas.v1.PairingIntentR\x06intent\"i\n" +
+	"\x06intent\x18\t \x01(\x0e2\x19.ladulas.v1.PairingIntentR\x06intent\x12\x10\n" +
+	"\x03pin\x18\n" +
+	" \x01(\tR\x03pin\x124\n" +
+	"\aattempt\x18\v \x01(\v2\x1a.ladulas.v1.PairingAttemptR\aattempt\x12\x1c\n" +
+	"\texhausted\x18\f \x01(\bR\texhausted\"i\n" +
 	"\x14AnswerPairingRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +
@@ -9324,14 +9366,15 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\x1aPAIRING_INTENT_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cPAIRING_INTENT_PEER_APPROVES\x10\x01\x12 \n" +
 	"\x1cPAIRING_INTENT_PEER_REQUESTS\x10\x02\x12\x19\n" +
-	"\x15PAIRING_INTENT_MUTUAL\x10\x03*\xe4\x01\n" +
+	"\x15PAIRING_INTENT_MUTUAL\x10\x03*\x87\x02\n" +
 	"\x13PairingProgressKind\x12%\n" +
 	"!PAIRING_PROGRESS_KIND_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPAIRING_PROGRESS_KIND_CODE\x10\x01\x12!\n" +
 	"\x1dPAIRING_PROGRESS_KIND_CONFIRM\x10\x02\x12\x1e\n" +
 	"\x1aPAIRING_PROGRESS_KIND_DONE\x10\x03\x12 \n" +
 	"\x1cPAIRING_PROGRESS_KIND_FAILED\x10\x04\x12!\n" +
-	"\x1dPAIRING_PROGRESS_KIND_WAITING\x10\x05*\xc4\x01\n" +
+	"\x1dPAIRING_PROGRESS_KIND_WAITING\x10\x05\x12!\n" +
+	"\x1dPAIRING_PROGRESS_KIND_ATTEMPT\x10\x06*\xc4\x01\n" +
 	"\x12ApprovalPromptKind\x12$\n" +
 	" APPROVAL_PROMPT_KIND_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dAPPROVAL_PROMPT_KIND_ATTACHED\x10\x01\x12\x1f\n" +
@@ -9569,14 +9612,15 @@ var file_ladulas_v1_local_proto_goTypes = []any{
 	(*Endorsement)(nil),                  // 145: ladulas.v1.Endorsement
 	(*Retraction)(nil),                   // 146: ladulas.v1.Retraction
 	(*ApprovalRequest)(nil),              // 147: ladulas.v1.ApprovalRequest
-	(PairingAnswer)(0),                   // 148: ladulas.v1.PairingAnswer
-	(PairingRecordState)(0),              // 149: ladulas.v1.PairingRecordState
-	(*Publication)(nil),                  // 150: ladulas.v1.Publication
-	(*ApprovalResponse)(nil),             // 151: ladulas.v1.ApprovalResponse
-	(*PresentedProject)(nil),             // 152: ladulas.v1.PresentedProject
-	(*GitDiff)(nil),                      // 153: ladulas.v1.GitDiff
-	(*ProjectEntry)(nil),                 // 154: ladulas.v1.ProjectEntry
-	(*DocumentVersion)(nil),              // 155: ladulas.v1.DocumentVersion
+	(*PairingAttempt)(nil),               // 148: ladulas.v1.PairingAttempt
+	(PairingAnswer)(0),                   // 149: ladulas.v1.PairingAnswer
+	(PairingRecordState)(0),              // 150: ladulas.v1.PairingRecordState
+	(*Publication)(nil),                  // 151: ladulas.v1.Publication
+	(*ApprovalResponse)(nil),             // 152: ladulas.v1.ApprovalResponse
+	(*PresentedProject)(nil),             // 153: ladulas.v1.PresentedProject
+	(*GitDiff)(nil),                      // 154: ladulas.v1.GitDiff
+	(*ProjectEntry)(nil),                 // 155: ladulas.v1.ProjectEntry
+	(*DocumentVersion)(nil),              // 156: ladulas.v1.DocumentVersion
 }
 var file_ladulas_v1_local_proto_depIdxs = []int32{
 	135, // 0: ladulas.v1.SignPayloadRequest.git_context:type_name -> ladulas.v1.GitContext
@@ -9650,166 +9694,167 @@ var file_ladulas_v1_local_proto_depIdxs = []int32{
 	147, // 68: ladulas.v1.PairingProgress.confirmation:type_name -> ladulas.v1.ApprovalRequest
 	13,  // 69: ladulas.v1.PairingProgress.peer:type_name -> ladulas.v1.PeerStatus
 	3,   // 70: ladulas.v1.PairingProgress.intent:type_name -> ladulas.v1.PairingIntent
-	148, // 71: ladulas.v1.PendingPairingStatus.our_answer:type_name -> ladulas.v1.PairingAnswer
-	148, // 72: ladulas.v1.PendingPairingStatus.their_answer:type_name -> ladulas.v1.PairingAnswer
-	140, // 73: ladulas.v1.PendingPairingStatus.started_at:type_name -> google.protobuf.Timestamp
-	140, // 74: ladulas.v1.PendingPairingStatus.answered_at:type_name -> google.protobuf.Timestamp
-	85,  // 75: ladulas.v1.ListPendingPairingsResponse.pairings:type_name -> ladulas.v1.PendingPairingStatus
-	149, // 76: ladulas.v1.AnswerPendingPairingResponse.state:type_name -> ladulas.v1.PairingRecordState
-	85,  // 77: ladulas.v1.AnswerPendingPairingResponse.pairing:type_name -> ladulas.v1.PendingPairingStatus
-	13,  // 78: ladulas.v1.AnswerPendingPairingResponse.peer:type_name -> ladulas.v1.PeerStatus
-	13,  // 79: ladulas.v1.SetPeerDirectionsResponse.peer:type_name -> ladulas.v1.PeerStatus
-	13,  // 80: ladulas.v1.RenamePeerResponse.peer:type_name -> ladulas.v1.PeerStatus
-	150, // 81: ladulas.v1.CachedProject.project:type_name -> ladulas.v1.Publication
-	140, // 82: ladulas.v1.CachedProject.first_read_at:type_name -> google.protobuf.Timestamp
-	140, // 83: ladulas.v1.CachedProject.last_read_at:type_name -> google.protobuf.Timestamp
-	99,  // 84: ladulas.v1.CachedProject.files:type_name -> ladulas.v1.CachedFile
-	140, // 85: ladulas.v1.CachedFile.modified_at:type_name -> google.protobuf.Timestamp
-	140, // 86: ladulas.v1.CachedFile.read_at:type_name -> google.protobuf.Timestamp
-	101, // 87: ladulas.v1.TrackedProject.documents:type_name -> ladulas.v1.TrackedDocument
-	140, // 88: ladulas.v1.TrackedProject.updated_at:type_name -> google.protobuf.Timestamp
-	102, // 89: ladulas.v1.TrackedDocument.snapshots:type_name -> ladulas.v1.DocumentSnapshot
-	140, // 90: ladulas.v1.DocumentSnapshot.taken_at:type_name -> google.protobuf.Timestamp
-	150, // 91: ladulas.v1.PublishProjectResponse.publication:type_name -> ladulas.v1.Publication
-	150, // 92: ladulas.v1.ListPublicationsResponse.published:type_name -> ladulas.v1.Publication
-	98,  // 93: ladulas.v1.ListPublicationsResponse.cached:type_name -> ladulas.v1.CachedProject
-	5,   // 94: ladulas.v1.ApprovalPrompt.kind:type_name -> ladulas.v1.ApprovalPromptKind
-	113, // 95: ladulas.v1.ApprovalPrompt.grant:type_name -> ladulas.v1.GrantOffer
-	151, // 96: ladulas.v1.ApprovalPrompt.response:type_name -> ladulas.v1.ApprovalResponse
-	136, // 97: ladulas.v1.GrantOffer.ttls:type_name -> google.protobuf.Duration
-	136, // 98: ladulas.v1.GrantOffer.max_ttl:type_name -> google.protobuf.Duration
-	143, // 99: ladulas.v1.AnswerApprovalRequest.decision:type_name -> ladulas.v1.Decision
-	136, // 100: ladulas.v1.AnswerApprovalRequest.grant_ttl:type_name -> google.protobuf.Duration
-	6,   // 101: ladulas.v1.AnswerApprovalRequest.grant_reach:type_name -> ladulas.v1.GrantReach
-	152, // 102: ladulas.v1.AnswerApprovalRequest.presented:type_name -> ladulas.v1.PresentedProject
-	153, // 103: ladulas.v1.FetchRequestDiffResponse.diff:type_name -> ladulas.v1.GitDiff
-	150, // 104: ladulas.v1.PeerProject.project:type_name -> ladulas.v1.Publication
-	140, // 105: ladulas.v1.PeerProject.read:type_name -> google.protobuf.Timestamp
-	154, // 106: ladulas.v1.PeerListing.entries:type_name -> ladulas.v1.ProjectEntry
-	118, // 107: ladulas.v1.PeerListing.publisher:type_name -> ladulas.v1.PeerProject
-	140, // 108: ladulas.v1.PeerPage.modified:type_name -> google.protobuf.Timestamp
-	140, // 109: ladulas.v1.PeerPage.read_at:type_name -> google.protobuf.Timestamp
-	118, // 110: ladulas.v1.ListPeerProjectsResponse.projects:type_name -> ladulas.v1.PeerProject
-	118, // 111: ladulas.v1.OpenPeerProjectResponse.project:type_name -> ladulas.v1.PeerProject
-	119, // 112: ladulas.v1.ListPeerDirectoryResponse.listing:type_name -> ladulas.v1.PeerListing
-	119, // 113: ladulas.v1.SearchPeerProjectResponse.listing:type_name -> ladulas.v1.PeerListing
-	120, // 114: ladulas.v1.ReadPeerPageResponse.page:type_name -> ladulas.v1.PeerPage
-	120, // 115: ladulas.v1.ReadPeerPageResponse.compared_to:type_name -> ladulas.v1.PeerPage
-	155, // 116: ladulas.v1.ReadPeerPageResponse.version:type_name -> ladulas.v1.DocumentVersion
-	155, // 117: ladulas.v1.PeerDocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
-	7,   // 118: ladulas.v1.SigningService.SignPayload:input_type -> ladulas.v1.SignPayloadRequest
-	12,  // 119: ladulas.v1.ControlService.Status:input_type -> ladulas.v1.StatusRequest
-	17,  // 120: ladulas.v1.ControlService.Initialize:input_type -> ladulas.v1.InitializeRequest
-	19,  // 121: ladulas.v1.ControlService.Unlock:input_type -> ladulas.v1.UnlockRequest
-	21,  // 122: ladulas.v1.ControlService.Lock:input_type -> ladulas.v1.LockRequest
-	23,  // 123: ladulas.v1.ControlService.AwaitState:input_type -> ladulas.v1.AwaitStateRequest
-	25,  // 124: ladulas.v1.ControlService.KeyringStatus:input_type -> ladulas.v1.KeyringStatusRequest
-	27,  // 125: ladulas.v1.ControlService.SetUnlockAtLogin:input_type -> ladulas.v1.SetUnlockAtLoginRequest
-	31,  // 126: ladulas.v1.ControlService.PeerListen:input_type -> ladulas.v1.PeerListenRequest
-	33,  // 127: ladulas.v1.ControlService.SetPeerListen:input_type -> ladulas.v1.SetPeerListenRequest
-	37,  // 128: ladulas.v1.ControlService.ListStoredKeys:input_type -> ladulas.v1.ListStoredKeysRequest
-	39,  // 129: ladulas.v1.ControlService.GenerateKey:input_type -> ladulas.v1.GenerateKeyRequest
-	41,  // 130: ladulas.v1.ControlService.ImportKey:input_type -> ladulas.v1.ImportKeyRequest
-	43,  // 131: ladulas.v1.ControlService.RemoveKey:input_type -> ladulas.v1.RemoveKeyRequest
-	45,  // 132: ladulas.v1.ControlService.SetKeyEnabled:input_type -> ladulas.v1.SetKeyEnabledRequest
-	47,  // 133: ladulas.v1.ControlService.SetKeyAgentUse:input_type -> ladulas.v1.SetKeyAgentUseRequest
-	49,  // 134: ladulas.v1.ControlService.SendKey:input_type -> ladulas.v1.SendKeyRequest
-	59,  // 135: ladulas.v1.ControlService.ListKeyOffers:input_type -> ladulas.v1.ListKeyOffersRequest
-	61,  // 136: ladulas.v1.ControlService.AnswerKeyOffer:input_type -> ladulas.v1.AnswerKeyOfferRequest
-	53,  // 137: ladulas.v1.ControlService.ListLocalKeys:input_type -> ladulas.v1.ListLocalKeysRequest
-	55,  // 138: ladulas.v1.ControlService.ForgetLocalKey:input_type -> ladulas.v1.ForgetLocalKeyRequest
-	57,  // 139: ladulas.v1.ControlService.PromoteLocalKey:input_type -> ladulas.v1.PromoteLocalKeyRequest
-	63,  // 140: ladulas.v1.ControlService.ListGrants:input_type -> ladulas.v1.ListGrantsRequest
-	78,  // 141: ladulas.v1.ControlService.RevokeGrant:input_type -> ladulas.v1.RevokeGrantRequest
-	65,  // 142: ladulas.v1.ControlService.ExtendGrant:input_type -> ladulas.v1.ExtendGrantRequest
-	67,  // 143: ladulas.v1.ControlService.RequestGrant:input_type -> ladulas.v1.RequestGrantRequest
-	69,  // 144: ladulas.v1.ControlService.ListDelegations:input_type -> ladulas.v1.ListDelegationsRequest
-	72,  // 145: ladulas.v1.ControlService.ListEndorsements:input_type -> ladulas.v1.ListEndorsementsRequest
-	76,  // 146: ladulas.v1.ControlService.RetractEndorsement:input_type -> ladulas.v1.RetractEndorsementRequest
-	80,  // 147: ladulas.v1.ControlService.BeginPairing:input_type -> ladulas.v1.BeginPairingRequest
-	81,  // 148: ladulas.v1.ControlService.PairWithPeer:input_type -> ladulas.v1.PairWithPeerRequest
-	83,  // 149: ladulas.v1.ControlService.AnswerPairing:input_type -> ladulas.v1.AnswerPairingRequest
-	86,  // 150: ladulas.v1.ControlService.ListPendingPairings:input_type -> ladulas.v1.ListPendingPairingsRequest
-	88,  // 151: ladulas.v1.ControlService.AnswerPendingPairing:input_type -> ladulas.v1.AnswerPendingPairingRequest
-	90,  // 152: ladulas.v1.ControlService.WithdrawPairing:input_type -> ladulas.v1.WithdrawPairingRequest
-	92,  // 153: ladulas.v1.ControlService.SetPeerDirections:input_type -> ladulas.v1.SetPeerDirectionsRequest
-	94,  // 154: ladulas.v1.ControlService.RenamePeer:input_type -> ladulas.v1.RenamePeerRequest
-	96,  // 155: ladulas.v1.ControlService.RevokePeer:input_type -> ladulas.v1.RevokePeerRequest
-	103, // 156: ladulas.v1.ControlService.PublishProject:input_type -> ladulas.v1.PublishProjectRequest
-	105, // 157: ladulas.v1.ControlService.ListPublications:input_type -> ladulas.v1.ListPublicationsRequest
-	109, // 158: ladulas.v1.ControlService.UnpublishProject:input_type -> ladulas.v1.UnpublishProjectRequest
-	107, // 159: ladulas.v1.ControlService.SetAutoPublish:input_type -> ladulas.v1.SetAutoPublishRequest
-	111, // 160: ladulas.v1.ControlService.WatchApprovals:input_type -> ladulas.v1.WatchApprovalsRequest
-	114, // 161: ladulas.v1.ControlService.AnswerApproval:input_type -> ladulas.v1.AnswerApprovalRequest
-	116, // 162: ladulas.v1.ControlService.FetchRequestDiff:input_type -> ladulas.v1.FetchRequestDiffRequest
-	121, // 163: ladulas.v1.ControlService.ListPeerProjects:input_type -> ladulas.v1.ListPeerProjectsRequest
-	123, // 164: ladulas.v1.ControlService.OpenPeerProject:input_type -> ladulas.v1.OpenPeerProjectRequest
-	125, // 165: ladulas.v1.ControlService.ListPeerDirectory:input_type -> ladulas.v1.ListPeerDirectoryRequest
-	127, // 166: ladulas.v1.ControlService.SearchPeerProject:input_type -> ladulas.v1.SearchPeerProjectRequest
-	129, // 167: ladulas.v1.ControlService.ReadPeerPage:input_type -> ladulas.v1.ReadPeerPageRequest
-	131, // 168: ladulas.v1.ControlService.PeerDocumentVersions:input_type -> ladulas.v1.PeerDocumentVersionsRequest
-	133, // 169: ladulas.v1.ControlService.Reload:input_type -> ladulas.v1.ReloadRequest
-	9,   // 170: ladulas.v1.ControlService.Settings:input_type -> ladulas.v1.SettingsRequest
-	11,  // 171: ladulas.v1.ControlService.SetSignTimeout:input_type -> ladulas.v1.SetSignTimeoutRequest
-	8,   // 172: ladulas.v1.SigningService.SignPayload:output_type -> ladulas.v1.SignPayloadResponse
-	14,  // 173: ladulas.v1.ControlService.Status:output_type -> ladulas.v1.StatusResponse
-	18,  // 174: ladulas.v1.ControlService.Initialize:output_type -> ladulas.v1.InitializeResponse
-	20,  // 175: ladulas.v1.ControlService.Unlock:output_type -> ladulas.v1.UnlockResponse
-	22,  // 176: ladulas.v1.ControlService.Lock:output_type -> ladulas.v1.LockResponse
-	24,  // 177: ladulas.v1.ControlService.AwaitState:output_type -> ladulas.v1.AwaitStateResponse
-	26,  // 178: ladulas.v1.ControlService.KeyringStatus:output_type -> ladulas.v1.KeyringStatusResponse
-	28,  // 179: ladulas.v1.ControlService.SetUnlockAtLogin:output_type -> ladulas.v1.SetUnlockAtLoginResponse
-	32,  // 180: ladulas.v1.ControlService.PeerListen:output_type -> ladulas.v1.PeerListenResponse
-	34,  // 181: ladulas.v1.ControlService.SetPeerListen:output_type -> ladulas.v1.SetPeerListenResponse
-	38,  // 182: ladulas.v1.ControlService.ListStoredKeys:output_type -> ladulas.v1.ListStoredKeysResponse
-	40,  // 183: ladulas.v1.ControlService.GenerateKey:output_type -> ladulas.v1.GenerateKeyResponse
-	42,  // 184: ladulas.v1.ControlService.ImportKey:output_type -> ladulas.v1.ImportKeyResponse
-	44,  // 185: ladulas.v1.ControlService.RemoveKey:output_type -> ladulas.v1.RemoveKeyResponse
-	46,  // 186: ladulas.v1.ControlService.SetKeyEnabled:output_type -> ladulas.v1.SetKeyEnabledResponse
-	48,  // 187: ladulas.v1.ControlService.SetKeyAgentUse:output_type -> ladulas.v1.SetKeyAgentUseResponse
-	50,  // 188: ladulas.v1.ControlService.SendKey:output_type -> ladulas.v1.SendKeyResponse
-	60,  // 189: ladulas.v1.ControlService.ListKeyOffers:output_type -> ladulas.v1.ListKeyOffersResponse
-	62,  // 190: ladulas.v1.ControlService.AnswerKeyOffer:output_type -> ladulas.v1.AnswerKeyOfferResponse
-	54,  // 191: ladulas.v1.ControlService.ListLocalKeys:output_type -> ladulas.v1.ListLocalKeysResponse
-	56,  // 192: ladulas.v1.ControlService.ForgetLocalKey:output_type -> ladulas.v1.ForgetLocalKeyResponse
-	58,  // 193: ladulas.v1.ControlService.PromoteLocalKey:output_type -> ladulas.v1.PromoteLocalKeyResponse
-	64,  // 194: ladulas.v1.ControlService.ListGrants:output_type -> ladulas.v1.ListGrantsResponse
-	79,  // 195: ladulas.v1.ControlService.RevokeGrant:output_type -> ladulas.v1.RevokeGrantResponse
-	66,  // 196: ladulas.v1.ControlService.ExtendGrant:output_type -> ladulas.v1.ExtendGrantResponse
-	68,  // 197: ladulas.v1.ControlService.RequestGrant:output_type -> ladulas.v1.RequestGrantResponse
-	70,  // 198: ladulas.v1.ControlService.ListDelegations:output_type -> ladulas.v1.ListDelegationsResponse
-	73,  // 199: ladulas.v1.ControlService.ListEndorsements:output_type -> ladulas.v1.ListEndorsementsResponse
-	77,  // 200: ladulas.v1.ControlService.RetractEndorsement:output_type -> ladulas.v1.RetractEndorsementResponse
-	82,  // 201: ladulas.v1.ControlService.BeginPairing:output_type -> ladulas.v1.PairingProgress
-	82,  // 202: ladulas.v1.ControlService.PairWithPeer:output_type -> ladulas.v1.PairingProgress
-	84,  // 203: ladulas.v1.ControlService.AnswerPairing:output_type -> ladulas.v1.AnswerPairingResponse
-	87,  // 204: ladulas.v1.ControlService.ListPendingPairings:output_type -> ladulas.v1.ListPendingPairingsResponse
-	89,  // 205: ladulas.v1.ControlService.AnswerPendingPairing:output_type -> ladulas.v1.AnswerPendingPairingResponse
-	91,  // 206: ladulas.v1.ControlService.WithdrawPairing:output_type -> ladulas.v1.WithdrawPairingResponse
-	93,  // 207: ladulas.v1.ControlService.SetPeerDirections:output_type -> ladulas.v1.SetPeerDirectionsResponse
-	95,  // 208: ladulas.v1.ControlService.RenamePeer:output_type -> ladulas.v1.RenamePeerResponse
-	97,  // 209: ladulas.v1.ControlService.RevokePeer:output_type -> ladulas.v1.RevokePeerResponse
-	104, // 210: ladulas.v1.ControlService.PublishProject:output_type -> ladulas.v1.PublishProjectResponse
-	106, // 211: ladulas.v1.ControlService.ListPublications:output_type -> ladulas.v1.ListPublicationsResponse
-	110, // 212: ladulas.v1.ControlService.UnpublishProject:output_type -> ladulas.v1.UnpublishProjectResponse
-	108, // 213: ladulas.v1.ControlService.SetAutoPublish:output_type -> ladulas.v1.SetAutoPublishResponse
-	112, // 214: ladulas.v1.ControlService.WatchApprovals:output_type -> ladulas.v1.ApprovalPrompt
-	115, // 215: ladulas.v1.ControlService.AnswerApproval:output_type -> ladulas.v1.AnswerApprovalResponse
-	117, // 216: ladulas.v1.ControlService.FetchRequestDiff:output_type -> ladulas.v1.FetchRequestDiffResponse
-	122, // 217: ladulas.v1.ControlService.ListPeerProjects:output_type -> ladulas.v1.ListPeerProjectsResponse
-	124, // 218: ladulas.v1.ControlService.OpenPeerProject:output_type -> ladulas.v1.OpenPeerProjectResponse
-	126, // 219: ladulas.v1.ControlService.ListPeerDirectory:output_type -> ladulas.v1.ListPeerDirectoryResponse
-	128, // 220: ladulas.v1.ControlService.SearchPeerProject:output_type -> ladulas.v1.SearchPeerProjectResponse
-	130, // 221: ladulas.v1.ControlService.ReadPeerPage:output_type -> ladulas.v1.ReadPeerPageResponse
-	132, // 222: ladulas.v1.ControlService.PeerDocumentVersions:output_type -> ladulas.v1.PeerDocumentVersionsResponse
-	134, // 223: ladulas.v1.ControlService.Reload:output_type -> ladulas.v1.ReloadResponse
-	10,  // 224: ladulas.v1.ControlService.Settings:output_type -> ladulas.v1.SettingsResponse
-	10,  // 225: ladulas.v1.ControlService.SetSignTimeout:output_type -> ladulas.v1.SettingsResponse
-	172, // [172:226] is the sub-list for method output_type
-	118, // [118:172] is the sub-list for method input_type
-	118, // [118:118] is the sub-list for extension type_name
-	118, // [118:118] is the sub-list for extension extendee
-	0,   // [0:118] is the sub-list for field type_name
+	148, // 71: ladulas.v1.PairingProgress.attempt:type_name -> ladulas.v1.PairingAttempt
+	149, // 72: ladulas.v1.PendingPairingStatus.our_answer:type_name -> ladulas.v1.PairingAnswer
+	149, // 73: ladulas.v1.PendingPairingStatus.their_answer:type_name -> ladulas.v1.PairingAnswer
+	140, // 74: ladulas.v1.PendingPairingStatus.started_at:type_name -> google.protobuf.Timestamp
+	140, // 75: ladulas.v1.PendingPairingStatus.answered_at:type_name -> google.protobuf.Timestamp
+	85,  // 76: ladulas.v1.ListPendingPairingsResponse.pairings:type_name -> ladulas.v1.PendingPairingStatus
+	150, // 77: ladulas.v1.AnswerPendingPairingResponse.state:type_name -> ladulas.v1.PairingRecordState
+	85,  // 78: ladulas.v1.AnswerPendingPairingResponse.pairing:type_name -> ladulas.v1.PendingPairingStatus
+	13,  // 79: ladulas.v1.AnswerPendingPairingResponse.peer:type_name -> ladulas.v1.PeerStatus
+	13,  // 80: ladulas.v1.SetPeerDirectionsResponse.peer:type_name -> ladulas.v1.PeerStatus
+	13,  // 81: ladulas.v1.RenamePeerResponse.peer:type_name -> ladulas.v1.PeerStatus
+	151, // 82: ladulas.v1.CachedProject.project:type_name -> ladulas.v1.Publication
+	140, // 83: ladulas.v1.CachedProject.first_read_at:type_name -> google.protobuf.Timestamp
+	140, // 84: ladulas.v1.CachedProject.last_read_at:type_name -> google.protobuf.Timestamp
+	99,  // 85: ladulas.v1.CachedProject.files:type_name -> ladulas.v1.CachedFile
+	140, // 86: ladulas.v1.CachedFile.modified_at:type_name -> google.protobuf.Timestamp
+	140, // 87: ladulas.v1.CachedFile.read_at:type_name -> google.protobuf.Timestamp
+	101, // 88: ladulas.v1.TrackedProject.documents:type_name -> ladulas.v1.TrackedDocument
+	140, // 89: ladulas.v1.TrackedProject.updated_at:type_name -> google.protobuf.Timestamp
+	102, // 90: ladulas.v1.TrackedDocument.snapshots:type_name -> ladulas.v1.DocumentSnapshot
+	140, // 91: ladulas.v1.DocumentSnapshot.taken_at:type_name -> google.protobuf.Timestamp
+	151, // 92: ladulas.v1.PublishProjectResponse.publication:type_name -> ladulas.v1.Publication
+	151, // 93: ladulas.v1.ListPublicationsResponse.published:type_name -> ladulas.v1.Publication
+	98,  // 94: ladulas.v1.ListPublicationsResponse.cached:type_name -> ladulas.v1.CachedProject
+	5,   // 95: ladulas.v1.ApprovalPrompt.kind:type_name -> ladulas.v1.ApprovalPromptKind
+	113, // 96: ladulas.v1.ApprovalPrompt.grant:type_name -> ladulas.v1.GrantOffer
+	152, // 97: ladulas.v1.ApprovalPrompt.response:type_name -> ladulas.v1.ApprovalResponse
+	136, // 98: ladulas.v1.GrantOffer.ttls:type_name -> google.protobuf.Duration
+	136, // 99: ladulas.v1.GrantOffer.max_ttl:type_name -> google.protobuf.Duration
+	143, // 100: ladulas.v1.AnswerApprovalRequest.decision:type_name -> ladulas.v1.Decision
+	136, // 101: ladulas.v1.AnswerApprovalRequest.grant_ttl:type_name -> google.protobuf.Duration
+	6,   // 102: ladulas.v1.AnswerApprovalRequest.grant_reach:type_name -> ladulas.v1.GrantReach
+	153, // 103: ladulas.v1.AnswerApprovalRequest.presented:type_name -> ladulas.v1.PresentedProject
+	154, // 104: ladulas.v1.FetchRequestDiffResponse.diff:type_name -> ladulas.v1.GitDiff
+	151, // 105: ladulas.v1.PeerProject.project:type_name -> ladulas.v1.Publication
+	140, // 106: ladulas.v1.PeerProject.read:type_name -> google.protobuf.Timestamp
+	155, // 107: ladulas.v1.PeerListing.entries:type_name -> ladulas.v1.ProjectEntry
+	118, // 108: ladulas.v1.PeerListing.publisher:type_name -> ladulas.v1.PeerProject
+	140, // 109: ladulas.v1.PeerPage.modified:type_name -> google.protobuf.Timestamp
+	140, // 110: ladulas.v1.PeerPage.read_at:type_name -> google.protobuf.Timestamp
+	118, // 111: ladulas.v1.ListPeerProjectsResponse.projects:type_name -> ladulas.v1.PeerProject
+	118, // 112: ladulas.v1.OpenPeerProjectResponse.project:type_name -> ladulas.v1.PeerProject
+	119, // 113: ladulas.v1.ListPeerDirectoryResponse.listing:type_name -> ladulas.v1.PeerListing
+	119, // 114: ladulas.v1.SearchPeerProjectResponse.listing:type_name -> ladulas.v1.PeerListing
+	120, // 115: ladulas.v1.ReadPeerPageResponse.page:type_name -> ladulas.v1.PeerPage
+	120, // 116: ladulas.v1.ReadPeerPageResponse.compared_to:type_name -> ladulas.v1.PeerPage
+	156, // 117: ladulas.v1.ReadPeerPageResponse.version:type_name -> ladulas.v1.DocumentVersion
+	156, // 118: ladulas.v1.PeerDocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
+	7,   // 119: ladulas.v1.SigningService.SignPayload:input_type -> ladulas.v1.SignPayloadRequest
+	12,  // 120: ladulas.v1.ControlService.Status:input_type -> ladulas.v1.StatusRequest
+	17,  // 121: ladulas.v1.ControlService.Initialize:input_type -> ladulas.v1.InitializeRequest
+	19,  // 122: ladulas.v1.ControlService.Unlock:input_type -> ladulas.v1.UnlockRequest
+	21,  // 123: ladulas.v1.ControlService.Lock:input_type -> ladulas.v1.LockRequest
+	23,  // 124: ladulas.v1.ControlService.AwaitState:input_type -> ladulas.v1.AwaitStateRequest
+	25,  // 125: ladulas.v1.ControlService.KeyringStatus:input_type -> ladulas.v1.KeyringStatusRequest
+	27,  // 126: ladulas.v1.ControlService.SetUnlockAtLogin:input_type -> ladulas.v1.SetUnlockAtLoginRequest
+	31,  // 127: ladulas.v1.ControlService.PeerListen:input_type -> ladulas.v1.PeerListenRequest
+	33,  // 128: ladulas.v1.ControlService.SetPeerListen:input_type -> ladulas.v1.SetPeerListenRequest
+	37,  // 129: ladulas.v1.ControlService.ListStoredKeys:input_type -> ladulas.v1.ListStoredKeysRequest
+	39,  // 130: ladulas.v1.ControlService.GenerateKey:input_type -> ladulas.v1.GenerateKeyRequest
+	41,  // 131: ladulas.v1.ControlService.ImportKey:input_type -> ladulas.v1.ImportKeyRequest
+	43,  // 132: ladulas.v1.ControlService.RemoveKey:input_type -> ladulas.v1.RemoveKeyRequest
+	45,  // 133: ladulas.v1.ControlService.SetKeyEnabled:input_type -> ladulas.v1.SetKeyEnabledRequest
+	47,  // 134: ladulas.v1.ControlService.SetKeyAgentUse:input_type -> ladulas.v1.SetKeyAgentUseRequest
+	49,  // 135: ladulas.v1.ControlService.SendKey:input_type -> ladulas.v1.SendKeyRequest
+	59,  // 136: ladulas.v1.ControlService.ListKeyOffers:input_type -> ladulas.v1.ListKeyOffersRequest
+	61,  // 137: ladulas.v1.ControlService.AnswerKeyOffer:input_type -> ladulas.v1.AnswerKeyOfferRequest
+	53,  // 138: ladulas.v1.ControlService.ListLocalKeys:input_type -> ladulas.v1.ListLocalKeysRequest
+	55,  // 139: ladulas.v1.ControlService.ForgetLocalKey:input_type -> ladulas.v1.ForgetLocalKeyRequest
+	57,  // 140: ladulas.v1.ControlService.PromoteLocalKey:input_type -> ladulas.v1.PromoteLocalKeyRequest
+	63,  // 141: ladulas.v1.ControlService.ListGrants:input_type -> ladulas.v1.ListGrantsRequest
+	78,  // 142: ladulas.v1.ControlService.RevokeGrant:input_type -> ladulas.v1.RevokeGrantRequest
+	65,  // 143: ladulas.v1.ControlService.ExtendGrant:input_type -> ladulas.v1.ExtendGrantRequest
+	67,  // 144: ladulas.v1.ControlService.RequestGrant:input_type -> ladulas.v1.RequestGrantRequest
+	69,  // 145: ladulas.v1.ControlService.ListDelegations:input_type -> ladulas.v1.ListDelegationsRequest
+	72,  // 146: ladulas.v1.ControlService.ListEndorsements:input_type -> ladulas.v1.ListEndorsementsRequest
+	76,  // 147: ladulas.v1.ControlService.RetractEndorsement:input_type -> ladulas.v1.RetractEndorsementRequest
+	80,  // 148: ladulas.v1.ControlService.BeginPairing:input_type -> ladulas.v1.BeginPairingRequest
+	81,  // 149: ladulas.v1.ControlService.PairWithPeer:input_type -> ladulas.v1.PairWithPeerRequest
+	83,  // 150: ladulas.v1.ControlService.AnswerPairing:input_type -> ladulas.v1.AnswerPairingRequest
+	86,  // 151: ladulas.v1.ControlService.ListPendingPairings:input_type -> ladulas.v1.ListPendingPairingsRequest
+	88,  // 152: ladulas.v1.ControlService.AnswerPendingPairing:input_type -> ladulas.v1.AnswerPendingPairingRequest
+	90,  // 153: ladulas.v1.ControlService.WithdrawPairing:input_type -> ladulas.v1.WithdrawPairingRequest
+	92,  // 154: ladulas.v1.ControlService.SetPeerDirections:input_type -> ladulas.v1.SetPeerDirectionsRequest
+	94,  // 155: ladulas.v1.ControlService.RenamePeer:input_type -> ladulas.v1.RenamePeerRequest
+	96,  // 156: ladulas.v1.ControlService.RevokePeer:input_type -> ladulas.v1.RevokePeerRequest
+	103, // 157: ladulas.v1.ControlService.PublishProject:input_type -> ladulas.v1.PublishProjectRequest
+	105, // 158: ladulas.v1.ControlService.ListPublications:input_type -> ladulas.v1.ListPublicationsRequest
+	109, // 159: ladulas.v1.ControlService.UnpublishProject:input_type -> ladulas.v1.UnpublishProjectRequest
+	107, // 160: ladulas.v1.ControlService.SetAutoPublish:input_type -> ladulas.v1.SetAutoPublishRequest
+	111, // 161: ladulas.v1.ControlService.WatchApprovals:input_type -> ladulas.v1.WatchApprovalsRequest
+	114, // 162: ladulas.v1.ControlService.AnswerApproval:input_type -> ladulas.v1.AnswerApprovalRequest
+	116, // 163: ladulas.v1.ControlService.FetchRequestDiff:input_type -> ladulas.v1.FetchRequestDiffRequest
+	121, // 164: ladulas.v1.ControlService.ListPeerProjects:input_type -> ladulas.v1.ListPeerProjectsRequest
+	123, // 165: ladulas.v1.ControlService.OpenPeerProject:input_type -> ladulas.v1.OpenPeerProjectRequest
+	125, // 166: ladulas.v1.ControlService.ListPeerDirectory:input_type -> ladulas.v1.ListPeerDirectoryRequest
+	127, // 167: ladulas.v1.ControlService.SearchPeerProject:input_type -> ladulas.v1.SearchPeerProjectRequest
+	129, // 168: ladulas.v1.ControlService.ReadPeerPage:input_type -> ladulas.v1.ReadPeerPageRequest
+	131, // 169: ladulas.v1.ControlService.PeerDocumentVersions:input_type -> ladulas.v1.PeerDocumentVersionsRequest
+	133, // 170: ladulas.v1.ControlService.Reload:input_type -> ladulas.v1.ReloadRequest
+	9,   // 171: ladulas.v1.ControlService.Settings:input_type -> ladulas.v1.SettingsRequest
+	11,  // 172: ladulas.v1.ControlService.SetSignTimeout:input_type -> ladulas.v1.SetSignTimeoutRequest
+	8,   // 173: ladulas.v1.SigningService.SignPayload:output_type -> ladulas.v1.SignPayloadResponse
+	14,  // 174: ladulas.v1.ControlService.Status:output_type -> ladulas.v1.StatusResponse
+	18,  // 175: ladulas.v1.ControlService.Initialize:output_type -> ladulas.v1.InitializeResponse
+	20,  // 176: ladulas.v1.ControlService.Unlock:output_type -> ladulas.v1.UnlockResponse
+	22,  // 177: ladulas.v1.ControlService.Lock:output_type -> ladulas.v1.LockResponse
+	24,  // 178: ladulas.v1.ControlService.AwaitState:output_type -> ladulas.v1.AwaitStateResponse
+	26,  // 179: ladulas.v1.ControlService.KeyringStatus:output_type -> ladulas.v1.KeyringStatusResponse
+	28,  // 180: ladulas.v1.ControlService.SetUnlockAtLogin:output_type -> ladulas.v1.SetUnlockAtLoginResponse
+	32,  // 181: ladulas.v1.ControlService.PeerListen:output_type -> ladulas.v1.PeerListenResponse
+	34,  // 182: ladulas.v1.ControlService.SetPeerListen:output_type -> ladulas.v1.SetPeerListenResponse
+	38,  // 183: ladulas.v1.ControlService.ListStoredKeys:output_type -> ladulas.v1.ListStoredKeysResponse
+	40,  // 184: ladulas.v1.ControlService.GenerateKey:output_type -> ladulas.v1.GenerateKeyResponse
+	42,  // 185: ladulas.v1.ControlService.ImportKey:output_type -> ladulas.v1.ImportKeyResponse
+	44,  // 186: ladulas.v1.ControlService.RemoveKey:output_type -> ladulas.v1.RemoveKeyResponse
+	46,  // 187: ladulas.v1.ControlService.SetKeyEnabled:output_type -> ladulas.v1.SetKeyEnabledResponse
+	48,  // 188: ladulas.v1.ControlService.SetKeyAgentUse:output_type -> ladulas.v1.SetKeyAgentUseResponse
+	50,  // 189: ladulas.v1.ControlService.SendKey:output_type -> ladulas.v1.SendKeyResponse
+	60,  // 190: ladulas.v1.ControlService.ListKeyOffers:output_type -> ladulas.v1.ListKeyOffersResponse
+	62,  // 191: ladulas.v1.ControlService.AnswerKeyOffer:output_type -> ladulas.v1.AnswerKeyOfferResponse
+	54,  // 192: ladulas.v1.ControlService.ListLocalKeys:output_type -> ladulas.v1.ListLocalKeysResponse
+	56,  // 193: ladulas.v1.ControlService.ForgetLocalKey:output_type -> ladulas.v1.ForgetLocalKeyResponse
+	58,  // 194: ladulas.v1.ControlService.PromoteLocalKey:output_type -> ladulas.v1.PromoteLocalKeyResponse
+	64,  // 195: ladulas.v1.ControlService.ListGrants:output_type -> ladulas.v1.ListGrantsResponse
+	79,  // 196: ladulas.v1.ControlService.RevokeGrant:output_type -> ladulas.v1.RevokeGrantResponse
+	66,  // 197: ladulas.v1.ControlService.ExtendGrant:output_type -> ladulas.v1.ExtendGrantResponse
+	68,  // 198: ladulas.v1.ControlService.RequestGrant:output_type -> ladulas.v1.RequestGrantResponse
+	70,  // 199: ladulas.v1.ControlService.ListDelegations:output_type -> ladulas.v1.ListDelegationsResponse
+	73,  // 200: ladulas.v1.ControlService.ListEndorsements:output_type -> ladulas.v1.ListEndorsementsResponse
+	77,  // 201: ladulas.v1.ControlService.RetractEndorsement:output_type -> ladulas.v1.RetractEndorsementResponse
+	82,  // 202: ladulas.v1.ControlService.BeginPairing:output_type -> ladulas.v1.PairingProgress
+	82,  // 203: ladulas.v1.ControlService.PairWithPeer:output_type -> ladulas.v1.PairingProgress
+	84,  // 204: ladulas.v1.ControlService.AnswerPairing:output_type -> ladulas.v1.AnswerPairingResponse
+	87,  // 205: ladulas.v1.ControlService.ListPendingPairings:output_type -> ladulas.v1.ListPendingPairingsResponse
+	89,  // 206: ladulas.v1.ControlService.AnswerPendingPairing:output_type -> ladulas.v1.AnswerPendingPairingResponse
+	91,  // 207: ladulas.v1.ControlService.WithdrawPairing:output_type -> ladulas.v1.WithdrawPairingResponse
+	93,  // 208: ladulas.v1.ControlService.SetPeerDirections:output_type -> ladulas.v1.SetPeerDirectionsResponse
+	95,  // 209: ladulas.v1.ControlService.RenamePeer:output_type -> ladulas.v1.RenamePeerResponse
+	97,  // 210: ladulas.v1.ControlService.RevokePeer:output_type -> ladulas.v1.RevokePeerResponse
+	104, // 211: ladulas.v1.ControlService.PublishProject:output_type -> ladulas.v1.PublishProjectResponse
+	106, // 212: ladulas.v1.ControlService.ListPublications:output_type -> ladulas.v1.ListPublicationsResponse
+	110, // 213: ladulas.v1.ControlService.UnpublishProject:output_type -> ladulas.v1.UnpublishProjectResponse
+	108, // 214: ladulas.v1.ControlService.SetAutoPublish:output_type -> ladulas.v1.SetAutoPublishResponse
+	112, // 215: ladulas.v1.ControlService.WatchApprovals:output_type -> ladulas.v1.ApprovalPrompt
+	115, // 216: ladulas.v1.ControlService.AnswerApproval:output_type -> ladulas.v1.AnswerApprovalResponse
+	117, // 217: ladulas.v1.ControlService.FetchRequestDiff:output_type -> ladulas.v1.FetchRequestDiffResponse
+	122, // 218: ladulas.v1.ControlService.ListPeerProjects:output_type -> ladulas.v1.ListPeerProjectsResponse
+	124, // 219: ladulas.v1.ControlService.OpenPeerProject:output_type -> ladulas.v1.OpenPeerProjectResponse
+	126, // 220: ladulas.v1.ControlService.ListPeerDirectory:output_type -> ladulas.v1.ListPeerDirectoryResponse
+	128, // 221: ladulas.v1.ControlService.SearchPeerProject:output_type -> ladulas.v1.SearchPeerProjectResponse
+	130, // 222: ladulas.v1.ControlService.ReadPeerPage:output_type -> ladulas.v1.ReadPeerPageResponse
+	132, // 223: ladulas.v1.ControlService.PeerDocumentVersions:output_type -> ladulas.v1.PeerDocumentVersionsResponse
+	134, // 224: ladulas.v1.ControlService.Reload:output_type -> ladulas.v1.ReloadResponse
+	10,  // 225: ladulas.v1.ControlService.Settings:output_type -> ladulas.v1.SettingsResponse
+	10,  // 226: ladulas.v1.ControlService.SetSignTimeout:output_type -> ladulas.v1.SettingsResponse
+	173, // [173:227] is the sub-list for method output_type
+	119, // [119:173] is the sub-list for method input_type
+	119, // [119:119] is the sub-list for extension type_name
+	119, // [119:119] is the sub-list for extension extendee
+	0,   // [0:119] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_local_proto_init() }
