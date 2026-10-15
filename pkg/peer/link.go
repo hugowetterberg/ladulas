@@ -31,9 +31,20 @@ type link struct {
 	client *transport.Client
 	key    ssh.PublicKey
 
-	mu         sync.Mutex
-	record     *storepb.TrustRecord
-	preferred  string
+	mu     sync.Mutex
+	record *storepb.TrustRecord
+	// preferred is the direct address that last worked. Only a direct route
+	// sets it (path.go): it is an address, and a path that is not one has none
+	// to give it.
+	preferred string
+	// unverified says the link last came up over a path that is not an
+	// address, so preferred is the direct address from before that and nothing
+	// has confirmed it since. It is kept, so that a direct success puts things
+	// back as they were, but it is neither put first nor tried alone, and it
+	// is not the address this instance is reaching the peer on (lastReached).
+	unverified bool
+	// path is the kind of path the link is up over, pathNone while it is not.
+	path       pathKind
 	misses     int
 	online     bool
 	lastErr    string
@@ -98,6 +109,18 @@ func (l *link) State() (online bool, lastErr string, lastSeen time.Time) {
 	return l.online, l.lastErr, l.lastSeen
 }
 
+// currentPath is the kind of path the link is up over, pathNone while down.
+func (l *link) currentPath() pathKind {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.online {
+		return pathNone
+	}
+
+	return l.path
+}
+
 func (l *link) update(record *storepb.TrustRecord) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -106,20 +129,29 @@ func (l *link) update(record *storepb.TrustRecord) {
 }
 
 // addresses returns the addresses to try, the one that last worked first.
+//
+// An unverified one is not put first: it worked before the link moved to a
+// path that is not an address, and the network may have moved with it, so the
+// record's own order is as good a guess and does not single it out.
 func (l *link) addresses() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	all := l.record.GetAddresses()
 
-	out := make([]string, 0, len(all))
+	first := l.preferred
+	if l.unverified {
+		first = ""
+	}
 
-	if l.preferred != "" {
-		out = append(out, l.preferred)
+	out := make([]string, 0, len(all)+1)
+
+	if first != "" {
+		out = append(out, first)
 	}
 
 	for _, address := range all {
-		if address != l.preferred {
+		if address != first {
 			out = append(out, address)
 		}
 	}
@@ -127,12 +159,33 @@ func (l *link) addresses() []string {
 	return out
 }
 
+// succeeded reports a direct dial reaching the peer at address.
 func (l *link) succeeded(address string) {
+	l.reached(direct(address))
+}
+
+// reached reports the link's peer reached over a route.
+//
+// A direct route is the address machinery's evidence: the address becomes the
+// one to try first and the one decision AQ keeps in the record. Any other
+// route leaves the address alone and marks it unverified, so that if that path
+// is lost the presence loop sweeps the whole record rather than spending three
+// rounds on an address that was last confirmed before the link moved off it —
+// the café laptop whose last direct address is its home LAN's.
+func (l *link) reached(via route) {
 	l.mu.Lock()
+
+	l.path = via.kind
+
+	if via.kind == pathDirect {
+		l.preferred = via.address
+		l.unverified = false
+	} else {
+		l.unverified = true
+	}
 
 	first := !l.online
 
-	l.preferred = address
 	l.misses = 0
 	l.online = true
 	l.lastErr = ""
@@ -157,6 +210,7 @@ func (l *link) failed(err error) {
 
 	l.online = false
 	l.offered = nil
+	l.path = pathNone
 	l.misses++
 
 	if err != nil {
@@ -364,9 +418,10 @@ func (l *link) presenceOrder() []string {
 	l.mu.Lock()
 	preferred := l.preferred
 	misses := l.misses
+	unverified := l.unverified
 	l.mu.Unlock()
 
-	if preferred != "" && misses < presenceMisses {
+	if preferred != "" && !unverified && misses < presenceMisses {
 		return []string{preferred}
 	}
 

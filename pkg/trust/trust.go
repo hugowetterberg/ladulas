@@ -410,39 +410,98 @@ func DescribeShort(mayApprove, mayRequest bool) string {
 // it was last here, which is the question somebody actually has: a phone seen a
 // minute ago and a phone seen in March want different things done.
 //
-// The lack of an address is what tells the two apart, because it is the same
-// thing the dialling is decided on: a peer whose record carries no address is
-// one nothing can dial.
-func DescribeState(
-	online bool, addresses []string, mayApprove bool,
-	lastError string, lastSeen time.Time, now time.Time,
-) string {
-	if online {
-		return "connected"
+// Whether the peer can be dialled is what tells the two apart, because it is
+// the same thing the dialling is decided on (Dialable). Until there was a path
+// that is not an address this read "a peer whose record carries no address is
+// one nothing can dial", and that is still how a phone looks; what changed is
+// that the address list is no longer the only way to be dialable, so it is not
+// what this function is given.
+//
+// The path is given too, and the ordinary one, direct, is not named: a peer
+// connected the way every peer has always been connected reads "connected", as
+// it did. A path that is not that is worth a word on the pill, because which
+// path a peer is on is the first thing anybody asks once there is more than
+// one.
+func DescribeState(state PeerState, now time.Time) string {
+	if state.Online {
+		if state.Path == "" || state.Path == PathDirect {
+			return "connected"
+		}
+
+		return "connected, " + state.Path
 	}
 
 	// A peer that only asks this instance for approvals is never dialled from
 	// here, so there is no reachability to report about it at all.
-	if !mayApprove {
+	if !state.MayApprove {
 		return "listening"
 	}
 
-	if len(addresses) == 0 {
-		if !known(lastSeen) {
+	if !state.Dialable {
+		if !known(state.LastSeen) {
 			// Not "never": this instance forgets when a peer was last here every
 			// time it restarts (peer.Node.seen), so the honest statement is about
 			// what it is doing rather than about the peer's history.
 			return "waiting to hear from it"
 		}
 
-		return "last seen " + DescribeAge(now.Sub(lastSeen))
+		return "last seen " + DescribeAge(now.Sub(state.LastSeen))
 	}
 
-	if lastError != "" {
+	if state.LastError != "" {
 		return "offline"
 	}
 
 	return "connecting"
+}
+
+// PeerState is what DescribeState needs to know about a peer. It is a struct
+// rather than the positional list it used to be because the list had grown to
+// six facts of three types, two of them booleans next to each other, and a
+// caller that swapped Online and Dialable would compile.
+type PeerState struct {
+	// Online is a link, a dial or an inbound call that is up right now.
+	Online bool
+	// Dialable is Dialable, StatusDialable or PendingDialable: whether this
+	// instance can reach out to the peer at all.
+	Dialable bool
+	// Path is the path word for the contact when Online is true (PathDirect),
+	// and may be empty.
+	Path string
+	// MayApprove is the record's direction: whether the peer approves for this
+	// instance, which is the only direction anything here dials for.
+	MayApprove bool
+	// LastError is why the last dial failed, when it did.
+	LastError string
+	// LastSeen is the last contact, in either direction.
+	LastSeen time.Time
+}
+
+// DescribeStatus is DescribeState over the control API's peer, which is what
+// every surface has in hand: the window, `ladulas peers list` and the phone's
+// rows all describe a PeerStatus, and they used to each carry the same
+// six-line adapter.
+func DescribeStatus(status *ladulasv1.PeerStatus, now time.Time) string {
+	return DescribeState(StateOf(status), now)
+}
+
+// StateOf reads a PeerState out of the control API's peer.
+func StateOf(status *ladulasv1.PeerStatus) PeerState {
+	state := PeerState{
+		Online:     status.GetOnline(),
+		Dialable:   StatusDialable(status),
+		Path:       status.GetPath(),
+		MayApprove: status.GetMayApprove(),
+		LastError:  status.GetLastError(),
+	}
+
+	// Not AsTime on its own: a nil timestamp becomes the epoch there, and known
+	// catches that, but the zero time says "no contact" without relying on it.
+	if status.GetLastSeenAt() != nil {
+		state.LastSeen = status.GetLastSeenAt().AsTime()
+	}
+
+	return state
 }
 
 // known reports whether a timestamp is a time rather than an absence.

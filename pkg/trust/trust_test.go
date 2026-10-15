@@ -364,7 +364,10 @@ func TestDescribeStateOfADeviceThatDialsIn(t *testing.T) {
 
 	now := time.Date(2026, 8, 18, 20, 30, 0, 0, time.UTC)
 	phone := func(lastSeen time.Time) string {
-		return trust.DescribeState(false, nil, true, "", lastSeen, now)
+		return trust.DescribeState(trust.PeerState{
+			MayApprove: true,
+			LastSeen:   lastSeen,
+		}, now)
 	}
 
 	if state := phone(now.Add(-4 * time.Minute)); state != "last seen 4m ago" {
@@ -388,8 +391,12 @@ func TestDescribeStateOfADeviceThatDialsIn(t *testing.T) {
 
 	// The one state a phone shares with everything else, because it means the
 	// same thing for both: there is a link, and it is up.
-	if state := trust.DescribeState(
-		true, nil, true, "", now, now); state != "connected" {
+	if state := trust.DescribeState(trust.PeerState{
+		Online:     true,
+		Path:       trust.PathDirect,
+		MayApprove: true,
+		LastSeen:   now,
+	}, now); state != "connected" {
 		t.Errorf("a phone holding a link open is %q", state)
 	}
 
@@ -404,7 +411,6 @@ func TestDescribeStateOfAMachineThatListens(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 18, 20, 30, 0, 0, time.UTC)
-	addresses := []string{"192.168.1.10:7373"}
 
 	cases := []struct {
 		name       string
@@ -422,8 +428,14 @@ func TestDescribeStateOfAMachineThatListens(t *testing.T) {
 	}
 
 	for _, test := range cases {
-		state := trust.DescribeState(
-			test.online, addresses, test.mayApprove, test.lastError, now, now)
+		state := trust.DescribeState(trust.PeerState{
+			Online:     test.online,
+			Dialable:   true,
+			Path:       trust.PathDirect,
+			MayApprove: test.mayApprove,
+			LastError:  test.lastError,
+			LastSeen:   now,
+		}, now)
 
 		if state != test.want {
 			t.Errorf("%s: got %q, want %q", test.name, state, test.want)

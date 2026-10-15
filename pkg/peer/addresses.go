@@ -32,7 +32,14 @@ import (
 // whether or not the peer advertises it, for the reason pairing puts the dialled
 // address first: reaching a machine is better evidence than being told about
 // it, and a typed address that works from here through a forwarded port is
-// exactly the kind the peer does not know it has.
+// exactly the kind the peer does not know it has. That is true of a direct dial
+// and only of one (lastReached): a peer reached over a path that is not an
+// address has told this instance nothing about its addresses by being reached.
+//
+// Only direct addresses are recorded at all (trust.DirectAddresses). The list
+// is what the direct dialler connects to, so a string that is not a host:port
+// — a tunnel's address, if a peer were ever to put one here — would be an
+// entry that fails every time it is tried.
 //
 // The peer is authenticated and can only change its own record's dial list, and
 // every address on it is still dialled with the peer's identity pinned. The most
@@ -40,6 +47,7 @@ import (
 // that will not authenticate as it, which is what advertising an address at
 // pairing already let it do.
 func (n *Node) learnAddresses(fingerprint string, advertised []string) {
+	advertised = trust.DirectAddresses(advertised)
 	if len(advertised) == 0 {
 		return
 	}
@@ -78,12 +86,22 @@ func (n *Node) learnAddresses(fingerprint string, advertised []string) {
 	n.Reconcile()
 }
 
-// lastReached is the address this instance most recently reached a peer on,
-// whichever of the two warm clients it went through, or "" when it has not.
+// lastReached is the address this instance most recently reached a peer on
+// with a direct dial, whichever of the two warm clients it went through, or ""
+// when it has not.
+//
+// Direct only, and currently so: a link that has since come up over a path
+// that is not an address reports nothing here, because the address it reached
+// before that is a fact about an earlier network and keeping it in the record
+// on every beat is what decision AH's pruning exists to stop (path.go).
 func (n *Node) lastReached(fingerprint string) string {
 	if existing := n.link(fingerprint); existing != nil {
 		existing.mu.Lock()
 		defer existing.mu.Unlock()
+
+		if existing.unverified {
+			return ""
+		}
 
 		return existing.preferred
 	}

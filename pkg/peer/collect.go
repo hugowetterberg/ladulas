@@ -15,6 +15,7 @@ import (
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // The approver's half of poll-on-open (§11).
@@ -127,13 +128,13 @@ func (n *Node) reconcileOne(ctx context.Context, record *storepb.TrustRecord) {
 }
 
 // requesters is every peer this instance has agreed to approve for and can
-// reach. A peer with no address is one neither side can dial, which is two
+// reach. A peer that is not dialable is one neither side can dial, which is two
 // phones paired to each other and nothing this milestone has to solve.
 func (n *Node) requesters() []*storepb.TrustRecord {
 	var out []*storepb.TrustRecord
 
 	for _, record := range n.trust.Peers() {
-		if record.GetMayRequest() && len(record.GetAddresses()) > 0 {
+		if record.GetMayRequest() && trust.Dialable(record) {
 			out = append(out, record)
 		}
 	}

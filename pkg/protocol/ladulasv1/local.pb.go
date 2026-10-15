@@ -898,9 +898,20 @@ type PeerStatus struct {
 	// True when a link to the peer is up right now.
 	Online bool `protobuf:"varint,6,opt,name=online,proto3" json:"online,omitempty"`
 	// Why the link is down, when it is.
-	LastError     string                 `protobuf:"bytes,7,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
-	PairedAt      *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=paired_at,json=pairedAt,proto3" json:"paired_at,omitempty"`
-	LastSeenAt    *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	LastError  string                 `protobuf:"bytes,7,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	PairedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=paired_at,json=pairedAt,proto3" json:"paired_at,omitempty"`
+	LastSeenAt *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	// Whether this instance can reach out to the peer at all: a machine that
+	// listens rather than a phone. It is computed by the daemon from the record
+	// (trust.Dialable), so that no client repeats the rule — "has an address" is
+	// what it is today, and stops being the whole of it once a path that is not
+	// an address exists (§3). An older daemon leaves it false; a client also
+	// takes a non-empty address list as proof (trust.StatusDialable).
+	Dialable bool `protobuf:"varint,13,opt,name=dialable,proto3" json:"dialable,omitempty"`
+	// Which kind of path the peer is in contact over, when online is true:
+	// "direct" for a pinned TLS connection to or from one of its addresses,
+	// which is the only kind there is. Empty when it is not in contact.
+	Path          string `protobuf:"bytes,14,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1017,6 +1028,20 @@ func (x *PeerStatus) GetLastSeenAt() *timestamppb.Timestamp {
 		return x.LastSeenAt
 	}
 	return nil
+}
+
+func (x *PeerStatus) GetDialable() bool {
+	if x != nil {
+		return x.Dialable
+	}
+	return false
+}
+
+func (x *PeerStatus) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
 }
 
 type StatusResponse struct {
@@ -8963,7 +8988,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\rmax_grant_ttl\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\vmaxGrantTtl\"U\n" +
 	"\x15SetSignTimeoutRequest\x12<\n" +
 	"\fsign_timeout\x18\x01 \x01(\v2\x19.google.protobuf.DurationR\vsignTimeout\"\x0f\n" +
-	"\rStatusRequest\"\xc5\x03\n" +
+	"\rStatusRequest\"\xf5\x03\n" +
 	"\n" +
 	"PeerStatus\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
@@ -8982,7 +9007,9 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"last_error\x18\a \x01(\tR\tlastError\x127\n" +
 	"\tpaired_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bpairedAt\x12<\n" +
 	"\flast_seen_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastSeenAt\"\xdd\x05\n" +
+	"lastSeenAt\x12\x1a\n" +
+	"\bdialable\x18\r \x01(\bR\bdialable\x12\x12\n" +
+	"\x04path\x18\x0e \x01(\tR\x04path\"\xdd\x05\n" +
 	"\x0eStatusResponse\x12#\n" +
 	"\rinstance_name\x18\x01 \x01(\tR\finstanceName\x12 \n" +
 	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12)\n" +

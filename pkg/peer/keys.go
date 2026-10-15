@@ -817,7 +817,7 @@ func (n *Node) collectingHoldersOf(
 		}
 
 		record, ok := n.trust.Peer(borrowed.GetPeerFingerprint())
-		if !ok || len(record.GetAddresses()) > 0 {
+		if !ok || trust.Dialable(record) {
 			continue
 		}
 

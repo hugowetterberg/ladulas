@@ -40,6 +40,7 @@ var ErrNoAddress = errors.New("peer: the peer advertises no address")
 // has that it can reach anything at all.
 type reach struct {
 	online   bool
+	path     pathKind
 	lastErr  string
 	lastSeen time.Time
 }
@@ -47,7 +48,7 @@ type reach struct {
 // noteReach records how a dial went. It is called for every call made without a
 // link, whatever the call was for — fetching a diff, reading a project,
 // collecting an inbox — because all of them answer the same question.
-func (n *Node) noteReach(fingerprint string, err error) {
+func (n *Node) noteReach(fingerprint string, via pathKind, err error) {
 	if fingerprint == "" {
 		return
 	}
@@ -63,12 +64,14 @@ func (n *Node) noteReach(fingerprint string, err error) {
 
 	if err != nil {
 		state.online = false
+		state.path = pathNone
 		state.lastErr = err.Error()
 
 		return
 	}
 
 	state.online = true
+	state.path = via
 	state.lastErr = ""
 	state.lastSeen = time.Now()
 }
@@ -129,7 +132,7 @@ func (n *Node) call(
 	// the background, or a long poll being torn down — so it is not recorded as
 	// having failed to reach anybody.
 	if ctx.Err() == nil {
-		n.noteReach(record.GetFingerprint(), err)
+		n.noteReach(record.GetFingerprint(), pathDirect, err)
 	}
 
 	return err

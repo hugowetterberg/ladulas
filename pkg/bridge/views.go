@@ -416,6 +416,12 @@ type PeerView struct {
 	// holding one open (trust.DescribeState), and a surface needs it to know
 	// which sentence to put beside the state.
 	Dialable bool `json:"dialable"`
+	// Path is which kind of path the peer is in contact over while it is, in
+	// the control API's word for it ("direct"), and empty while it is not. It
+	// is carried separately from State so that a surface which wants to show
+	// the path beside the pill does not have to parse the pill; State already
+	// names any path that is not the ordinary one (trust.DescribeState).
+	Path string `json:"path,omitempty"`
 	// LastSeen is when there was last a link, for the rows that have not got one
 	// now. It is the absolute time rather than "4m ago" because a screen that
 	// wants a countdown has State for that, and a screen that wants to know

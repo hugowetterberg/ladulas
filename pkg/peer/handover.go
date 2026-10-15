@@ -14,6 +14,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // Handing a portable key to a paired peer (§10, decision S).
@@ -237,15 +238,15 @@ func (n *Node) SendKey(
 
 // deliverHandover makes one attempt at one queued key.
 //
-// A peer with an address is pushed at. One without is a phone, which cannot be
-// pushed at and is woken instead — the wake-up is a knock and nothing else, and
+// A peer that can be dialled is pushed at. One that cannot is a phone, which
+// cannot be pushed at and is woken instead — the wake-up is a knock and nothing else, and
 // the key is taken by the poll that follows it (§11). Both paths end in the
 // queue entry surviving, which is what makes the next attempt free.
 func (n *Node) deliverHandover(
 	ctx context.Context, record *storepb.TrustRecord,
 	handover *storepb.QueuedKeyHandover,
 ) {
-	if len(record.GetAddresses()) == 0 {
+	if !trust.Dialable(record) {
 		n.wakeForKey(record.GetFingerprint())
 
 		return
@@ -334,7 +335,7 @@ func (n *Node) deliverQueuedKeys(ctx context.Context) {
 			continue
 		}
 
-		if len(record.GetAddresses()) == 0 {
+		if !trust.Dialable(record) {
 			continue
 		}
 

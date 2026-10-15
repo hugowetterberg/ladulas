@@ -512,6 +512,17 @@ message PeerStatus {
   string last_error = 7;
   google.protobuf.Timestamp paired_at = 8;
   google.protobuf.Timestamp last_seen_at = 9;
+  // Whether this instance can reach out to the peer at all: a machine that
+  // listens rather than a phone. It is computed by the daemon from the record
+  // (trust.Dialable), so that no client repeats the rule — "has an address" is
+  // what it is today, and stops being the whole of it once a path that is not
+  // an address exists (§3). An older daemon leaves it false; a client also
+  // takes a non-empty address list as proof (trust.StatusDialable).
+  bool dialable = 13;
+  // Which kind of path the peer is in contact over, when online is true:
+  // "direct" for a pinned TLS connection to or from one of its addresses,
+  // which is the only kind there is. Empty when it is not in contact.
+  string path = 14;
 }
 
 message StatusResponse {

@@ -243,14 +243,30 @@ Assistant's "local push" model).
 M6 made the consequence explicit rather than implied. A requester fans a
 request out to every approver it has, and there are two ways of reaching
 one: dial it, or hold it until it comes. Which one a peer gets is decided
-by whether it advertised an address at pairing time, and a phone never
-does, because it never listens. So a phone gets an **inbox** — the
+by whether it is **dialable** (`trust.Dialable`), and a phone never is,
+because it never listens. So a phone gets an **inbox** — the
 request waits at the requester for exactly as long as somebody is blocked
 on the answer, the phone collects it when the app opens, and posts back
 the same signed artifact a dialled approver would have streamed. Nothing
 is stored and nothing outlives the request: a phone that opens the app an
 hour later finds an empty inbox rather than a commit nobody is making any
 more.
+
+Until 2026-10-14 the rule above read "decided by whether it advertised an
+address at pairing time", and that is still what dialable *means* today: a
+record that carries a direct `host:port`. What changed is where the question
+is asked. It used to be asked as `len(Addresses) > 0` in every place that
+needed it — the link-or-inbox choice in `Reconcile`, the pairing convergence
+loop, key handover, delegated-grant reporting, collection, the agent's
+collecting holders and the state pill (§7) — and each of those is a place a
+path to a peer that is *not* an address (§8, "A path is not an address")
+would have been taken for a phone: given an inbox, woken instead of dialled,
+and never reached. It is one predicate now, on a trust record and on a
+pending pairing (`trust.PendingDialable`), and a path kind that is not an
+address makes a record dialable by adding its own clause to it; nothing that
+chooses between dialling and an inbox has to learn about it. **What must not
+come back is a caller testing the address list for dialability**: the list
+answers "where can a direct dial go", which is a narrower question.
 
 ## 4. SSH agent integration
 
@@ -1160,7 +1176,7 @@ phone and says nothing whatever about whether it can be asked to sign. Its
 keys are one notification away (decision T), and calling it `offline` claims
 the opposite.
 
-So a peer with no address in its record gets **when it was last here**
+So a peer that is not dialable gets **when it was last here**
 instead: `last seen 4m ago`, `connected` while it is holding a call open, and
 `waiting to hear from it` when this instance has heard nothing yet. That is the
 question somebody actually has in front of them — a phone seen a minute ago and
@@ -1170,8 +1186,28 @@ listed whether or not their holder is reachable. It said `connecting` forever
 before this, on a dial that was never going to succeed against a device that
 does not listen.
 
-The lack of an address is what tells the two apart, because it is what the
-dialling is decided on: nothing can dial a peer whose record carries no address.
+Whether the peer is dialable is what tells the two apart, because it is what
+the dialling is decided on: nothing can dial a peer that is not (`trust.Dialable`,
+§3). Until 2026-10-14 this read "nothing can dial a peer whose record carries no
+address", which is still how a phone looks — an address is the only path there
+is. It says dialable because the address list stopped being the only thing the
+rule is written for, and a surface that derived reachability from the list would
+call a peer reached some other way a phone in a pocket. So the daemon computes it
+from the record and sends it, as `PeerStatus.dialable`, and every surface reads
+that: `trust.DescribeStatus` is `DescribeState` over the wire type, and the
+window, `ladulas peers list` and the phone all describe a peer through it rather
+than each carrying the same adapter. A client talking to an older daemon, which
+leaves the field unset, takes a non-empty address list as proof
+(`trust.StatusDialable`); that half stays true however many path kinds are added,
+because a direct address is always a way to dial.
+
+The path a connected peer is on is reported the same way, as `PeerStatus.path`:
+`direct` — a pinned TLS connection to or from one of its addresses — for every
+peer today, and empty for one not in contact. The ordinary path is not named on
+the pill, so a peer that read `connected` still does; a path that is not the
+ordinary one is named after it (`connected, …`). The word goes through
+`DescribeState` and `PeerView.Path`, which this section makes the single source,
+rather than into each surface separately.
 
 **Where the answer comes from for a device that dials in**, since none of the
 dialling machinery ever hears from it: every call a peer makes goes through one
@@ -1195,7 +1231,7 @@ is how a phone nothing had heard from was reported as `last seen 20683 days
 ago`.
 
 A surface that wants to say more than the word has the fields to do it —
-`PeerView.Dialable` and `PeerView.LastSeen` — and the desktop's peer screen uses
+`PeerView.Dialable`, `PeerView.Path` and `PeerView.LastSeen` — and the desktop's peer screen uses
 them to say, in a sentence, that a machine which reaches us is not a machine
 that is missing.
 
@@ -1395,15 +1431,52 @@ from the new one. Three rules keep it from being a way to lose a peer. An
 empty list says nothing and changes nothing: nothing that arrives over the
 wire empties a record, and an instance with its channel off is not thereby
 forgotten as a machine that once listened. The address this instance is
-reaching the peer on right now stays on the list whether or not the peer
-names it, for the reason a pairing puts the dialled address first — reaching
-a machine is better evidence than being told about it, and a typed address
-through a forwarded port is one the peer does not know it has. And the peer
+reaching the peer on right now with a direct dial stays on the list whether
+or not the peer names it, for the reason a pairing puts the dialled address
+first — reaching a machine is better evidence than being told about it, and
+a typed address through a forwarded port is one the peer does not know it
+has. ("With a direct dial" was added on 2026-10-14; see the next paragraph.)
+And the peer
 is authenticated by the channel and can only rewrite its own record's dial
 list, with every address on it still dialled against its pinned identity,
 so the most it can do is send this instance's connection attempts somewhere
 that will not authenticate as it — which advertising an address at pairing
 already let it do.
+
+**A path is not an address (2026-10-14).** Everything above assumed that the
+way a call reached a peer and the address it dialled were one fact, because
+the only way to reach a peer was a TCP connection to one of its addresses. A
+link's and the dialer's `preferred` is the address that last worked; the
+reached-address rule keeps it on the list; the joining side of a pairing
+writes the address it dialled first. All three are right for a direct dial,
+and each goes wrong for a path that is not one. Nothing on such a path
+updates `preferred`, so the last direct address before the switch would be
+kept and re-added on every beat — a laptop that moved off its home LAN onto
+another path at home and then went to a café would carry `192.168.1.10` for
+good, which is exactly the pruning decision AH exists for, undone — and when
+that path dropped the presence loop would spend three rounds on the one
+blackholed address before sweeping. Setting `preferred` to the other path's
+endpoint instead would write that string into `TrustRecord.Addresses`, where
+the direct dialler tries to connect to it; and a pairing reached through a
+relay would record the relay's short-lived address first, for the life of
+the pairing.
+
+So a call reports the **route** it took — a path kind, and for a direct one
+the address — and only a direct route touches the address machinery
+(`pkg/peer/path.go`). A link that comes up over any other kind keeps its
+`preferred` but marks it unverified: not put first, not tried alone by the
+presence loop, and not reported as the reached address, so a fallback sweeps
+the whole record instead of trusting a stale guess, and the next direct
+success puts things back. The dialer, which has no presence loop, simply
+forgets it, so its next direct call races. And **only a direct `host:port`
+is ever written into an address list** (`trust.DirectAddresses`): the
+dialled address and the advertised list at pairing, on both sides, and the
+list a beat carries. Every address a pairing or a beat produces today is
+one — the dials are TCP dials, which take nothing else — so this keeps out
+nothing that could have worked. Direct is the only path kind there is; the
+kinds exist so that the rule is in the code before a second one is, rather
+than discovered in three places when it arrives. Rejected: letting a path's
+endpoint stand in for an address, which is each of the three failures above.
 
 **A link is not up until the peer has said something.** The presence stream
 is what tells this instance whether there is anybody to ask before it has
@@ -4464,7 +4537,7 @@ Added 2026-09-04:
 
 | # | Decision | Resolution |
 |---|----------|------------|
-| AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
+| AQ | Whether where a peer can be dialled is ever written again after the pairing | **it is, every time the two are in contact anyway, and the peer's own word replaces the list.** A trust record kept the addresses the peer advertised at the moment of pairing and nothing ever rewrote them, so the record was a photograph of one moment on one network: a tailnet number resolved wrongly during a boot was carried for good (§8), a machine that later began advertising its LAN address stayed dialled over the tailnet alone, and a list pruned of docker bridges on the peer stayed a dozen long here. The only repair was `peers forget` and pair again, which is a human ceremony spent on bookkeeping. **There is no new RPC.** The list rides on calls that are already made: an approver says it on every presence heartbeat, the stream a requester holds open to it; a requester says it as it opens that stream, the one time an approver — which only ever dials a requester back, for documentation — hears from it; and a requester says it on every `FetchPending`, because a phone holds no stream and is dialled by nobody, and the poll is the one call it reliably makes (§3). Three rules. An empty list says nothing and changes nothing — nothing arriving over the wire empties a record, and an instance with its channel off is not thereby forgotten. The address this instance is reaching the peer on right now stays on the list whether or not the peer names it, for the reason a pairing puts the dialled address first: reaching a machine is better evidence than being told about it, and a typed address through a forwarded port is one the peer does not know it has. (Since 2026-10-14 that rule is for **direct dials only**: a peer reached over a path that is not an address has said nothing about its addresses by being reached, the address from before it is marked unverified rather than kept, and only a direct `host:port` is ever written into the list, from a pairing or a beat. §8, "A path is not an address".) And the record is rewritten only when the set differs — order is the first attempt's, and not news. **What this cannot widen:** the peer is authenticated by the channel and can only rewrite its own record's dial list, and every address on it is still dialled with the peer's identity pinned, so the most a peer can do is send this instance's connection attempts somewhere that will not authenticate as it — which advertising an address at pairing already let it do. Rejected: an address-refresh RPC, which is a call nobody makes at the moment it would matter and which a phone could not receive at all; and a refresh only on reconnect, which leaves an approver that changes networks under a held stream unheard until the stream breaks for some other reason — the heartbeat was already carrying a name, and carries a handful of strings as cheaply. Rationale in §8 |
 | AR | Whether a tailnet takes the local network out of the default bind | **it does not: the tailnet and the local network are bound and advertised together, tailnet first, and loopback only by a machine that has neither.** Decision AH made them two tiers and bound only the better one present, because a peer holding both addresses spent its reconnections on the one that could not work from where it was. That was right about the reconnections and wrong about what a default is for. The default is what a machine does before anybody has configured anything, which is to say during bootstrap — and a tailnet is the component most likely to be absent at exactly that moment: down, or half up while NetworkManager and tailscaled settle the link, or not installed yet on the machine being paired. With the tailnet alone bound, such a machine advertised nothing a phone on the same Wi-Fi could reach, although the LAN address was up and typed in, and the way out was `ladulas listen set`, which is configuration in the way of the step that exists to avoid it. The flakiness was observed here often enough to count as the normal case. Meanwhile the cost AH was paying for has been paid on the dialling side: the address that last worked is tried alone for three consecutive failures before the rest of the record gets a turn (§8), so a phone away from home does not charge a dial timeout for the LAN address on every round, and a sweep that does reach it reports the most informative failure rather than the last. The `tier` field's `tailnet` and `private` values are gone rather than aliased, since either would read as a claim that the other kind was left out; the one value is `local`, and `ladulas listen` says which of the two the bound list actually holds. Rejected: keeping one tier and asking people to add the LAN address by hand, which is what this replaces; binding both and advertising the tailnet only, which leaves the bootstrap exactly where it was because pairing works off the advertised list; and bringing loopback back beside them, which is the part of the pre-AH list that made peers dial themselves and is the part of AH that stands. Qualifies decision AH; the interface rules and the two-list rule are unchanged. Rationale in §8 |
 | AS | Which of the daemon's settings a window may change, and which stay command lines | **anything the daemon stores and already serves a write RPC for, and nothing it was started with.** The settings screen had one number on it (decision AJ) and the CLI had `listen set`, `publish --auto`, `unlock-at-login` and half of `keys` — on a daemon whose whole premise is that somebody is sitting in front of the window, and where the case for each was the same: the tailnet is down and the phone on the Wi-Fi cannot reach this machine, and the way out was a command to remember. The line is drawn by *who owns the value*. A setting kept in the store and changed through the control socket — where the channel listens, whether documentation is published unasked, whether the keychain opens the store at login, the signing budget, what the agent offers — is the daemon's, is already validated by the daemon, and takes effect without a restart; a screen for it is a form over a call that exists. A startup flag — `--data-dir`, `--socket`, `--log-level`, `--no-keyring`, the suspend and idle hooks — is the process's, is read once, and belongs to whatever starts the process; a screen that appeared to change one would be writing a unit file it does not own, or lying. The policy document stays out on decision AJ's grounds, which this does not reopen: none of the settings here decides an approval. Two of them cost something the screen has to say before the button: enrolling the keychain hands an unsealed store to anybody logged in as this user (decision I), and a public bind is a consent the flag already required. Importing a key stays a command line for decision AF's reason — a file to pick and a passphrase to type into a webview — and so does anything that takes a policy rule as input. Rejected: a settings screen that mirrors `ladulasd --help`, which is a screen full of fields that do nothing until a restart nobody is told about; and leaving the stored settings on the CLI because the CLI is where they were, which is the state this replaces. The phones inherit the routes through the bridge and wire them when their shells have a settings screen to put them on. Rationale in §12 |
 

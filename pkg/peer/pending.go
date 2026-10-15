@@ -142,7 +142,7 @@ func (n *Node) AnswerPending(
 // nudgePeer takes one pairing to its peer straight away, out of band of the
 // loop's pacing.
 func (n *Node) nudgePeer(pending *storepb.PendingPairing, reason string) {
-	if len(pending.GetAddresses()) == 0 {
+	if !trust.PendingDialable(pending) {
 		return
 	}
 
@@ -373,7 +373,7 @@ func (n *Node) Withdraw(
 func (n *Node) tellPeer(
 	ctx context.Context, pending *storepb.PendingPairing, reason string,
 ) bool {
-	if len(pending.GetAddresses()) == 0 {
+	if !trust.PendingDialable(pending) {
 		return false
 	}
 
@@ -396,7 +396,7 @@ func (n *Node) tellPeer(
 func (n *Node) callSettle(
 	ctx context.Context, pending *storepb.PendingPairing, reason string,
 ) (*ladulasv1.SettlePairingResponse, error) {
-	if len(pending.GetAddresses()) == 0 {
+	if !trust.PendingDialable(pending) {
 		return nil, ErrNoAddress
 	}
 
@@ -437,6 +437,13 @@ func (n *Node) callSettle(
 		}
 
 		last = fmt.Errorf("settle the pairing with %s: %w", address, err)
+	}
+
+	// The loop is the direct path, and it is the only one: a pairing that is
+	// dialable by some other path and has no direct address to try reaches
+	// here having tried nothing, which is not a success.
+	if last == nil {
+		return nil, ErrNoAddress
 	}
 
 	return nil, last
@@ -567,10 +574,10 @@ func (n *Node) settleWithin(
 	return n.callSettle(ctx, pending, "")
 }
 
-// shouldSettle paces the reconciliation. A peer with no address is never
+// shouldSettle paces the reconciliation. A peer that cannot be dialled is never
 // dialled at all: it is a phone, and the phone is the side that dials.
 func (n *Node) shouldSettle(pending *storepb.PendingPairing) bool {
-	if len(pending.GetAddresses()) == 0 {
+	if !trust.PendingDialable(pending) {
 		return false
 	}
 

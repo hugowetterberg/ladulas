@@ -72,6 +72,8 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 		AllowedKeys: record.GetAllowedKeyFingerprints(),
 		AllKeys:     record.GetMayUseAllKeys(),
 		PairedAt:    record.GetPairedAt(),
+		// Computed here so that no surface repeats the rule (§3, trust.Dialable).
+		Dialable: trust.Dialable(record),
 	}
 
 	// A link reports its own state and is the better answer when there is one.
@@ -83,6 +85,7 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 	if existing == nil {
 		if state := n.reachOf(record.GetFingerprint()); state != nil {
 			status.Online = state.online
+			status.Path = state.path.word()
 			status.LastError = state.lastErr
 
 			if !state.lastSeen.IsZero() {
@@ -93,6 +96,7 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 		online, lastErr, lastSeen := existing.State()
 
 		status.Online = online
+		status.Path = existing.currentPath().word()
 		status.LastError = lastErr
 		// What the peer offers is only known while a link is up, which is exactly
 		// the state in which a keyless box can actually use it.
@@ -113,6 +117,13 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 
 	if holding {
 		status.Online = true
+
+		// The peer dialled in, and the only way in is the listener on this
+		// instance's addresses, so the call it is holding is a direct one. A
+		// listener for a path that is not an address will have to say so itself.
+		if status.GetPath() == "" {
+			status.Path = pathDirect.word()
+		}
 	}
 
 	if !lastCall.IsZero() &&
@@ -609,7 +620,7 @@ func (n *Node) WithdrawPairing(
 		SessionId:   pending.GetSessionId(),
 		Fingerprint: pending.GetFingerprint(),
 		PeerTold:    told,
-		Message:     withdrawalMessage(told, len(pending.GetAddresses()) > 0),
+		Message:     withdrawalMessage(told, trust.PendingDialable(pending)),
 	}), nil
 }
 

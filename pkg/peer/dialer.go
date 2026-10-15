@@ -40,8 +40,9 @@ type dialer struct {
 	// key is the peer key the client is pinned to, so that a peer which paired
 	// again is not talked to over a client expecting the key it replaced.
 	key string
-	// preferred is the address that last worked, and is what makes the ordinary
-	// call skip the race entirely.
+	// preferred is the direct address that last worked, and is what makes the
+	// ordinary call skip the race entirely. Only a direct route sets it
+	// (path.go).
 	preferred string
 }
 
@@ -128,12 +129,30 @@ func (d *dialer) order(
 	return append([]string{preferred}, out...)
 }
 
-// remember records the address a call reached the peer on.
+// remember records the address a direct call reached the peer on.
 func (d *dialer) remember(address string) {
+	d.rememberRoute(direct(address))
+}
+
+// rememberRoute records the route a call reached the peer on.
+//
+// Only a direct route has an address to remember. Any other route drops the
+// one there was, for the reason a link marks its own unverified: it was
+// confirmed before the peer was reached some other way, and a later direct
+// call should race the whole list rather than trust it first. A dialer has no
+// presence loop to spend rounds on a stale address, so forgetting is the whole
+// of "unverified" here.
+func (d *dialer) rememberRoute(via route) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.preferred = address
+	if via.kind != pathDirect {
+		d.preferred = ""
+
+		return
+	}
+
+	d.preferred = via.address
 }
 
 // forget drops the remembered address, so that the next call races again.

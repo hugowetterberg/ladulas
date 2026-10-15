@@ -283,8 +283,9 @@ func peerView(peer *ladulasv1.PeerStatus) bridge.PeerView {
 			peer.GetMayApprove(), peer.GetMayRequest()),
 		Summary: trust.DescribeShort(
 			peer.GetMayApprove(), peer.GetMayRequest()),
-		State:       peerState(peer),
-		Dialable:    len(peer.GetAddresses()) > 0,
+		State:       trust.DescribeStatus(peer, time.Now()),
+		Dialable:    trust.StatusDialable(peer),
+		Path:        peer.GetPath(),
 		LastSeen:    peerLastSeen(peer),
 		Addresses:   peer.GetAddresses(),
 		MayUseKeys:  peer.GetAllKeys(),
@@ -306,17 +307,6 @@ func keyAccessWord(peer *ladulasv1.PeerStatus) string {
 	}
 }
 
-// lastSeenOf is the peer's last contact as a time, and the zero time when there
-// has been none. It is not `AsTime()` on its own: a nil timestamp turns into the
-// epoch there, which reads as 1970 rather than as nothing.
-func lastSeenOf(peer *ladulasv1.PeerStatus) time.Time {
-	if peer.GetLastSeenAt() == nil {
-		return time.Time{}
-	}
-
-	return peer.GetLastSeenAt().AsTime()
-}
-
 // peerLastSeen is when a peer that is not connected last was, on the clock. It
 // is empty for one that is connected now, which is what the state already says.
 func peerLastSeen(peer *ladulasv1.PeerStatus) string {
@@ -325,19 +315,6 @@ func peerLastSeen(peer *ladulasv1.PeerStatus) string {
 	}
 
 	return peer.GetLastSeenAt().AsTime().Local().Format(time.RFC1123)
-}
-
-// peerState is trust.DescribeState over the wire type, so that this window and
-// the command line say the same thing about the same peer.
-func peerState(peer *ladulasv1.PeerStatus) string {
-	return trust.DescribeState(
-		peer.GetOnline(),
-		peer.GetAddresses(),
-		peer.GetMayApprove(),
-		peer.GetLastError(),
-		lastSeenOf(peer),
-		time.Now(),
-	)
 }
 
 // pairings and withdrawPairing are the desktop's half of §7's promise that a

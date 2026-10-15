@@ -155,28 +155,11 @@ func keyWord(peer *ladulasv1.PeerStatus) string {
 	}
 }
 
-// lastSeenOf is the peer's last contact, and the zero time when there has been
-// none — which `AsTime()` alone would render as the epoch.
-func lastSeenOf(peer *ladulasv1.PeerStatus) time.Time {
-	if peer.GetLastSeenAt() == nil {
-		return time.Time{}
-	}
-
-	return peer.GetLastSeenAt().AsTime()
-}
-
-// peerState is trust.DescribeState over the wire type. The words are that
-// package's so that a listing here and a pill in the window cannot disagree
-// about whether a phone in somebody's pocket is missing.
+// peerState is trust.DescribeStatus. The words are that package's so that a
+// listing here and a pill in the window cannot disagree about whether a phone
+// in somebody's pocket is missing.
 func peerState(peer *ladulasv1.PeerStatus) string {
-	return trust.DescribeState(
-		peer.GetOnline(),
-		peer.GetAddresses(),
-		peer.GetMayApprove(),
-		peer.GetLastError(),
-		lastSeenOf(peer),
-		time.Now(),
-	)
+	return trust.DescribeStatus(peer, time.Now())
 }
 
 // peersAllowCommand sets a peer's permissions from the flags, and the flags

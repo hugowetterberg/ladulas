@@ -612,9 +612,10 @@ func (n *Node) presence(fingerprint string) (bool, time.Time) {
 // else, none.
 //
 // There are two ways of asking, and which one a peer gets is decided by whether
-// it advertised an address. One that did is dialled when there is something to
-// decide; one that did not is a phone, and gets an inbox it collects from
-// instead (§3, and inbox.go). Both are approvers in the same fan-out.
+// it can be dialled (trust.Dialable), which today means whether it advertised
+// an address. One that can is dialled when there is something to decide; one
+// that cannot is a phone, and gets an inbox it collects from instead (§3, and
+// inbox.go). Both are approvers in the same fan-out.
 //
 // It runs when the node starts, when a pairing completes, when a peer is
 // revoked, and on the reload a SIGHUP triggers — so that changing a record on
@@ -637,7 +638,7 @@ func (n *Node) Reconcile() {
 			continue
 		}
 
-		if len(record.GetAddresses()) > 0 {
+		if trust.Dialable(record) {
 			wanted[record.GetFingerprint()] = record
 
 			continue

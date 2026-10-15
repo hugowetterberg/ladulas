@@ -498,8 +498,9 @@ heartbeats carry no addresses, and an empty list changes nothing by design —
 or the two have not been in contact since. Check what the peer advertises
 *now* on the peer itself, with `ladulas listen`: the "Peers dial" line is
 exactly what this record becomes, plus the one address this machine is
-actually reaching it on. `ladulas peers forget` and pairing again is no
-longer needed for this.
+actually reaching it on with a direct dial, and less anything that is not a
+`host:port` (§8, "A path is not an address"). `ladulas peers forget` and
+pairing again is no longer needed for this.
 
 ### A peer on the same LAN cannot reach this machine on the address it advertises
 

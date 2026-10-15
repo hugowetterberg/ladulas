@@ -679,12 +679,14 @@ func (n *Node) recordListened(
 ) (string, error) {
 	session := identity.NewRequestID()
 
+	// What the joiner advertised is held to the same rule as everything else
+	// written into an address list: direct host:port only (peerAddresses).
 	pending := &storepb.PendingPairing{
 		SessionId:         session,
 		Fingerprint:       peer.Fingerprint,
 		Name:              name,
 		IdentityPublicKey: peer.PublicKey.Marshal(),
-		Addresses:         addresses,
+		Addresses:         trust.DirectAddresses(addresses),
 		MayApprove:        window.intent.PeerMayApprove(),
 		MayRequest:        window.intent.PeerMayRequest(),
 		RemoteAddress:     peer.RemoteAddr,
@@ -1073,10 +1075,24 @@ func (n *Node) pairByProof(
 
 // peerAddresses puts the address that actually worked first, since it demonstrably
 // reaches the peer from here and the peer's own list is only its best guess.
+//
+// Only a direct address is recorded, dialled or advertised
+// (trust.DirectAddresses). The joining side writes down what it dialled because
+// a TCP connection to it worked, and that reasoning is about TCP: an address
+// for a path that is not a direct dial — a pairing reached through a relay, say,
+// whose address lives for the length of a pairing screen — would be written
+// into the list the direct dialler works from, first, and fail there every time
+// for the life of the pairing. Every address a pairing dials today is a
+// host:port, because the dial is a TCP one, so this keeps out nothing that
+// could have worked.
 func peerAddresses(advertised []string, dialled string) []string {
-	out := []string{dialled}
+	var out []string
 
-	for _, address := range advertised {
+	if trust.IsDirectAddress(dialled) {
+		out = append(out, dialled)
+	}
+
+	for _, address := range trust.DirectAddresses(advertised) {
 		if address != dialled {
 			out = append(out, address)
 		}
