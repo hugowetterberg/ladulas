@@ -286,6 +286,7 @@ func peerView(peer *ladulasv1.PeerStatus) bridge.PeerView {
 		State:       trust.DescribeStatus(peer, time.Now()),
 		Dialable:    trust.StatusDialable(peer),
 		Path:        peer.GetPath(),
+		Tunnel:      peer.GetTunnel(),
 		LastSeen:    peerLastSeen(peer),
 		Addresses:   peer.GetAddresses(),
 		MayUseKeys:  peer.GetAllKeys(),

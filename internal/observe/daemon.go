@@ -26,6 +26,7 @@ type Daemon struct {
 	wait      *prometheus.HistogramVec
 	signature prometheus.Counter
 	announced *prometheus.CounterVec
+	tunnel    *prometheus.CounterVec
 }
 
 // RegisterDaemon builds the daemon's metrics, registers them, and attaches
@@ -61,6 +62,15 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 				"— off, loopback, or a tailnet only — so no joining machine "+
 				"could have listed it.",
 			labelOutcome),
+		tunnel: r.counter("", "tunnel_events_total",
+			"Tunnel upgrade events, by event (decision AX). server_started "+
+				"and server_failed are the long-lived tailcat server coming up "+
+				"or not; offer_received and offer_withdrawn are peers' offers "+
+				"changing a trust record; admitted and revoked are client keys "+
+				"on and off the allowlist; refused is a connection through the "+
+				"tunnel the gate turned away; region_refused is a peer's "+
+				"address whose DERP region failed the region rule.",
+			labelEvent),
 		signature: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "signatures_total",
@@ -79,8 +89,22 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 
 	instance.Audit.Observe(metrics.record)
 	instance.ObservePairingAnnouncements(metrics.announcement)
+	instance.ObserveTunnel(metrics.tunnelEvent)
 
 	return nil
+}
+
+// tunnelEvent counts one tunnel event, from a vocabulary declared here so that
+// a word this build does not know is other rather than a new time series.
+func (d *Daemon) tunnelEvent(event string) {
+	switch event {
+	case "server_started", "server_failed", "offer_received", "offer_withdrawn",
+		"admitted", "revoked", "refused", "region_refused":
+	default:
+		event = other
+	}
+
+	d.tunnel.WithLabelValues(event).Inc()
 }
 
 // announcement counts one pairing announcement. The outcome is one of the
@@ -194,6 +218,7 @@ type daemonState struct {
 	peers        *prometheus.Desc
 	pairings     *prometheus.Desc
 	listeners    *prometheus.Desc
+	tunnel       *prometheus.Desc
 }
 
 var _ prometheus.Collector = (*daemonState)(nil)
@@ -249,6 +274,13 @@ func newDaemonState(instance *app.App) *daemonState {
 		listeners: prometheus.NewDesc(name("peer_listeners"),
 			"Addresses the peer channel is bound to. Zero means no peer can "+
 				"reach this instance: peering off, or a sealed store.", nil, nil),
+		tunnel: prometheus.NewDesc(name("tunnel_server"),
+			"The long-lived tailcat server (decision AX), 1 for the state it "+
+				"is in. off is the upgrade switched off or a build without "+
+				"tailcat; starting is a server that has not come up yet, which "+
+				"for long is DERP being unreachable; up is offering its address "+
+				"to peers. Silent while sealed.",
+			[]string{labelState}, nil),
 	}
 }
 
@@ -265,6 +297,7 @@ func (s *daemonState) Describe(ch chan<- *prometheus.Desc) {
 	ch <- s.peers
 	ch <- s.pairings
 	ch <- s.listeners
+	ch <- s.tunnel
 }
 
 // Collect implements prometheus.Collector.
@@ -400,6 +433,21 @@ func (s *daemonState) collectPeers(ch chan<- prometheus.Metric) {
 
 	ch <- prometheus.MustNewConstMetric(s.pairings, prometheus.GaugeValue,
 		float64(len(node.PendingPairingStatuses())))
+
+	tunnel := node.TunnelStatus()
+	state := "off"
+
+	switch {
+	case tunnel.Running:
+		state = "up"
+	case tunnel.Configured:
+		state = "starting"
+	}
+
+	for _, known := range []string{"off", "starting", "up"} {
+		ch <- prometheus.MustNewConstMetric(s.tunnel, prometheus.GaugeValue,
+			boolValue(known == state), known)
+	}
 
 	var usable, unreachable, heldHere int
 

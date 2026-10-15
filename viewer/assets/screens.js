@@ -1472,6 +1472,60 @@ function unlockAtLoginCard(state, keyring) {
     said);
 }
 
+// tunnelCard is the tunnel upgrade's switch (decision AX).
+//
+// The two sentences under the title are the daemon's and are not optional:
+// turning this on is a public exposure in decision H's sense, and the DERP
+// operator learns who pairs with whom and when. They sit beside the button
+// rather than behind a disclosure, because the switch and its price are one
+// decision.
+function tunnelCard(state, tunnel) {
+  const change = el("button", null,
+    tunnel.enabled ? "Turn the tunnel off" : "Turn the tunnel on");
+  const said = ui.note("");
+
+  said.hidden = true;
+  change.disabled = !tunnel.available && !tunnel.enabled;
+
+  change.onclick = () => {
+    change.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .setTunnel(!tunnel.enabled)
+      .then(() => state.refresh())
+      .catch((error) => {
+        change.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  return ui.card(null,
+    el("div", "row-title", tunnelTitle(tunnel)),
+    ui.note(tunnel.exposure),
+    ui.note(tunnel.metadata),
+    append(el("div", "card-actions"), change),
+    said);
+}
+
+function tunnelTitle(tunnel) {
+  if (!tunnel.available) {
+    return "This build has no tunnel";
+  }
+
+  if (!tunnel.enabled) {
+    return "The tunnel is off — peers are reached at their addresses only";
+  }
+
+  if (tunnel.running) {
+    return "The tunnel is on, through DERP region " + tunnel.region;
+  }
+
+  return "The tunnel is on and not up yet"
+    + (tunnel.detail ? " — " + tunnel.detail : "");
+}
+
 // autoPublishCard is whether projects this instance asks for signatures in are
 // published to its approvers automatically (decision Q).
 function autoPublishCard(state, publishing) {
@@ -2070,6 +2124,8 @@ function pairingSheet(peer, state, go) {
       peer.dialable
         ? { label: "Last connected", value: peer.lastSeen }
         : null,
+      // The tunnel's word, from the one set the daemon defines (decision AX).
+      peer.tunnel ? { label: "Tunnel", value: peer.tunnel } : null,
     ]),
     ui.note("The fingerprint is what the two machines compared when they "
       + "paired.")),
@@ -2374,6 +2430,10 @@ export function settings(state) {
   if (instance.listen) {
     body.push(ui.heading("The peer channel"));
     body.push(listenCard(state, instance.listen));
+
+    if (instance.tunnel) {
+      body.push(tunnelCard(state, instance.tunnel));
+    }
   }
 
   const locations = instance.locations || [];

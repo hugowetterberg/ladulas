@@ -199,6 +199,11 @@ message FetchPendingRequest {
   // How long to hold the call open when nothing is waiting. Capped by the
   // requester, and zero means answer immediately.
   google.protobuf.Duration wait = 1;
+  // The collector's own tunnel offer (decision AX). A collector holds no
+  // stream and opens no Watch, so without this a rotated client key, a
+  // reinstall or a version bump on a phone would have no way back to the
+  // requester except a re-pair. Absent says nothing and changes nothing.
+  TunnelOffer tunnel = 2;
 }
 
 message FetchPendingResponse {
@@ -215,6 +220,10 @@ message FetchPendingResponse {
   // (decision AQ). A collector has no link to hear it on, and the poll is the
   // one call it reliably makes. Empty says nothing and changes nothing.
   repeated string listen_addresses = 11;
+
+  // The requester's tunnel offer, which is how a collector hears it: the
+  // third carrier decision AQ already puts addresses on (decision AX).
+  TunnelOffer tunnel = 12;
 
   repeated PendingApproval pending = 1;
 }
@@ -884,6 +893,9 @@ message PairRequest {
   bytes identity_public_key = 3;
   // Addresses the caller listens on, so the listener can dial back later.
   repeated string listen_addresses = 6;
+  // The caller's tunnel offer, so that a new pair has it from birth
+  // (decision AX).
+  TunnelOffer tunnel = 7;
 
   // 4 and 5 were what the caller granted the listener, each side declaring its
   // own half. The side displaying the code declares the whole of it now
@@ -917,6 +929,8 @@ message PairResponse {
   // it, which is exactly the moment a fingerprint is hardest to check.
   bytes confirmation = 8;
   string reason = 9;
+  // The listener's tunnel offer (decision AX).
+  TunnelOffer tunnel = 10;
 }
 
 // The PIN exchange is CPace, CPACE-RISTR255-SHA512, initiator-responder, with
@@ -963,6 +977,10 @@ message PairFinishRequest {
   // tag has verified: before that, nothing in this message is believed.
   string instance_name = 4;
   repeated string listen_addresses = 5;
+  // The joiner's tunnel offer, under the same rule: read only once the tag
+  // has verified, and admitted to the listener's long-lived tunnel server
+  // only then (decision AX).
+  TunnelOffer tunnel = 6;
 }
 
 message PairFinishResponse {
@@ -976,6 +994,8 @@ message PairFinishResponse {
   bool may_approve = 4;
   bool may_request = 5;
   repeated string listen_addresses = 6;
+  // The listener's tunnel offer (decision AX).
+  TunnelOffer tunnel = 7;
 }
 
 message SettlePairingRequest {
@@ -1023,6 +1043,8 @@ message WatchRequest {
   // publishes, and this is the requester's one standing call to it. Empty says
   // nothing and changes nothing.
   repeated string listen_addresses = 1;
+  // The watcher's tunnel offer (decision AX).
+  TunnelOffer tunnel = 2;
 }
 
 message PresenceEvent {
@@ -1032,4 +1054,42 @@ message PresenceEvent {
   // Where the approver can be dialled now, as it would advertise in a pairing
   // (decision AQ), on every beat. Empty says nothing and changes nothing.
   repeated string listen_addresses = 4;
+  // The approver's tunnel offer, on every beat, beside the addresses it does
+  // not replace (decision AX). A rotated key reaches a requester this way.
+  TunnelOffer tunnel = 5;
+}
+
+// TunnelOffer is one instance's half of the tunnel upgrade (§8, decision AX):
+// what a peer needs to raise a tailcat client to this instance, and to admit
+// this instance's client to its own server.
+//
+// The tunnel never authenticates anybody. Everything carried over it is the
+// same pinned TLS as a direct connection, and the keys here decide who can
+// reach that handshake, never who is on the far end of it. So an offer is
+// accepted only from an authenticated peer — over pinned TLS, or inside a
+// completed PIN exchange — and it changes that peer's own record and nothing
+// else.
+//
+// Three states, and the difference between the first two is the point:
+//
+//   absent              says nothing and changes nothing, exactly as an empty
+//                       address list does (decision AQ);
+//   present, no versions withdrawn — drop what you hold for me, take my client
+//                       key off your allowlist, stop raising. A build without
+//                       tailcat sends this form, so that a reinstall from one
+//                       does not leave every peer raising a tunnel that will
+//                       never come up;
+//   present, versions   an offer.
+message TunnelOffer {
+  // Tailcat wire versions this instance can speak. No common version, no
+  // upgrade. Empty with the message present means "withdrawn: drop what you
+  // hold for me", which is different from the message being absent.
+  repeated uint32 versions = 1;
+  // This instance's long-lived tailcat server address (tc…), with region and
+  // pre-shared key embedded. Empty on an instance that accepts no peer
+  // connections: a phone.
+  string server_address = 2;
+  // This instance's tailcat client node public key, for the other side's
+  // allowlist.
+  bytes client_key = 3;
 }

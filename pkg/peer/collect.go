@@ -339,6 +339,7 @@ func (n *Node) collectFrom(
 	var (
 		owed      bool
 		addresses []string
+		tunnel    *ladulasv1.TunnelOffer
 	)
 
 	err := n.call(ctx, record, func(
@@ -347,8 +348,14 @@ func (n *Node) collectFrom(
 		inbox := ladulasv1connect.NewInboxServiceClient(client, baseURL,
 			connect.WithReadMaxBytes(maxRequestBytes))
 
+		// The collector's own tunnel offer goes on the poll, because a
+		// collector opens no Watch and the poll is the only way back for a
+		// rotated key (decision AX).
 		resp, err := inbox.FetchPending(ctx, connect.NewRequest(
-			&ladulasv1.FetchPendingRequest{Wait: durationpb.New(wait)}))
+			&ladulasv1.FetchPendingRequest{
+				Wait:   durationpb.New(wait),
+				Tunnel: n.offer(),
+			}))
 		if err != nil {
 			return err //nolint:wrapcheck // call wraps it with the address
 		}
@@ -356,6 +363,7 @@ func (n *Node) collectFrom(
 		pending = resp.Msg.GetPending()
 		owed = resp.Msg.GetGrantActivityWaiting()
 		addresses = resp.Msg.GetListenAddresses()
+		tunnel = resp.Msg.GetTunnel()
 
 		return nil
 	})
@@ -366,6 +374,7 @@ func (n *Node) collectFrom(
 	// The requester said where it can be dialled, and call has just remembered
 	// where it was (decision AQ).
 	n.learnAddresses(record.GetFingerprint(), addresses)
+	n.learnTunnel(record.GetFingerprint(), tunnel)
 
 	// The requester says it has done things under a delegation that this
 	// instance has not been told about, so go and get them. It is bookkeeping

@@ -89,6 +89,8 @@ internal/         the desktop's and the daemon's own halves, which no phone
   signcli/        the ssh-keygen -Y CLI contract ladulas-sign implements
   testutil/       instances a test can start
   tui/            the terminal shell: the same front end, drawn with keys
+  tunnel/         the tunnel upgrade's tailcat server: the only importer of
+                  tailcat (decision AX; tag notailcat leaves it out)
 proto/            the schema those are generated from
 viewer/           the shared HTML/JS bundle: cards, diff, markdown, and the
                   desktop shell (sidebar and screens; decision AA)
@@ -103,8 +105,16 @@ change made on this side of it.
 
 ## Build and development
 
-Go 1.26 or later. `buf` is the only tool that has to be installed
-separately; the protoc plugins are `go tool` entries in `go.mod`.
+Go 1.27.1 or later — what the pinned tailcat requires, and since `go mod
+tidy` ignores build tags, what the whole module and every `pkg/` consumer
+requires with it (decision AX). `buf` is the only tool that has to be
+installed separately; the protoc plugins are `go tool` entries in `go.mod`.
+
+The daemon binaries carry the tunnel upgrade's tailcat stack, which is most
+of their size. `-tags notailcat` builds them without it: such a build
+offers no tunnel and tells its peers so. Nothing under `pkg/` links it
+either way — `go list -deps ./pkg/...` names no `tailscale.com` package —
+so a phone core never carries it.
 
 | Command | What it does |
 |---|---|
@@ -355,6 +365,35 @@ same three lists and changes the setting the same way, alongside automatic
 publishing and unlocking at login (decision AS); a key's cog on its Keys
 screen copies the public key, toggles what the agent offers, hands the key
 to a paired machine and removes it.
+
+### The tunnel upgrade
+
+```
+ladulas tunnel                          # on or off, the server, the region,
+                                        # and what turning it on exposes
+ladulas tunnel on                       # generate keys once, start the server
+ladulas tunnel off                      # close it; every peer drops it
+ladulas tunnel derp-map <url|default> [--repick]
+```
+
+Two paired machines that both turn it on exchange tailcat keys over the
+pinned channel, so that one day either can reach the other through a NAT
+with no tailnet and no port forward (decision AX). Whatever crosses the
+tunnel is the same pinned TLS as a direct connection, and the direct
+addresses stay the fallback. It is **off until turned on**, because turning
+it on makes this machine's peer listener reachable from anywhere through a
+DERP relay — Tailscale's public fleet unless a self-hosted DERP map is set —
+for every client key a paired machine offered, and that relay's operator
+sees who pairs with whom and when. `ladulas tunnel` and the switch in the
+desktop's Settings both say that in so many words. `ladulas peers` shows
+what each peer offers in its TUNNEL column.
+
+This release builds the listening half: the server, the offers, the
+allowlist and the tunnel listener's own gate. **Nothing dials over the
+tunnel yet**; every peer is still reached on its direct addresses. The DERP
+region is picked once and kept, because a tunnel address embeds it; `--repick`
+picks again, and strands any pair that can reach this machine only through
+the tunnel.
 
 ### Asking for permission before the login needs it
 
@@ -903,6 +942,15 @@ half is fixed — `pair()` in the peer tests now waits for the link to report
 online — which means the race is no longer *visible* in CI while still being
 there in the product. Reproduce it by submitting inside the gap; do not
 expect the suite to catch it.
+
+**Dialling over the tunnel.** The tunnel upgrade (decision AX) has its
+listening half: the long-lived tailcat server, the offers on every carrier,
+the allowlist and the tunnel listener's gate. Raising clients, the path
+order (tunnel with a punched path, then direct TCP, then a relayed tunnel),
+the make-before-break switch, the hysteresis and the `path` label are the
+next step; after them the pairing server for off-LAN pairing, then phones.
+Keeping an old DERP region serving beside a new one through a re-pick is
+designed and not built.
 
 **The overlap has to end.** Pairing by PIN (decision AV) is built, and so
 is finding the displaying machine on the local network (decision AW); until

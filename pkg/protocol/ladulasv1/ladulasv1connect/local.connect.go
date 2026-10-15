@@ -67,6 +67,11 @@ const (
 	// ControlServiceSetPeerListenProcedure is the fully-qualified name of the ControlService's
 	// SetPeerListen RPC.
 	ControlServiceSetPeerListenProcedure = "/ladulas.v1.ControlService/SetPeerListen"
+	// ControlServiceTunnelProcedure is the fully-qualified name of the ControlService's Tunnel RPC.
+	ControlServiceTunnelProcedure = "/ladulas.v1.ControlService/Tunnel"
+	// ControlServiceSetTunnelProcedure is the fully-qualified name of the ControlService's SetTunnel
+	// RPC.
+	ControlServiceSetTunnelProcedure = "/ladulas.v1.ControlService/SetTunnel"
 	// ControlServiceListStoredKeysProcedure is the fully-qualified name of the ControlService's
 	// ListStoredKeys RPC.
 	ControlServiceListStoredKeysProcedure = "/ladulas.v1.ControlService/ListStoredKeys"
@@ -346,6 +351,20 @@ type ControlServiceClient interface {
 	// reaching a box over SSH cannot use, and a bind that fails is exactly the
 	// thing they need to find out about while they are still looking (§14).
 	SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error)
+	// Tunnel reports the tunnel upgrade (decision AX): whether this build has
+	// it, whether it is on, which DERP map it picks from, whether the long-lived
+	// server is up and in which region, and the two sentences every surface that
+	// offers the switch shows beside it.
+	//
+	// Answerable while sealed, with what a sealed instance can say: whether the
+	// build has it at all. The setting is in the store.
+	Tunnel(context.Context, *connect.Request[ladulasv1.TunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error)
+	// SetTunnel turns the upgrade on or off, or points it at a self-hosted DERP
+	// map, and puts that into effect without a restart: turning it on generates
+	// the keys the first time, starts the long-lived server and starts offering
+	// it to peers; turning it off closes the server and sends every peer the
+	// withdrawal.
+	SetTunnel(context.Context, *connect.Request[ladulasv1.SetTunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error)
 	// ListStoredKeys reports the keys this instance holds. A read, and it goes
 	// through the daemon like every other one: the running instance is the only
 	// thing that can answer without asking for a passphrase it has already been
@@ -652,6 +671,18 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("SetPeerListen")),
 			connect.WithClientOptions(opts...),
 		),
+		tunnel: connect.NewClient[ladulasv1.TunnelRequest, ladulasv1.TunnelResponse](
+			httpClient,
+			baseURL+ControlServiceTunnelProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("Tunnel")),
+			connect.WithClientOptions(opts...),
+		),
+		setTunnel: connect.NewClient[ladulasv1.SetTunnelRequest, ladulasv1.TunnelResponse](
+			httpClient,
+			baseURL+ControlServiceSetTunnelProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("SetTunnel")),
+			connect.WithClientOptions(opts...),
+		),
 		listStoredKeys: connect.NewClient[ladulasv1.ListStoredKeysRequest, ladulasv1.ListStoredKeysResponse](
 			httpClient,
 			baseURL+ControlServiceListStoredKeysProcedure,
@@ -936,6 +967,8 @@ type controlServiceClient struct {
 	setUnlockAtLogin     *connect.Client[ladulasv1.SetUnlockAtLoginRequest, ladulasv1.SetUnlockAtLoginResponse]
 	peerListen           *connect.Client[ladulasv1.PeerListenRequest, ladulasv1.PeerListenResponse]
 	setPeerListen        *connect.Client[ladulasv1.SetPeerListenRequest, ladulasv1.SetPeerListenResponse]
+	tunnel               *connect.Client[ladulasv1.TunnelRequest, ladulasv1.TunnelResponse]
+	setTunnel            *connect.Client[ladulasv1.SetTunnelRequest, ladulasv1.TunnelResponse]
 	listStoredKeys       *connect.Client[ladulasv1.ListStoredKeysRequest, ladulasv1.ListStoredKeysResponse]
 	generateKey          *connect.Client[ladulasv1.GenerateKeyRequest, ladulasv1.GenerateKeyResponse]
 	importKey            *connect.Client[ladulasv1.ImportKeyRequest, ladulasv1.ImportKeyResponse]
@@ -1026,6 +1059,16 @@ func (c *controlServiceClient) PeerListen(ctx context.Context, req *connect.Requ
 // SetPeerListen calls ladulas.v1.ControlService.SetPeerListen.
 func (c *controlServiceClient) SetPeerListen(ctx context.Context, req *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error) {
 	return c.setPeerListen.CallUnary(ctx, req)
+}
+
+// Tunnel calls ladulas.v1.ControlService.Tunnel.
+func (c *controlServiceClient) Tunnel(ctx context.Context, req *connect.Request[ladulasv1.TunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	return c.tunnel.CallUnary(ctx, req)
+}
+
+// SetTunnel calls ladulas.v1.ControlService.SetTunnel.
+func (c *controlServiceClient) SetTunnel(ctx context.Context, req *connect.Request[ladulasv1.SetTunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	return c.setTunnel.CallUnary(ctx, req)
 }
 
 // ListStoredKeys calls ladulas.v1.ControlService.ListStoredKeys.
@@ -1312,6 +1355,20 @@ type ControlServiceHandler interface {
 	// reaching a box over SSH cannot use, and a bind that fails is exactly the
 	// thing they need to find out about while they are still looking (§14).
 	SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error)
+	// Tunnel reports the tunnel upgrade (decision AX): whether this build has
+	// it, whether it is on, which DERP map it picks from, whether the long-lived
+	// server is up and in which region, and the two sentences every surface that
+	// offers the switch shows beside it.
+	//
+	// Answerable while sealed, with what a sealed instance can say: whether the
+	// build has it at all. The setting is in the store.
+	Tunnel(context.Context, *connect.Request[ladulasv1.TunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error)
+	// SetTunnel turns the upgrade on or off, or points it at a self-hosted DERP
+	// map, and puts that into effect without a restart: turning it on generates
+	// the keys the first time, starts the long-lived server and starts offering
+	// it to peers; turning it off closes the server and sends every peer the
+	// withdrawal.
+	SetTunnel(context.Context, *connect.Request[ladulasv1.SetTunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error)
 	// ListStoredKeys reports the keys this instance holds. A read, and it goes
 	// through the daemon like every other one: the running instance is the only
 	// thing that can answer without asking for a passphrase it has already been
@@ -1614,6 +1671,18 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("SetPeerListen")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceTunnelHandler := connect.NewUnaryHandler(
+		ControlServiceTunnelProcedure,
+		svc.Tunnel,
+		connect.WithSchema(controlServiceMethods.ByName("Tunnel")),
+		connect.WithHandlerOptions(opts...),
+	)
+	controlServiceSetTunnelHandler := connect.NewUnaryHandler(
+		ControlServiceSetTunnelProcedure,
+		svc.SetTunnel,
+		connect.WithSchema(controlServiceMethods.ByName("SetTunnel")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceListStoredKeysHandler := connect.NewUnaryHandler(
 		ControlServiceListStoredKeysProcedure,
 		svc.ListStoredKeys,
@@ -1904,6 +1973,10 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServicePeerListenHandler.ServeHTTP(w, r)
 		case ControlServiceSetPeerListenProcedure:
 			controlServiceSetPeerListenHandler.ServeHTTP(w, r)
+		case ControlServiceTunnelProcedure:
+			controlServiceTunnelHandler.ServeHTTP(w, r)
+		case ControlServiceSetTunnelProcedure:
+			controlServiceSetTunnelHandler.ServeHTTP(w, r)
 		case ControlServiceListStoredKeysProcedure:
 			controlServiceListStoredKeysHandler.ServeHTTP(w, r)
 		case ControlServiceGenerateKeyProcedure:
@@ -2037,6 +2110,14 @@ func (UnimplementedControlServiceHandler) PeerListen(context.Context, *connect.R
 
 func (UnimplementedControlServiceHandler) SetPeerListen(context.Context, *connect.Request[ladulasv1.SetPeerListenRequest]) (*connect.Response[ladulasv1.SetPeerListenResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.SetPeerListen is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) Tunnel(context.Context, *connect.Request[ladulasv1.TunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.Tunnel is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) SetTunnel(context.Context, *connect.Request[ladulasv1.SetTunnelRequest]) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.SetTunnel is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) ListStoredKeys(context.Context, *connect.Request[ladulasv1.ListStoredKeysRequest]) (*connect.Response[ladulasv1.ListStoredKeysResponse], error) {

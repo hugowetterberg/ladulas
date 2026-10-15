@@ -170,6 +170,8 @@ func New(opts Options) (*Frontend, error) {
 		SetListen:          front.setListen,
 		Publishing:         front.publishing,
 		SetAutoPublish:     front.setAutoPublish,
+		Tunnel:             front.tunnel,
+		SetTunnel:          front.setTunnel,
 		PublishProject:     front.publishProject,
 		UnpublishProject:   front.unpublishProject,
 		UnlockAtLogin:      front.unlockAtLogin,

@@ -422,6 +422,11 @@ type PeerView struct {
 	// the path beside the pill does not have to parse the pill; State already
 	// names any path that is not the ordinary one (trust.DescribeState).
 	Path string `json:"path,omitempty"`
+	// Tunnel is what this instance knows about a tunnel to the peer, in the
+	// daemon's word from the one set decision AX defines
+	// (trust.DescribeTunnel): "tunnel off here", "tunnel offered", and so on.
+	// Empty from a daemon too old to say.
+	Tunnel string `json:"tunnel,omitempty"`
 	// LastSeen is when there was last a link, for the rows that have not got one
 	// now. It is the absolute time rather than "4m ago" because a screen that
 	// wants a countdown has State for that, and a screen that wants to know
@@ -757,7 +762,38 @@ type InstanceView struct {
 	Listen        *ListenView        `json:"listen,omitempty"`
 	Publishing    *PublishingView    `json:"publishing,omitempty"`
 	UnlockAtLogin *UnlockAtLoginView `json:"unlockAtLogin,omitempty"`
-	Error         string             `json:"error,omitempty"`
+	// Tunnel is the tunnel upgrade, on a host that can say (decision AX).
+	Tunnel *TunnelView `json:"tunnel,omitempty"`
+	Error  string      `json:"error,omitempty"`
+}
+
+// TunnelView is the tunnel upgrade as the switch draws it (decision AX):
+// whether the build has it, whether it is on and up, and the two sentences
+// that go beside the switch, in the daemon's words so that every surface says
+// the same thing.
+type TunnelView struct {
+	Available  bool   `json:"available"`
+	Enabled    bool   `json:"enabled"`
+	Running    bool   `json:"running"`
+	Region     string `json:"region,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	DERPMapURL string `json:"derpMapUrl,omitempty"`
+	Exposure   string `json:"exposure"`
+	Metadata   string `json:"metadata"`
+}
+
+// tunnelView is a TunnelState as the switch draws it.
+func tunnelView(state *ladulasv1.TunnelState) TunnelView {
+	return TunnelView{
+		Available:  state.GetAvailable(),
+		Enabled:    state.GetEnabled(),
+		Running:    state.GetRunning(),
+		Region:     state.GetRegion(),
+		Detail:     state.GetDetail(),
+		DERPMapURL: state.GetDerpMapUrl(),
+		Exposure:   state.GetExposure(),
+		Metadata:   state.GetMetadata(),
+	}
 }
 
 // ListenView is where the peer channel listens, as the process that bound it

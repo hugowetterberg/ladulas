@@ -150,6 +150,17 @@ type Options struct {
 	// PairingRetry is how often a pending pairing is taken to its peer.
 	// Defaults to DefaultPairingRetry.
 	PairingRetry time.Duration
+	// Tunnel is the tunnel upgrade's engine (decision AX). Optional: without
+	// one the node offers no tunnel and says so on every carrier, which is what
+	// a build without tailcat and an instance with the upgrade off both are.
+	// SetTunnel changes it at runtime.
+	Tunnel Tunnel
+	// TunnelStale is how long a peer's tunnel offer stays raisable without a
+	// beat re-confirming it. Defaults to DefaultTunnelStale.
+	TunnelStale time.Duration
+	// ObserveTunnel is told about every tunnel event, for the metrics port
+	// (internal/observe). Optional.
+	ObserveTunnel func(event string)
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -214,6 +225,10 @@ type Node struct {
 	// mutex rather than sharing mu, so that announcing an event never contends
 	// with a link coming up or a pairing settling.
 	eventState
+
+	// tunnelState is the tunnel upgrade (decision AX), under its own mutex for
+	// the same reason: the tunnel gate reads it during a handshake.
+	tunnelState
 
 	// dialers are the warm clients for peers there is no link to, with the
 	// address each was last reached on. Its own mutex for the same reason.
@@ -363,6 +378,13 @@ func New(opts Options) (*Node, error) {
 		parked:        map[string]*parked{},
 		waiters:       map[string]map[chan struct{}]bool{},
 		handled:       map[string]*handledRequest{},
+		tunnelState: tunnelState{
+			tunnel:             opts.Tunnel,
+			tunnelStale:        orDuration(opts.TunnelStale, DefaultTunnelStale),
+			tunnelSeen:         map[string]time.Time{},
+			tunnelContradicted: map[string]time.Time{},
+			observeTunnel:      opts.ObserveTunnel,
+		},
 	}
 
 	server, err := transport.NewServer(transport.ServerOptions{
@@ -431,6 +453,25 @@ func (n *Node) Serve(ctx context.Context) error {
 	n.ctx = ctx
 	n.mu.Unlock()
 
+	// The tunnel's server is started now and its address offered only once it
+	// is up, so no beat ever carries a stale one (§3, decision AX); until then
+	// the offer is absent, which peers read as no change. In the background,
+	// and not as one attempt here first: a first region pick fetches the DERP
+	// map and measures latency for up to half a minute, and the links and the
+	// listener, which decision AJ's budget is spent waiting on, should not
+	// wait for a feature that costs nothing but itself when it is late.
+	n.tunnelMu.Lock()
+	tunnel := n.tunnel
+	n.tunnelMu.Unlock()
+
+	if tunnel != nil {
+		go n.raiseServer(tunnel)
+	}
+
+	// The server closes after the links have stopped: the links are its
+	// clients, and seal closes clients first (§3).
+	defer n.closeTunnel()
+
 	// Links come up before the listener, because a headless box's whole reason
 	// for existing is to reach its approver, and it should not have to wait for
 	// its own door to open first.
@@ -458,6 +499,9 @@ func (n *Node) Close() error {
 		n.stopWatching()
 		n.stopLinks()
 		n.closeDialers()
+		// Clients, then the server (§3): an instance that claimed to hold
+		// nothing usable while keeping a DERP presence would be lying.
+		n.closeTunnel()
 
 		err = n.server.Close()
 	})

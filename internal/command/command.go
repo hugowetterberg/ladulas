@@ -128,6 +128,13 @@ func GlobalFlags() []cli.Flag {
 	}
 }
 
+// Tunnels is what builds the tunnel upgrade's engine for an instance this
+// process runs (decision AX). The daemon binaries set it from internal/tunnel
+// before anything runs, so that this package — shared by everything that has a
+// command line — never imports tailcat itself. Nil means the build has no
+// tunnel to offer.
+var Tunnels app.TunnelFactory
+
 // ConfigFromFlags builds an app configuration from the global flags.
 func ConfigFromFlags(cmd *cli.Command) app.Config {
 	return app.Config{
@@ -139,6 +146,7 @@ func ConfigFromFlags(cmd *cli.Command) app.Config {
 		PeerAllowPublic: cmd.Bool("peer-listen-public"),
 		NoKeyring:       cmd.Bool("no-keyring"),
 		Passphrase:      TerminalPassphrase,
+		Tunnels:         Tunnels,
 		Logger:          Logger(cmd),
 	}.WithDefaults()
 }
@@ -251,6 +259,7 @@ func Commands() []*cli.Command {
 		waitCommand(),
 		keyringCommand(),
 		listenCommand(),
+		tunnelCommand(),
 		pairCommand(),
 		pairingsCommand(),
 		peersCommand(),

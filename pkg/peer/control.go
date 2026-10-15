@@ -74,6 +74,8 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 		PairedAt:    record.GetPairedAt(),
 		// Computed here so that no surface repeats the rule (§3, trust.Dialable).
 		Dialable: trust.Dialable(record),
+		// And the tunnel's word, from the one place that has it (decision AX).
+		Tunnel: n.describeTunnel(record),
 	}
 
 	// A link reports its own state and is the better answer when there is one.
@@ -236,6 +238,7 @@ func (n *Node) RevokePeer(
 		n.dropPeerProjects(record)
 		n.dropPeerKeys(record)
 		n.dropPeerHandovers(record)
+		n.forgetRecordTunnel(record)
 	}
 
 	n.Disconnect(fingerprint)

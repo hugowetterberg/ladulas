@@ -535,7 +535,7 @@ func (s *peerService) Pair(
 	}
 
 	session, err := s.node.recordListened(window, peer,
-		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses())
+		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses(), req.Msg.GetTunnel())
 	if err != nil {
 		return nil, err
 	}
@@ -552,6 +552,7 @@ func (s *peerService) Pair(
 		MayRequest:        window.intent.PeerMayRequest(),
 		ListenAddresses:   s.node.Advertised(),
 		Confirmation:      trust.Confirmation(window.secret, ours, peer.PublicKey),
+		Tunnel:            s.node.offer(),
 	}), nil
 }
 
@@ -656,7 +657,7 @@ func (s *peerService) PairFinish(
 	}
 
 	pairing, err := s.node.recordListened(window, peer,
-		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses())
+		req.Msg.GetInstanceName(), req.Msg.GetListenAddresses(), req.Msg.GetTunnel())
 	if err != nil {
 		return nil, err
 	}
@@ -668,14 +669,19 @@ func (s *peerService) PairFinish(
 		MayApprove:      window.intent.PeerMayApprove(),
 		MayRequest:      window.intent.PeerMayRequest(),
 		ListenAddresses: s.node.Advertised(),
+		Tunnel:          s.node.offer(),
 	}), nil
 }
 
 // recordListened writes down the pending pairing a spent code produced on the
 // listening side, and tells whoever is displaying the code.
+//
+// The joiner's tunnel offer is admitted here, once the code is spent and not
+// before: its keys arrived in a message that is read only after the proof
+// verified, bound to both identity keys (decision AX).
 func (n *Node) recordListened(
 	window *pairingWindow, peer *transport.PeerIdentity,
-	name string, addresses []string,
+	name string, addresses []string, tunnel *ladulasv1.TunnelOffer,
 ) (string, error) {
 	session := identity.NewRequestID()
 
@@ -692,6 +698,7 @@ func (n *Node) recordListened(
 		RemoteAddress:     peer.RemoteAddr,
 		StartedAt:         timestamppb.Now(),
 		FailedAttempts:    window.failedAttempts(),
+		Tunnel:            n.pendingOffer(name, tunnel),
 	}
 
 	if err := n.recordPending(pending); err != nil {
@@ -909,6 +916,10 @@ func (n *Node) PairWith(
 		KeyFromCode:       expected != nil,
 		RemoteAddress:     peer.RemoteAddr,
 		StartedAt:         timestamppb.Now(),
+		// The listener's long-lived offer, never the address that was dialled
+		// (decision AX): both sides admit the other's client key once the code
+		// is spent, because either may settle and either may dial.
+		Tunnel: n.pendingOffer(answer.name, answer.tunnel),
 	}
 
 	if err := n.recordPending(pending); err != nil {
@@ -924,6 +935,7 @@ type joinAnswer struct {
 	session    string
 	name       string
 	addresses  []string
+	tunnel     *ladulasv1.TunnelOffer
 	mayApprove bool
 	mayRequest bool
 }
@@ -966,6 +978,7 @@ func (n *Node) pairByPIN(
 		Confirmation:    session.Confirmation(),
 		InstanceName:    n.identity.Name(),
 		ListenAddresses: n.Advertised(),
+		Tunnel:          n.offer(),
 	}))
 	if err != nil {
 		return nil, joinError(err, pinned)
@@ -983,6 +996,7 @@ func (n *Node) pairByPIN(
 		session:    finish.Msg.GetSessionId(),
 		name:       finish.Msg.GetInstanceName(),
 		addresses:  finish.Msg.GetListenAddresses(),
+		tunnel:     finish.Msg.GetTunnel(),
 		mayApprove: finish.Msg.GetMayApprove(),
 		mayRequest: finish.Msg.GetMayRequest(),
 	}, nil
@@ -1029,6 +1043,7 @@ func (n *Node) pairByProof(
 		InstanceName:      n.identity.Name(),
 		IdentityPublicKey: ours.Marshal(),
 		ListenAddresses:   n.Advertised(),
+		Tunnel:            n.offer(),
 	}))
 	if err != nil {
 		if connect.CodeOf(err) == connect.CodeAlreadyExists {
@@ -1068,6 +1083,7 @@ func (n *Node) pairByProof(
 		session:    resp.Msg.GetSessionId(),
 		name:       resp.Msg.GetInstanceName(),
 		addresses:  resp.Msg.GetListenAddresses(),
+		tunnel:     resp.Msg.GetTunnel(),
 		mayApprove: resp.Msg.GetMayApprove(),
 		mayRequest: resp.Msg.GetMayRequest(),
 	}, nil

@@ -60,9 +60,18 @@ Goals:
   on desktop *and* mobile, plus browsable project documentation published
   by requesters ahead of time.
 * **No mandatory infrastructure.** Instances connect peer-to-peer over any
-  IP network. Tailscale and push notifications are optional enhancements;
-  nobody is forced to route through infrastructure hosted by the author or
-  anyone else.
+  IP network. Tailscale, push notifications and the tunnel upgrade are
+  optional enhancements; nobody is forced to route through infrastructure
+  hosted by the author or anyone else.
+
+  This survived the tunnel upgrade (decision AX) because every path that
+  depends on a relay has a relay-free alternative where one is needed:
+  pairing on a LAN runs over discovery and direct TCP (decision AW), and a
+  pair that upgraded to the tunnel falls back to its direct addresses when
+  the tunnel cannot be raised. The upgrade is opt-in per instance, and an
+  instance that never turns it on never touches a relay. What the upgrade
+  adds is reach — a laptop on a café network reaching a desktop at home
+  with no tailnet — not a dependency.
 * A Go library that lets custom applications participate in the approval
   flow.
 
@@ -71,11 +80,29 @@ Non-goals (at least initially):
 * GPG signing. Git is configured with `gpg.format=ssh` everywhere; one
   agent protocol covers both SSH auth and commit signing.
 * FIDO/sk-* keys, PIV/smartcard passthrough.
-* NAT traversal. Ladulås does no hole punching and runs no relays; peers
-  must be directly reachable, and when they aren't, that is what VPNs
-  (Tailscale, WireGuard, …) are for. Krypton died and took every pairing
-  with it because its data path ran through the company's AWS account;
-  Ladulås's data path is always a direct connection between peers.
+* ~~NAT traversal.~~ **Retired 2026-10-14 by decision AX.** This said:
+  "Ladulås does no hole punching and runs no relays; peers must be
+  directly reachable, and when they aren't, that is what VPNs (Tailscale,
+  WireGuard, …) are for. Krypton died and took every pairing with it
+  because its data path ran through the company's AWS account; Ladulås's
+  data path is always a direct connection between peers." Two paired
+  instances that both opt in now exchange tailcat credentials and can
+  reach each other's pinned TLS listener through hole-punching, or
+  through a DERP relay when punching fails (§8), so "runs no relays" and
+  "always a direct connection" are no longer true of an upgraded pair.
+
+  The Krypton lesson is kept, and is the reason the upgrade has the shape
+  it has: **no pairing may die with somebody else's infrastructure.** So
+  the tunnel is an upgrade over the direct path and never a replacement
+  for it — a LAN pairing never goes through a relay, an upgraded pair
+  falls back to its direct addresses whenever the tunnel is down, and the
+  relay is Tailscale's public fleet by default only because the
+  alternative defaults were worse (§8). A pair whose *only* path is the
+  tunnel is as durable as its DERP region, and that is said where it is
+  offered rather than hidden (§8, ops.md). The rip-out that tailcat was
+  first assessed for — the tunnel as the only transport — was rejected
+  for making a relay mandatory on every connection, and must not come
+  back without answering that.
 
 ## 2. Settled decisions
 
@@ -92,12 +119,20 @@ From the initial discussion:
   `ecdsa-sha2-nistp256`, because Apple's Secure Enclave and Android
   StrongBox only do P-256.
 * **Any network, no required infrastructure** — peers connect directly to
-  configured hosts over whatever IP path exists. Tailscale is an optional
-  hardening/reachability layer (§7), used because it's there, never
-  required.
+  their advertised addresses over whatever IP path exists. Tailscale is an
+  optional hardening/reachability layer (§7), used because it's there,
+  never required. Two instances that both opt in to the tunnel upgrade
+  can also reach each other through tailcat (decision AX, §8), which is a
+  second path and not a replacement: the direct one is always kept as the
+  fallback. (This said "peers connect directly to configured hosts" until
+  2026-10-14, which is still true of every pair that has not opted in.)
 * **Push is optional** — a content-free wake-up optimization (§11) with a
   zero-infrastructure baseline (live connections, poll-on-open, Android
-  foreground service). No hosted component is ever load-bearing.
+  foreground service). No hosted component is ever load-bearing — with one
+  exception that is opted into and stated: a pair that has *no* direct
+  path and reaches each other only through the tunnel depends on its DERP
+  region (decision AX, §8). Every other pair, upgraded or not, keeps
+  working when every hosted component is gone.
 * **Policies + prompt** — per-key/per-peer rules (auto-approve, TTL
   grants), everything audited.
 * **First decision wins** — requests fan out to all eligible approvers;
@@ -199,6 +234,24 @@ because an instance serves one account on one machine.
   a backoff that starts at a second and stops doubling at a minute — and
   the convergence loop, which is what makes a pairing resumable and a
   queued key handover eventually delivered.
+* **With the tunnel upgrade on (decision AX), the node also runs the
+  long-lived tailcat server** — a whole network stack of its own:
+  magicsock, a WireGuard engine, gVisor's netstack, a DERP connection and
+  their goroutines — and a second accept loop serving the peer handler
+  through it. It is started in the background when the node starts
+  serving, and nothing about it is offered until it is up: the server
+  first, so its address is known; the allowlist rebuilt from the trust
+  records and pending pairings; then the address published by being what
+  every carrier offers. That mirrors the rule above that the listener binds
+  before the control socket reports ready, so that "where this instance can
+  be reached" is never answered before it is settled. It is not started in
+  line ahead of the links, as it first was, because a first region pick can
+  take half a minute and the links and listener should not wait on it. A
+  server that cannot start keeps retrying on the links' backoff and costs
+  nothing but the tunnel meanwhile.
+* **While a pairing screen is open, a DNS-SD responder** announces it, and
+  while an "Add a machine" screen is open a browser lists what is
+  announced (decision AW).
 * **The lock-trigger watcher** is a goroutine over logind's system bus
   (suspend, session lock) plus an idle timer where one is configured, and
   it is what turns those events into soft locks or seals (§10, decision J).
@@ -207,10 +260,14 @@ because an instance serves one account on one machine.
   noticing (§14).
 
 **Sealing destroys the inner half rather than flagging it.** The engine,
-the vault, the project cache and the peer node — links, listener and
-convergence loop with them — are built by unsealing and dropped by
-sealing, which is what makes "the DEK is not in memory" a statement about
-the process rather than a hope. The sockets and the audit log outlive it.
+the vault, the project cache and the peer node — links, listener,
+convergence loop, the DNS-SD responder and browser, and the tailcat server
+with them — are built by unsealing and dropped by sealing, which is what
+makes "the DEK is not in memory" a statement about the process rather than
+a hope. The sockets and the audit log outlive it. The tunnel's order on the
+way down is clients, then the server (§8): the links, which are what raise
+clients, stop first, and an instance that claimed to hold nothing usable
+while keeping a DERP presence and live WireGuard sessions would be lying.
 
 The relay's process model is one sentence: an HTTP server, a debug server,
 and no background work at all. It holds its device registrations in memory
@@ -223,6 +280,14 @@ fine), over any IP path — LAN, VPN, tailnet, or the open internet. The
 app-level channel (§8) provides mutual authentication and end-to-end
 encryption, so the network is never trusted, whatever it is.
 
+Two instances that have both opted in to the tunnel upgrade (decision AX)
+have a second way to reach each other: through tailcat, which punches a
+direct UDP path when it can and relays through DERP when it cannot. It
+carries the same pinned TLS as a direct connection and is not trusted any
+more than the network is. It is a path, not an address (§8): it is never
+written into a record's address list, and the direct addresses stay as the
+fallback.
+
 Desktops listen and accept peer connections. **Phones never listen** —
 they always dial out, triggered by a wake-up push (optional), by the user
 opening the app, or on Android by a persistent foreground-service
@@ -234,6 +299,11 @@ requester desktop ──(optional wake-up: relay ▸ FCM/APNs/UnifiedPush)──
        ▲                                                                 │
        └────────────── phone dials requester directly ◀─────────────────┘
 ```
+
+(The phone dials directly today. Phones join the tunnel only after a device
+run of our own `gomobile` build (decision AX); until then a phone's offer,
+when it has one, names a client key and no server — "phones never listen"
+holds at the RPC layer either way.)
 
 When the approver is a desktop, or a phone that already has a live
 connection (foreground app or foreground service), the request goes
@@ -253,8 +323,26 @@ hour later finds an empty inbox rather than a commit nobody is making any
 more.
 
 Until 2026-10-14 the rule above read "decided by whether it advertised an
-address at pairing time", and that is still what dialable *means* today: a
-record that carries a direct `host:port`. What changed is where the question
+address at pairing time". It now reads **a record that carries a direct
+`host:port`** — and, once links can dial over the tunnel (decision AX, the
+step after the one that introduced the offer), **or a tunnel offer that
+names a server**. A desktop reachable only through its tunnel is then a
+machine that listens, not a phone, and gets a link rather than an inbox.
+Whether the offer's versions meet this instance's, whether it has aged out,
+and whether this build has a tunnel at all are reasons a client is not
+raised, and none of them turns a desktop into a phone: deciding
+link-or-inbox on them would move a peer between the two every time a beat
+aged an offer out.
+
+The tunnel clause is written and switched off (`trust.tunnelDialling`).
+It was first switched on in the same change as the offer, and that was a
+bug: an approver with no peer listener is a collector, one that turned the
+upgrade on still started its server and offered its address, and its
+requesters' `Reconcile` moved it from its inbox to a link — a link that
+could never connect, since links still took the direct path only. From
+that beat on, that approver was asked nothing at all. **A path counts
+towards dialable when something can take it, not when it is announced.**
+What changed is where the question
 is asked. It used to be asked as `len(Addresses) > 0` in every place that
 needed it — the link-or-inbox choice in `Reconcile`, the pairing convergence
 loop, key handover, delegated-grant reporting, collection, the agent's
@@ -1209,6 +1297,17 @@ ordinary one is named after it (`connected, …`). The word goes through
 `DescribeState` and `PeerView.Path`, which this section makes the single source,
 rather than into each surface separately.
 
+What is known about a peer's tunnel (decision AX) is a third word, sent as
+`PeerStatus.tunnel` and chosen in one place, `trust.DescribeTunnel`: "tunnel
+off here", "peer offers no tunnel", "peer withdrew its tunnel", "version
+mismatch (ours …, theirs …)", "peer offers a client key only", "tunnel offer
+stale" or "tunnel offered". It describes what this instance holds, not a path
+in use, because nothing dials over the tunnel yet; the words for a path in use
+("tunnel direct", "tunnel relayed <region>", "fallback to direct, because …",
+"tunnel in backoff until …", "tunnel address stale, no direct path") arrive
+with the dialling, through the same function. `ladulas peers` prints it as a
+column and the desktop's peer sheet as a row.
+
 **Where the answer comes from for a device that dials in**, since none of the
 dialling machinery ever hears from it: every call a peer makes goes through one
 of the two authorisation chokepoints — `authorize` for a peer asking this
@@ -1311,7 +1410,10 @@ buys nothing except owning correlation/cancellation/versioning ourselves.
 
 **Reachability and discovery.** Peers are configured as `host:port`; only
 listeners (desktops/headless boxes) need to be reachable — phones always
-dial out. No NAT traversal is built in (§1 non-goals). A pairing on a LAN
+dial out. Until 2026-10-14 this said "no NAT traversal is built in (§1
+non-goals)"; two instances that both opt in to the tunnel upgrade now have
+tailcat's (below, decision AX), as a second path beside the direct one and
+never instead of it. A pairing on a LAN
 does not need an address typed: the displaying side announces its window
 over DNS-SD while the PIN is on screen, and a joining desktop or headless
 box picks it from a list and dials the address it heard (decision AW, §7).
@@ -1473,10 +1575,204 @@ is ever written into an address list** (`trust.DirectAddresses`): the
 dialled address and the advertised list at pairing, on both sides, and the
 list a beat carries. Every address a pairing or a beat produces today is
 one — the dials are TCP dials, which take nothing else — so this keeps out
-nothing that could have worked. Direct is the only path kind there is; the
-kinds exist so that the rule is in the code before a second one is, rather
-than discovered in three places when it arrives. Rejected: letting a path's
-endpoint stand in for an address, which is each of the three failures above.
+nothing that could have worked. Direct is the only path kind a call takes
+today; the kinds exist so that the rule is in the code before a second one
+is, rather than discovered in three places when it arrives. The second is
+the tunnel (below): its server address is a field of its own on the record
+(`TrustRecord.tunnel`), never an entry in `Addresses`, never `preferred`
+and never the reached address. Rejected: letting a path's endpoint stand in
+for an address, which is each of the three failures above.
+
+**The tunnel upgrade (decision AX, 2026-10-14).** Two paired instances that
+both have tailcat, and have both turned the upgrade on, exchange tunnel
+credentials over the pinned channel and can then reach each other's peer
+listener through [tailcat](https://github.com/tailscale/tailcat): a
+WireGuard tunnel that finds its peer through a DERP relay, punches a direct
+UDP path when it can, and stays relayed when it cannot. This step builds the
+listening half and the bookkeeping; raising a client and dialling over the
+tunnel are the next one, so today an offer is held, admitted and described,
+and links still take the direct path.
+
+*Pinned TLS stays inside the tunnel.* The tunnel never authenticates an
+instance. Every connection through it runs the same TLS 1.3 handshake, each
+side pinning the other's SubjectPublicKeyInfo, with connect-go above it, as
+a direct connection does; decision A1 is unchanged, and tailcat is judged
+only as a NAT traversal layer under it. The tailcat keys — one server node
+key, one client node key and a WireGuard pre-shared key per instance,
+generated once and kept in the encrypted store beside the identity key
+(`TunnelSettings`) — are transport credentials: they decide who can *reach*
+the handshake, never who is on the other end of it. On a phone that
+difference is real, since the identity stays in the Secure Enclave: a stolen
+store reaches the handshake and cannot complete it as the phone. This is not
+decision A2's rejected shape, a software key the identity endorses once and
+that then does every handshake in its place — the node keys are exchanged
+*under* an authenticated session, and nothing ever accepts one instead of
+the identity. Trusting the node key as the identity was considered and
+rejected: it loses the hardware-resident phone identity and the
+fingerprint-based pairing confirmation, and hands channel authentication to
+an experimental stack whose own security policy says its threat model
+"hasn't historically included malicious adversaries".
+
+*What the tunnel's own crypto buys is not relied on.* Tailcat's pre-shared
+key gives post-quantum confidentiality and keeps the DERP operator out of
+the tunnel; the pinned identity already does the second, and Go's TLS 1.3
+negotiates hybrid X25519MLKEM768 by default, which does the first — for as
+long as nobody sets `CurvePreferences`, `GODEBUG=tlsmlkem=0` or a FIPS
+build, because a peer that drops the hybrid falls back to plain X25519
+*without any error*. So the invariant is a test,
+`TestHandshakeNegotiatesHybridKeyExchange` in `pkg/transport`, which
+handshakes a real client against a real server and asserts
+`ConnectionState.CurveID == X25519MLKEM768`. The pre-shared key stays on
+anyway: it is tailcat's default and costs nothing.
+
+*Turning it on is a public exposure in decision H's sense, and is described
+as one.* Decisions H, AH and AR keep the TCP listener off public interfaces
+unless somebody opts in; the long-lived tailcat server makes the same TLS
+listener reachable from anywhere through DERP and hole-punching, for any
+key the allowlist admits. The allowlist is defence in depth on an
+experimental stack, not a stronger outer door than the TLS handshake. So
+the upgrade is **off until turned on**, per instance — `ladulas tunnel on`,
+`SetTunnel` on the control socket, or the switch in the desktop's instance
+settings — and every surface that offers the switch shows two sentences
+beside it, from the daemon so they cannot drift: what turning it on exposes,
+and what the DERP operator learns (`app.TunnelExposure`,
+`app.TunnelMetadata`). The cost of the layering is a second handshake, an
+MTU of 1280 and a gVisor TCP stack per connection.
+
+*The offer.* `TunnelOffer` carries the versions an instance speaks (ours,
+not tailcat's — bumped whenever the pinned tailcat changes its address or
+wire format incompatibly, so a peer on an older build stays direct rather
+than failing), its long-lived server address (`tc…`, region and pre-shared
+key embedded; empty on a phone) and its client node public key. It rides
+wherever decision AQ already puts addresses — `WatchRequest` and every
+`PresenceEvent`, `FetchPendingResponse` — plus pairing (`PairRequest` and
+`PairResponse`, `PairFinishRequest` and `PairFinishResponse`) so a new pair
+has it from birth, and **`FetchPendingRequest`**, because a phone holds no
+stream and its own offer would otherwise have no way back except a
+re-pair. Three states, and the second is the reason for the third: *absent*
+says nothing and changes nothing, as an empty address list does; *present
+with no versions* withdraws — the peer clears the fields it holds, takes
+the client key off its allowlist and stops raising — and a build without
+tailcat or with the upgrade off sends this form on every carrier, so that a
+user turning the upgrade off, or a reinstall from a build without it, does
+not leave every peer raising a tunnel that will never come up; *present
+with versions* is an offer. A withdrawal from a peer that never offered is
+not written down, because it is every upgrade-off instance's ordinary beat
+and recording it would turn "offers no tunnel" into "withdrew its tunnel".
+A node whose server has not started yet sends nothing rather than the
+withdrawal: the address it will have is the one it had, since keys and
+region are persisted, and a beat saying "withdrawn" while the server came
+up would cost every peer its allowlist entry for nothing. The same holds
+for a node that is closing its tunnel at seal or shutdown, which takes a
+moment while tailcat tears down its engine: it is going away, not turning
+the upgrade off, so it says nothing too. The first version cleared the
+tunnel before closing it and sent the withdrawal in that window, which
+turned every seal and restart into "withdrew its tunnel" on its peers.
+
+The record is rewritten **on change only**, by AQ's rule — an offer rides
+every beat, and a store write per heartbeat is the cost §7 rejects for
+presence — with `tunnel_updated_at` beside it. The offer is stored on
+`PendingPairing` as well as `TrustRecord`, because convergence happens
+before there is a record, and moves onto the record when the pairing
+completes. **Stale offers age out**: one that no beat has re-confirmed for
+`peer.DefaultTunnelStale` (fourteen days), or one that the peer's direct
+contacts have kept contradicting by carrying no offer at all for longer
+than ten minutes (a peer reinstalled from a build older than the offer),
+stops being raised until the next offer arrives. Kept contradicting,
+because a peer whose server is starting sends nothing for a moment as
+well; the first version counted a single absent beat, and so aged every
+peer's offer out on every unseal, every DERP-map retry and every re-save
+of the setting.
+The confirmation is kept in memory, like presence, and falls back on
+`tunnel_updated_at` after a restart. **The exception is a peer with no
+direct address**: its tunnel is the only carrier the next offer could
+arrive on, so ageing its offer out would strand the pair for good with
+nothing gained — §8 first said every stale offer stops, and that was
+corrected before it was built.
+
+*The allowlist.* The long-lived server admits the client keys of the trust
+records and of the pending pairings, and nothing else; the set is rebuilt
+from both every time a server starts, which is every unseal. It is built
+against tailcat's `AllowClient` hook (on `main` at `52fbad3`, not yet in a
+tagged release) with a concurrency-safe `KeySet`, so admitting a key and
+revoking one cost nothing: a peer's rotated key replaces the old one, a
+withdrawal removes it, and a revoked peer, a declined pairing and a
+withdrawn one are removed and their client dropped with
+`DisconnectClient` — which stalls the client's connections rather than
+resetting them, so they time out. Revocation does not depend on it: the
+trust record is gone, so the next handshake fails the gate whatever the
+allowlist says. Keys arrive only over pinned TLS or inside a completed PIN
+exchange, read only after the proof verified (decision AV), so "admitted
+only over an authenticated channel" holds; both sides admit on spend,
+because in a desktop pair either side may settle and either may dial. On
+tailcat v0.7.0 the allowlist was add-only and revocation meant restarting
+the server, dropping every other peer's tunnel once; that restart design is
+not built, and pinning `main` is why.
+
+*The tunnel listener has its own gate* (`transport.Server.ServeTunnel`,
+`peer.tunnelGate`). The tailcat server's listener on the peer port is
+served by the same handler behind a narrower door. It admits an identity
+with a trust record, or with a pending pairing written down here, and only
+when the tailcat client key the connection came from (`Server.PeerKey`) is
+the one that identity offered — so a leaked client key reaches nothing an
+unpaired identity could use, and a paired identity comes in through its own
+tunnel only. It **never** admits an identity because a pairing window is
+open: that admission belongs to the bound listener and, later, the pairing
+server, and a door reachable from every DERP region that let strangers in
+while a PIN was on screen would be a guessing surface open to the world. A
+second check per request refuses the pairing RPCs to everybody, and
+everything but `SettlePairing` to an identity that is only pending;
+`SettlePairing` checks for itself that the session is the caller's own.
+And `RemoteAddr` is the path rather than the in-netstack address that looks
+like a tailnet one — "tunnel, direct" or "tunnel, relayed via DERP
+<region>" — because every prompt and pairing card shows it.
+
+*The region is part of the pair's contract.* A tailcat address embeds the
+listening side's whole DERP region, and a client reaches a server only
+through it. For a pair with a direct path a changed address costs nothing —
+it goes out on the next beat over the direct fallback — but for the pair
+the upgrade exists for, a café laptop and a home desktop with no tailnet,
+the tunnel is the only carrier and a changed address has no way to arrive.
+So the region is **persisted and never re-picked implicitly**: the first
+start fetches the DERP map, picks the nearest region by latency and stores
+it before the server starts, and every later start sets `Server.Region`
+and fetches no map at all — re-picking on each start, the library default,
+would strand every off-LAN pair on every unseal. The server is started in
+the background, never in `Serve`'s path: a first pick can take half a
+minute against a DERP map that does not answer, and the links and the peer
+listener — which decision AJ's budget is spent waiting on — must not wait
+for a feature whose lateness costs nothing but itself. Nothing is offered
+until it is up, so the order "server, then offer" holds either way. A
+node that has closed its tunnel takes no new one, so a toggle racing a
+seal cannot start a server, holding the store's tunnel keys and a DERP
+presence, that nothing would close. The default fleet is
+Tailscale's public one, through tailcat's map at
+`https://tailcat.dev/derpmap.json`: free, throttled, logging metadata, and
+the default anyway, because a tunnel that stays off until somebody runs a
+`derper` is one almost nobody turns on, and a relay of our own as the
+default is author-hosted infrastructure on the path, which §1 objects to
+most. `ladulas tunnel derp-map <url>` points the next pick at a self-hosted
+map; `--repick` forgets the region deliberately, and says that it strands
+every pair whose only path is the tunnel. The grace period that would keep
+the old region serving beside the new one until every peer has the new
+address is not built; until it is, a re-pick is a deliberate break. A
+peer-supplied region is something this instance would connect to, and is
+held to §11's rule before it is written down.
+
+*Where the code is.* `pkg/peer` declares a `Tunnel` interface in strings,
+byte slices and integers, and `pkg/transport` the listener, connection and
+gate it serves through, because `gomobile` binds nothing else (§21) and a
+phone build must not link tailcat. `internal/tunnel` is the only package
+that imports it; `internal/app` builds a tunnel through a factory a binary
+hands in (`app.Config.Tunnels`), and `cmd/ladulasd` and `cmd/ladulas` (for
+`ladulas agent`) are what hand it in, so nothing shared links tailcat
+either: `go list -deps ./pkg/...` names no `tailscale.com` package. A build
+with the `notailcat` tag has no tunnel and sends the withdrawal form. The
+module's `go` line is 1.27.1, which tailcat requires; `go mod tidy` ignores
+build tags, so this moves every `pkg/` consumer to 1.27.1 too. A nested
+module for the binaries would have kept the root at 1.26.5, and was not
+taken: a two-module repository for one release's toolchain gap is more
+cost than the gap.
 
 **A link is not up until the peer has said something.** The presence stream
 is what tells this instance whether there is anybody to ask before it has
@@ -2290,12 +2586,15 @@ live. Four states:
   `Restart=on-failure`, one that spins until somebody notices.
 * **Sealed** — the DEK is dropped, and the private material the store held is
   zeroed on the way down as far as it can be reached (`Vault.Wipe`, M5): the
-  PEM-armoured keys, the identity key, and any portable keys queued or waiting
-  to be accepted. The keys programs parked in the agent go with it
+  PEM-armoured keys, the identity key, any portable keys queued or waiting
+  to be accepted, and the tunnel's node and pre-shared keys (decision AX).
+  The keys programs parked in the agent go with it
   (decision AU): seal means the machine holds nothing usable, and a
   parked key surviving it would make that false. What zeroing cannot reach is stated where it is done — age
-  keeps the DEK's scalar in an unexported field, and a parsed signer holds its
-  own copy — so "the DEK is not in memory" is true of the recognisable copies
+  keeps the DEK's scalar in an unexported field, a parsed signer holds its
+  own copy, and tailcat copies the tunnel's `key.NodePrivate` into magicsock
+  and wireguard-go, out of `Vault.Wipe`'s reach (the server is closed before
+  the wipe, and its copies go to the collector with it) — so "the DEK is not in memory" is true of the recognisable copies
   and left to the collector for the rest, rather than an absolute. The boot
   state, unless the keychain is enrolled. Almost nothing works: the control
   socket serves
@@ -2355,8 +2654,9 @@ attacks on a stolen suspended laptop, at the cost of a passphrase on
 every wake and no remote signing while asleep-then-locked. What the
 inhibitor buys is only as good as what the seal removes, which is why the
 seal zeroes the recognisable key material rather than only dropping its
-references (M5); the residue it cannot reach is age's own scalar and the
-parsed signers, left to the collector. Unlocking from
+references (M5); the residue it cannot reach is age's own scalar, the
+parsed signers and tailcat's copies of the tunnel node keys (decision AX),
+left to the collector. Unlocking from
 soft lock re-prompts for the passphrase (keychain-enrolled instances
 re-unlock via the keychain — there the lock is a deliberateness gate, not
 a cryptographic one). All transitions are audited, which is why the log
@@ -2651,13 +2951,23 @@ string is worth choosing per signature.
 
 **Handing one over is a transfer, and the design treats it as the most
 dangerous thing in the system.** The private half travels inside the
-existing pinned-TLS peer channel, which is direct, has no relay in it and
-has both ends authenticated by their identity keys — the same channel
+existing pinned-TLS peer channel, which has both ends authenticated by
+their identity keys and no store-and-forward hop in it — the same channel
 that already carries a signature about to be made. Sealing it a second
 time to the recipient's identity key was considered and rejected as
 defence against nothing that exists in the topology; if store-and-forward
-ever appears, that is when the envelope earns itself. Four rules around
-it, each answering a way this could go wrong quietly:
+ever appears, that is when the envelope earns itself.
+
+(The premise is restated, 2026-10-14. It said the channel "is direct, has
+no relay in it", and with the tunnel upgrade (decision AX) an upgraded pair
+may be carried by a DERP relay. The conclusion stands, because what DERP
+relays is WireGuard packets carrying the pinned TLS: it sees ciphertext it
+cannot open, holds nothing past delivery, and is a packet relay rather
+than store-and-forward. A relay that kept messages for a recipient that is
+not there — the thing the envelope would earn itself against — is still
+nothing that exists. §16's "A portable key in transit" rests on the same
+sentence.) Four rules around it, each answering a way this could go wrong
+quietly:
 
 * **The sender re-enters the store passphrase**, immediately before the
   send. The store is already open, so this unlocks nothing — it is a
@@ -2977,6 +3287,42 @@ Wake-up options, all opt-in:
   into a way to reach its network. The test is a suffix or an address
   range and never a name that has to be resolved, so there is no window
   between deciding and dialling.
+
+  **The same hazard arrives with the tunnel (decision AX), and the same
+  rule answers it** (`checkRelayRegion`, beside `checkRelayURL` in
+  `pkg/peer/wakeup.go`). A tailcat address embeds the whole DERP region
+  its server uses — relay host names and addresses — and a client raised
+  against it opens DERP (HTTPS or WebSocket) and STUN connections to
+  whatever is embedded. Decision AQ's reassurance that the worst an
+  advertised address can do is draw "connection attempts somewhere that
+  will not authenticate as it" does not cover that, because a DERP
+  connection is not a pinned-TLS dial. An address carries a list of
+  regions and a client connects to every one, so **every embedded region
+  is held to the rule**, not the first. A region is accepted only if every
+  relay it names is a relay of one region in this instance's own DERP
+  map — the same host name, DERP port, STUN port and certificate name,
+  agreeing on any address it gives — which is how a private `derper` on a
+  LAN that this instance's own map names stays usable; or if it passes the
+  relay URL's https terms made strict enough that nothing is left to a
+  lookup: DERP over TLS on the default port, never the plain-HTTP test
+  mode, no certificate name other than the host's, STUN on the default
+  port or off, every address given as a literal (or `none` for a family,
+  with at least one literal), because an empty address field is a DNS
+  lookup at connect time and a name that resolves inside this network
+  tomorrow passes any check on the name today; and no relay at a private,
+  loopback, link-local, tailnet or unspecified address, no host name that
+  is not fully qualified, and no `localhost` in any spelling. The first
+  version read the host and the two addresses only, matched our own
+  regions on the host alone, and looked at the first embedded region: a
+  host name resolving inside the network, any port on a public address,
+  and a second region pointing anywhere all passed, which is the hazard
+  this rule is for. An offer whose region fails is kept without its
+  server address, so the client key still reaches the allowlist and
+  nothing here ever connects to the region. §8 first said the match was
+  "by id and hostnames"; the id is not in the address — tailcat zeroes the
+  region id, code and name to keep addresses short, and the parser makes
+  an id up from the region's position — so the match is on the host
+  names, which are what a client connects to.
 * **UnifiedPush / ntfy** (Android): fully self-hostable wake-ups with no
   Google dependency and no publisher infrastructure — the app registers
   with any UnifiedPush distributor and hands the requester an endpoint URL
@@ -4289,6 +4635,38 @@ Threat model sketch (to be expanded in its own document):
   stranger in a joiner's list under the right name, but cannot point the
   joining daemon off the link: a discovered address is dialled only if it
   is link-local or private and on the interface it was heard on.
+
+  **With the tunnel upgrade on (decision AX) the unauthenticated surface
+  grows, and it is stated rather than defended.** The long-lived tailcat
+  server is reachable through its DERP region by anybody holding its
+  address, and what it exposes before the TLS handshake is tailcat's own
+  surface — DERP, disco, the WireGuard handshake against the pre-shared
+  key, the `MEOW` that asks to be admitted — and, for an admitted client
+  key, gVisor's TCP stack. The allowlist and the pre-shared key are
+  defence in depth on top of an experimental stack whose security policy
+  says its threat model "hasn't historically included malicious
+  adversaries", and whose hall of thanks includes a remotely triggerable
+  panic — in the process that also signs. If they fail, what is exposed is
+  the TLS listener and its gate, exactly as with a public bind, which is
+  why turning the upgrade on is described as a public exposure. Behind
+  the handshake the tunnel listener's gate is narrower than the bound
+  listener's: a paired or pending identity with the client key it
+  offered, never anybody because a PIN is up, no pairing RPCs at all, and
+  `SettlePairing` only for a pending identity (§8).
+* **DERP operator** (when the tunnel upgrade is on): sees both node
+  public keys in every `MEOW`, both sides' addresses, and the time of
+  every tunnel set-up, which is the pairing graph of upgraded pairs and
+  the timing of their approvals — including desktop-to-desktop pairs that
+  without the upgrade touch nothing but each other. When hole-punching
+  fails it carries the traffic too, as WireGuard ciphertext around pinned
+  TLS it cannot open. It can deny (drop, throttle — the public fleet's
+  terms reserve withdrawing it "at any time, for any reason"), which costs
+  an upgraded pair its tunnel and leaves its direct path; a pair with no
+  direct path loses contact until it shares a network or pairs again. It
+  cannot forge, and a region it serves cannot make this instance connect
+  anywhere the region rule refuses (§11). Opt-in per instance, and like
+  push relay compromise below, priced in rather than defended; a
+  self-hosted DERP map moves the operator to whoever runs it.
 * **Compromised Tailscale control plane** (when Tailscale is used): outer
   layer only; app-level TOFU identities survive (§7). Tailnet Lock
   optional hardening.
@@ -4304,7 +4682,9 @@ Threat model sketch (to be expanded in its own document):
   portable key as that key having leaked, and rotate it.
 * **A portable key in transit**: the transfer is inside the pinned-TLS
   peer channel between two paired identities, so the wire is the same one
-  the approval protocol already trusts. What the design defends beyond
+  the approval protocol already trusts — and that holds through the
+  tunnel, where a DERP relay may carry the packets: it relays ciphertext
+  and stores nothing (decision S's premise, restated 2026-10-14, §10). What the design defends beyond
   that is misdirection and inattention rather than interception — the
   passphrase on the sending side, the explicit acceptance on the receiving
   one, an audit entry at both ends. What it cannot defend is the decision
@@ -4559,6 +4939,7 @@ Added 2026-10-14:
 |---|----------|------------|
 | AV | What the code a person types is, and what proves it | **a six-digit PIN, proved with CPace and never with an HMAC.** CPace per draft-irtf-cfrg-cpace-21 (CPACE-RISTR255-SHA512, the draft's §10.4 key confirmation), written in `internal/cpace` on `gtank/ristretto255` and tested on the draft's vectors, run inside the pinned TLS channel by two new RPCs, `PairStart` and `PairFinish`. The listener is the initiator and the joiner the responder, so the joiner commits its tag before it receives anything key-derived and the listener verifies it before answering; both identity keys go into CI, joiner first; the associated data carries `ladulas-pairing-v2` and a direction; the listener mints the session id; both rounds must come from one TLS identity; what the joiner says about itself is read only after its tag verifies. An attempt is charged when round one is accepted and refunded only on a verified confirmation, so an unfinished round counts; one counter of five per window covers the PIN and the older proof, and in-flight exchanges are capped by what is left. The displaying side shows each failed attempt with its source, and offers a new PIN when they are spent. For one release the window also holds an independent ten-character secret for older joiners, the full code stays at version 1 with the PIN as a new field, and a joiner holding a PIN never calls the older `Pair` — an unimplemented `PairStart` is a hard failure that names a possible impostor. A spent window answers late joiners "another machine used this code" until it would have expired. Supersedes decision M's *mechanism* — the ten characters, the HMAC proof and the fifty-bit bound — and leaves M's two halves exactly as they were. Rejected: keeping the ten characters and the HMAC (a code, not a PIN, and the PIN is the point); SPAKE2 (needs nothing-up-my-sleeve constants, and the Go implementation is unmaintained); vendoring `the-sarge/cpace` (unreviewed, and a newer Go than the module's); and above all an HMAC keyed with the PIN on any path, including a fallback for older listeners, because twenty bits of HMAC is an offline search of milliseconds. Rationale in §7 |
 | AW | How a joining machine finds the one showing a PIN | **it picks it from a DNS-SD list while both screens are open, and dials the one address the list checked for it.** `_ladulas-pair._tcp` through `github.com/brutella/dnssd` v1.2.14, carried patched as `internal/dnssd` so that its responder answers and its browser asks on the chosen interfaces only (upstream answers queries on every interface whatever `Config.Ifaces` says, which put the name, port and tag in reach of anything on `docker0` while a PIN was up), in `internal/discovery` and reached from `pkg/peer` only through `PairingAnnouncer`. Announced only while a pairing window's PIN is on screen, withdrawn with goodbyes when it is spent, abandoned, replaced or answered and when the node closes; on the interfaces with a bound peer address (every eligible one on an explicit wildcard), minus container and VM interfaces, the tailnet and loopback; instance name as the DNS-SD name, a neutral `ladulas-<random>` host per window, the bound link-local and private addresses, TXT `v=2` and a random session tag that de-duplicates the list and is never a PAKE input. Browsed only while a `BrowsePairings` stream is open — the desktop screen holds one through a lease its polls renew, `ladulas pair --join` for as long as it is listing — and forgotten when nobody is; sealing closes it. The PIN is shown once the probe has settled the name, up to three seconds, and announce and withdraw are serialised per node so a stale withdraw cannot take down a newer window's announcement. A result is listed only if it was heard on an eligible interface (the browse is confined to those, and each answer is checked again on `IfaceName`) and has an address that is link-local or private and inside that interface's subnet; one row per window, every row sharing a name with another flagged as a duplicate and never chosen between. A join names the entry; the daemon resolves it to its one address when the join starts and makes one PIN exchange there, over direct TCP. Phones neither browse nor announce: they pair by the QR, whose identity key a list cannot carry. Supersedes the resolved "mDNS/Bonjour discovery lands with the mobile milestone" and §8's plan for the phone to find `desktop.local`. Rejected: Syncthing-style custom announcements (a port of our own, invisible to standard tools); `grandcat/zeroconf` and its fork (answer on any interface, goodbyes that evict Avahi's host records); `hashicorp/mdns` (no goodbye, no probing, no live browse); Avahi over D-Bus (needs the system bus, announces into `docker0` and `tailscale0`); announcing for as long as the daemon runs, which tells the whole LAN about the box all day for the minute a pairing needs; and listing every address an entry carries, which turns one press into a PIN sprayed at as many addresses as an attacker cares to put in a record. Rationale in §7 |
+| AX | Whether two paired instances may reach each other through a NAT traversal layer, and on what terms | **yes, as an upgrade both sides opt into, with the same pinned TLS inside it and the direct path kept as the fallback; this step builds the listening half.** The tunnel is [tailcat](https://github.com/tailscale/tailcat) pinned at `main` `52fbad3` (2026-10-07) for its `AllowClient` hook, `KeySet`, `DisconnectClient` and `Server.PeerKey`, which raises the module's `go` line to 1.27.1. **The tunnel never authenticates anybody**: every connection through it is decision A1's TLS 1.3 handshake pinned to the identity key, the tailcat keys (a server node key, a client node key and a pre-shared key per instance, generated once into the encrypted store) decide only who reaches that handshake, and `pkg/transport` asserts X25519MLKEM768 so that the post-quantum claim rests on the TLS rather than on tailcat's pre-shared key. **Opt-in per instance and described as a public exposure** in decision H's sense: `ladulas tunnel on`, `SetTunnel`, or the desktop's switch, each with the daemon's two sentences beside it — what it exposes, and what the DERP operator learns. **Capability rides AQ's carriers** as `TunnelOffer` (versions of ours, server address, client key): `WatchRequest`, every `PresenceEvent`, `FetchPendingResponse`, pairing's `PairRequest`/`PairResponse` and `PairFinishRequest`/`PairFinishResponse`, and `FetchPendingRequest` for a phone that has no other way back. Absent changes nothing, empty versions withdraws (and a build without tailcat or with the upgrade off sends that form on every carrier), a withdrawal from a peer that never offered is not written, the record is written on change only, the offer is kept on the pending pairing too, and an offer no beat has confirmed for fourteen days or that direct contacts without one have contradicted for ten minutes stops being raised — **except for a peer with no direct address**, whose tunnel is the only carrier of the next offer. **The allowlist** is the client keys of the trust records and pending pairings, rebuilt at every server start, changed for free (`KeySet`), with revoke, decline and withdraw removing the key and dropping the client. **The tunnel listener has its own gate**: a paired or pending identity arriving with the client key it offered, never anybody because a pairing window is open, no pairing RPCs, `SettlePairing` only for a pending identity, and `RemoteAddr` shown as the path. **The region is a contract**: picked once from the DERP map, persisted, and never re-picked implicitly; Tailscale's public fleet through tailcat's map is the default, a self-hosted map is a setting, and a re-pick is deliberate (`--repick`) and strands tunnel-only pairs until the two-server grace exists. A peer-supplied region — every one an address embeds — is held to the relay URL's rule (§11), by host name, ports and certificate name because the address does not carry the id, with literal addresses required for a region not our own. **Lifecycle is the inner half's**: unseal starts the server in the background and nothing is offered until it is up, seal closes clients then the server, a closing or closed node offers nothing rather than the withdrawal and takes no new tunnel, and the tunnel keys join the copies zeroing cannot reach. **tailcat stays out of `pkg/`**: `pkg/peer.Tunnel` and `pkg/transport`'s tunnel interfaces are strings and bytes, `internal/tunnel` is the only importer, the binaries hand a factory to `internal/app`, and `notailcat` builds without it. **Dialable** is written to count a usable tunnel server address and switched off until links can dial over the tunnel (§3): counting it on the offer alone moved collectors off their inboxes onto links that could not connect. Retires §1's NAT-traversal non-goal (history kept there) and restates decision S's premise (§10); §1's no-mandatory-infrastructure goal survives because LAN pairing needs no relay and an upgraded pair falls back to direct. Not in this step: raising clients and dialling over the tunnel, the path order and hysteresis, the pairing server, phones. Rejected: tailcat as the only transport (a relay mandatory on every connection, the allowlist forced off, a flag day); trusting the node key as the identity (loses the hardware phone identity and the fingerprint confirmation); building against v0.7.0's add-only allowlist (revocation would restart the server and drop every other tunnel); a nested module to keep the root on 1.26.5 (two modules for one toolchain gap); a relay of our own as the default (author-hosted infrastructure on the path, §1). Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

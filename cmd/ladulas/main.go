@@ -25,10 +25,16 @@ import (
 	"github.com/hugowetterberg/ladulas/internal/command"
 	"github.com/hugowetterberg/ladulas/internal/gui"
 	"github.com/hugowetterberg/ladulas/internal/localapi"
+	"github.com/hugowetterberg/ladulas/internal/tunnel"
 	"github.com/hugowetterberg/ladulas/internal/version"
 )
 
 func main() {
+	// `ladulas agent` runs an instance too, so this binary carries the tunnel
+	// upgrade as ladulasd does (decision AX). `ladulas gui` is a client and
+	// never builds one.
+	command.Tunnels = tunnel.Factory()
+
 	cmd := &cli.Command{
 		Name:    "ladulas",
 		Usage:   "SSH agent and signing approvals",

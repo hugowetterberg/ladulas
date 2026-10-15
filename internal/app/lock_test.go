@@ -33,6 +33,13 @@ type instance struct {
 func start(t *testing.T) *instance {
 	t.Helper()
 
+	return startWith(t, nil)
+}
+
+// startWith is start with a chance to change the configuration first.
+func startWith(t *testing.T, configure func(*app.Config)) *instance {
+	t.Helper()
+
 	// A socket path has to fit in sun_path, and a test temporary directory does
 	// not always leave room.
 	runtime, err := os.MkdirTemp("", "ldl")
@@ -57,6 +64,10 @@ func start(t *testing.T) *instance {
 		Passphrase: func(string, bool) ([]byte, error) {
 			return []byte(testPassphrase), nil
 		},
+	}
+
+	if configure != nil {
+		configure(&cfg)
 	}
 
 	created, err := app.Create(cfg)

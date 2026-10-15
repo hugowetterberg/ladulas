@@ -315,6 +315,10 @@ func (s *peerService) FetchPending(
 		return nil, err
 	}
 
+	// The collector's tunnel offer, which it has no other way to deliver
+	// (decision AX).
+	s.node.learnTunnel(peer.Fingerprint, req.Msg.GetTunnel())
+
 	waiting := s.node.collect(ctx, peer.Fingerprint, req.Msg.GetWait().AsDuration())
 
 	return connect.NewResponse(&ladulasv1.FetchPendingResponse{
@@ -327,6 +331,7 @@ func (s *peerService) FetchPending(
 		// A collector has no link to hear this on, and the poll is the one
 		// call it reliably makes (decision AQ).
 		ListenAddresses: s.node.Advertised(),
+		Tunnel:          s.node.offer(),
 	}), nil
 }
 

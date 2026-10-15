@@ -201,6 +201,18 @@ message TrustRecord {
   // session this instance has no memory of, which is the answer that tells the
   // other side to give up.
   string pairing_session_id = 12;
+  // What the peer last offered about the tunnel upgrade (decision AX): its
+  // tailcat server address, its client key, the versions it speaks. Absent
+  // when it never said; present with no versions when it withdrew, which is
+  // kept rather than cleared so that "withdrew its tunnel" and "never offered
+  // one" stay two different things to say about a peer.
+  //
+  // Written on change only, by AQ's rule for addresses: an offer rides every
+  // beat, and a store write per heartbeat is the cost §7 rejects for presence.
+  ladulas.v1.TunnelOffer tunnel = 13;
+  // When the offer above last changed. It is the floor of the offer's age
+  // after a restart, when the beats that re-confirmed it are not remembered.
+  google.protobuf.Timestamp tunnel_updated_at = 14;
 }
 
 // PendingPairing is a pairing whose code has been proven and whose two humans
@@ -255,6 +267,12 @@ message PendingPairing {
   // displayed it, so the confirmation can say so after a restart as well as
   // before one (decision AV).
   repeated ladulas.v1.PairingAttempt failed_attempts = 18;
+  // The peer's tunnel offer as the exchange carried it (decision AX). Stored
+  // here as well as on the trust record because convergence happens before
+  // there is a record, and a pending peer's client key is what admits it to
+  // this instance's long-lived tunnel server — for SettlePairing on its own
+  // session, and nothing else.
+  ladulas.v1.TunnelOffer tunnel = 19;
 
   // 8 and 9 were what the peer said it would grant us, shown on the prompt and
   // believed by nobody. There is nothing left for the peer to say (decision
@@ -358,6 +376,38 @@ message PeerListenSettings {
   google.protobuf.Timestamp updated_at = 3;
 }
 
+// TunnelSettings is this instance's half of the tunnel upgrade (decision AX).
+//
+// The keys are transport credentials and not identity: they decide who can
+// reach the pinned TLS handshake, never who is on the far end of it (§8). They
+// are in the store anyway, beside the identity key, because a stolen client
+// key reaches the handshake of every peer that admits it, and because a server
+// key and pre-shared key that changed would change the address every peer
+// holds.
+message TunnelSettings {
+  // Whether the upgrade is on. Off unless somebody turned it on: turning it on
+  // makes the peer listener reachable from anywhere through DERP and
+  // hole-punching for every key the allowlist admits, which is a public
+  // exposure in decision H's sense.
+  bool enabled = 1;
+  // A self-hosted DERP map to pick the region from, instead of the default
+  // fleet's. Empty means the default (tailcat's, which is Tailscale's).
+  string derp_map_url = 2;
+  // The long-lived server's node private key and WireGuard pre-shared key, and
+  // the client's node private key, as raw 32-byte keys. Generated once, the
+  // first time the upgrade is turned on, and kept when it is turned off, so
+  // that turning it back on offers the same address.
+  bytes server_key = 3;
+  bytes preshared_key = 4;
+  bytes client_key = 5;
+  // The DERP region the server was started in, as the JSON of the region
+  // tailcfg describes. Persisted so that it is never re-picked implicitly: a
+  // tailcat address embeds its region, and a pair whose only carrier is the
+  // tunnel has no way to hear about a new one (§8).
+  bytes region = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
 // StoreDocument is the whole decrypted store.
 message StoreDocument {
   int32 version = 1;
@@ -449,6 +499,9 @@ message StoreDocument {
   // for naming nothing would let the endorsement land afterwards and be
   // honoured.
   repeated HeldRetraction retractions = 20;
+  // The tunnel upgrade's setting and keys (decision AX). Absent means nobody
+  // has turned it on.
+  TunnelSettings tunnel = 22;
 }
 
 // HeldEndorsement is an endorsement this instance keeps, and its ledger

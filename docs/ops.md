@@ -116,6 +116,7 @@ JSON file it rewrites, and two of them would each hold half the devices.
 | Secret Service keyring | Only if `ladulas keyring enrol` was run | Falls back to the passphrase, which is the default posture anyway ([decision I](architecture.md#10-keys-and-key-storage)) |
 | A reachable paired peer | Approving on a keyless or headless box | Requests reach nobody and time out; `source="no_approver"` |
 | The tailnet (or any IP path) | Peer links, and reaching the relay | Peers go offline; the phone can neither collect nor be woken. Nothing is lost — requests wait as long as the requester does |
+| A DERP region (tunnel upgrade only) | The tunnel's server coming up, and any tunnel set-up | The tunnel stays down and every peer keeps its direct path. The region is persisted, so a region that is gone stays gone until a deliberate `ladulas tunnel derp-map … --repick` ([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)) |
 | The relay + APNs | Waking a phone that is not already polling | Approvals degrade to poll-on-open. **ssh authentication does not degrade** — it needs the wake-up, so a phone-held key stops being advertised |
 | `git` on PATH | `ladulas-sign` collecting commit context | The signer still signs; the prompt loses the diff and the branch |
 
@@ -131,6 +132,7 @@ calls a normal state.
 | Control socket | `$XDG_RUNTIME_DIR/ladulas/control.sock` | `SigningService` (`ladulas-sign`) and `ControlService` (the CLI). Same gate |
 | Peer channel | TCP 7373, on the tailnet **and** the local network, whichever the machine has; loopback only when it has neither | Pinned-TLS connect RPCs from paired instances. `ladulas listen` says what was chosen and what was passed over; public binds need `--peer-listen-public` |
 | Pairing discovery | UDP 5353 multicast (mDNS), shared with Avahi | `_ladulas-pair._tcp`, announced only while a PIN is on screen and browsed only while a joining screen or `ladulas pair --join` is listing ([decision AW](architecture.md#7-identity-pairing-and-trust)). Nothing is sent or listened for at any other time; a firewall that drops it costs the list, never the pairing |
+| Tunnel (opt-in) | **off**; when on, a UDP socket on a random port, plus outbound HTTPS/WebSocket to the DERP region | The long-lived tailcat server ([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)). Nothing new listens on TCP: inside the tunnel the peer handler is served on 7373 behind its own gate, reachable from anywhere the DERP region is, for client keys paired machines offered. The first start ever also fetches `https://tailcat.dev/derpmap.json` (or the configured map) to pick the region; no later start does |
 | Daemon debug | **off** | Prometheus metrics and pprof, when `LADULAS_DEBUG_ADDR` names an address |
 | Relay API | TCP 8443 (guppy's tailnet address) | `RelayService`, cleartext HTTP/2 by design — WireGuard is the transport security |
 | Relay debug | `127.0.0.1:8444` | Prometheus metrics and pprof |
@@ -216,7 +218,7 @@ rotation that works while the phone is in a drawer.
 
 | Store | Path | Authoritative for |
 |---|---|---|
-| The encrypted store | `~/.local/share/ladulas/store.age` | Keys, identity key, trust records, pending pairings, grants, wake-up routes, borrowed-key cache |
+| The encrypted store | `~/.local/share/ladulas/store.age` | Keys, identity key, trust records, pending pairings, grants, wake-up routes, borrowed-key cache, and the tunnel setting, keys, persisted DERP region and each peer's tunnel offer |
 | The audit log | `~/.local/share/ladulas/audit.jsonl` | Every request, decision, signature and transfer. Outlives the store's key deliberately |
 | The policy | `~/.config/ladulas/policy.json` | Auto-approve, deny and prompt rules. Re-read on SIGHUP and on `Reload` |
 | Project pages | `~/.local/share/ladulas/projects/` | What this instance has read of peers' projects. Sealed with the same key; a cache, discardable |
@@ -601,6 +603,64 @@ pairings list` is where one is found; `approve`, `reject` or `withdraw`
 ends it. A sealed instance can neither list nor answer one, because pending
 pairings live in the store — that is a stated cost, not a bug.
 
+### The tunnel is on and its server never comes up
+
+**Signal:** `ladulas tunnel` says `Server not up: …`, and
+`ladulas_tunnel_server{state="starting"}` stays at 1;
+`ladulas_tunnel_events_total{event="server_failed"}` climbs on the links'
+backoff.
+**Action:** read the sentence `ladulas tunnel` prints, which is the start's
+own error. Only the **first** start can fail for a network reason: it is the
+only one that fetches the DERP map and measures latency to pick a region,
+so a server that never comes up on a box that has never picked one is the
+map being unreachable (outbound HTTPS to `tailcat.dev`, or to the
+self-hosted map, blocked). Once a region is persisted, a start builds the
+engine and the network stack and hands them the region without contacting
+DERP at all — so it succeeds offline, and a failure there is local (a key
+the store holds that does not read, a listener that cannot be made). Nothing
+else degrades meanwhile — every peer keeps its direct path, and the tunnel
+starts by itself when the map is reachable again.
+
+### The tunnel says `up` and nobody can reach it
+
+**Signal:** `ladulas tunnel` says the server is up in its region and
+`ladulas_tunnel_server{state="up"}` is 1, yet nothing ever arrives through
+it.
+**Action:** this is what DERP being unreachable looks like once a region is
+persisted, and **nothing reports it yet**: `up` means the server was
+built, not that it holds a DERP connection, and neither the status line nor
+the gauge reads the server's home-DERP state. The usual causes are the
+region's relays being unreachable from here (outbound HTTPS blocked, or UDP
+blocked so that only the relay could work, which still needs HTTPS) and
+the persisted region no longer existing, which a fleet is entitled to do
+"at any time, for any reason". The daemon's debug log carries tailcat's own
+lines about its DERP connection. A region that is gone for good needs
+`ladulas tunnel derp-map default --repick` (or a self-hosted map), and that
+**strands every pair whose only way to reach this machine is the tunnel**:
+they need a shared network, or a re-pair, to hear the new address
+([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)).
+A signal for this — home DERP connected or not, from the server's own
+status — is not built.
+
+### A peer's tunnel says something other than "tunnel offered"
+
+**Signal:** the TUNNEL column of `ladulas peers`, or the peer sheet's
+Tunnel row.
+**Action:** the words are the whole diagnosis, and each has one cause.
+`tunnel off here` — this instance has the upgrade off, or its build has no
+tailcat. `peer offers no tunnel` — the peer's build has none, or it has
+never turned it on. `peer withdrew its tunnel` — it was on there and was
+turned off, or the peer was reinstalled from a build without tailcat.
+`version mismatch (ours …, theirs …)` — the two builds pin tailcats whose
+wire formats differ; update the older one, and until then the pair stays on
+its direct path, which is the point of the version. `peer offers a client
+key only` — a phone, or an offer whose DERP region failed the region rule
+(`ladulas_tunnel_events_total{event="region_refused"}`, and a warning in
+the log naming the reason). `tunnel offer stale` — no beat has confirmed
+it for fourteen days, or the peer's direct contacts have carried no offer at
+all for more than ten minutes; it clears on the next beat that carries one. Nothing dials over the tunnel
+yet, so none of these changes how a peer is reached today.
+
 ### The CLI says nothing is listening, but the daemon is running
 
 **Action:** compare the socket paths. `ladulas status` prints the ones it
@@ -839,6 +899,12 @@ build reattaches to the new daemon perfectly happily.
 5. **`ladulas_approval_decisions_total{source="hard_rule"}`.** Never
    routine: an unclassifiable payload, a forwarded-agent request, or a git
    context that does not match the commit it would sign.
+6. **`ladulas_tunnel_events_total{event="refused"}`**, on a machine with
+   the tunnel on. A connection reached the tunnel listener and was turned
+   away at its gate: an identity that is not paired, or a paired one
+   arriving with a client key it never offered. The second is either a
+   peer whose offer has not reached this machine yet, or somebody holding
+   a key they should not have.
 
 ## Common operations
 
@@ -864,6 +930,14 @@ build reattaches to the new daemon perfectly happily.
   set either, so on this machine the stored setting is what decides. And
   the peer channel is not how the CLI reaches the daemon: getting the
   addresses wrong cannot lock you out of `ladulas`, only out of peering.
+* **Turn the tunnel upgrade on or off.** `ladulas tunnel on`, `off`, or
+  the switch in the desktop's instance settings; `ladulas tunnel` shows
+  the state, the region and the two sentences about what it exposes. It
+  takes effect at once: on generates the keys the first time and starts the
+  server, off closes it and every peer is told to drop what it holds. It is
+  off unless somebody turned it on, because turning it on makes the peer
+  listener reachable from anywhere through DERP
+  ([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)).
 * **See what programs have parked in the agent.** `ladulas keys list
   --local` — each key with the session that put it there and when it
   goes, which is more than `ssh-add -l` has ever said. `ladulas keys
@@ -890,7 +964,15 @@ build reattaches to the new daemon perfectly happily.
   nothing it can search offline (decision AV). While a PIN is up the
   window is announced over mDNS on the LAN (decision AW), which tells the
   link when to try; a discovered address is dialled only if it is
-  link-local or private and on the interface it was heard on. The relay's is the signature check on every
+  link-local or private and on the interface it was heard on. With the
+  tunnel upgrade on, the same TLS listener is also reachable through the
+  DERP region by anybody holding this machine's tunnel address, behind
+  tailcat's own surface (DERP, the WireGuard handshake against the
+  pre-shared key, an allowlist of offered client keys) and a gate that
+  admits paired and pending identities with the client key they offered,
+  and never anybody for a pairing window (decision AX). That is a public
+  exposure in decision H's sense, on an experimental stack, and is opt-in
+  for that reason. The relay's is the signature check on every
   call, and a clock more than the allowed skew from its own is refused.
 * **Outbound credentials:** the APNs `.p8` reaches the relay through
   systemd `LoadCredential=` and is never in the unit's environment. The
@@ -915,6 +997,13 @@ build reattaches to the new daemon perfectly happily.
 * **No alerting exists.** The metrics are there and nothing scrapes them on
   a schedule; the watch list above is a description of what an operator
   should look at, not of something that pages anybody.
+* **Nothing dials over the tunnel yet.** The server, the offers, the
+  allowlist and the tunnel listener's gate are in place; raising clients,
+  the path order, the fallback and hysteresis are the next step, so today
+  every peer is reached on its direct addresses whatever its tunnel says.
+* **A DERP region cannot be moved gracefully.** A re-pick forgets the old
+  region at once; keeping it serving beside the new one until every peer
+  has the new address is designed and not built.
 * **Socket activation is designed and unbuilt** ([architecture
   §13](architecture.md#13-platform-notes)), so the agent socket exists from
   start-up rather than on first connection.

@@ -344,6 +344,32 @@ func (s *controlService) SetPeerListen(
 	}), nil
 }
 
+// Tunnel answers in every state, with what a sealed instance can say: whether
+// the build carries tailcat at all (decision AX).
+func (s *controlService) Tunnel(
+	_ context.Context, _ *connect.Request[ladulasv1.TunnelRequest],
+) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	return connect.NewResponse(&ladulasv1.TunnelResponse{
+		State: s.app.TunnelState(),
+	}), nil
+}
+
+// SetTunnel needs the store, which is where the setting and the keys go.
+func (s *controlService) SetTunnel(
+	_ context.Context, req *connect.Request[ladulasv1.SetTunnelRequest],
+) (*connect.Response[ladulasv1.TunnelResponse], error) {
+	if _, err := s.vault(); err != nil {
+		return nil, err
+	}
+
+	state, err := s.app.SetTunnel(req.Msg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	return connect.NewResponse(&ladulasv1.TunnelResponse{State: state}), nil
+}
+
 // The grants live in the store, so listing and revoking them are the daemon's
 // too. They were the last verbs still opening the store behind a running
 // instance, which on a box with no terminal meant they simply did not work.

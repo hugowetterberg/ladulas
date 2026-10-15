@@ -505,8 +505,13 @@ type Options struct {
 	// name or by project identifier. The screen sends the identifier, because
 	// two publications can share a name and one of them is the one whose row
 	// the button sat on.
-	Publishing       func() (PublishingView, error)
-	SetAutoPublish   func(ctx context.Context, enabled bool) error
+	Publishing     func() (PublishingView, error)
+	SetAutoPublish func(ctx context.Context, enabled bool) error
+	// Tunnel is the tunnel upgrade and SetTunnel its switch (decision AX).
+	// Both optional and offered together; a host without them draws no
+	// section. The switch answers with the state as it now stands.
+	Tunnel           func() (*ladulasv1.TunnelState, error)
+	SetTunnel        func(ctx context.Context, enabled bool) (*ladulasv1.TunnelState, error)
 	PublishProject   func(ctx context.Context, path, name string) (PublicationView, error)
 	UnpublishProject func(ctx context.Context, project string) error
 	// UnlockAtLogin is whether this instance unlocks from the platform keychain
@@ -1021,6 +1026,7 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/settings/listen", s.handleListen)
 	mux.HandleFunc("POST /api/v1/settings/listen", s.handleSetListen)
 	mux.HandleFunc("POST /api/v1/settings/auto-publish", s.handleSetAutoPublish)
+	mux.HandleFunc("POST /api/v1/settings/tunnel", s.handleSetTunnel)
 	mux.HandleFunc("POST /api/v1/publications", s.handlePublishProject)
 	mux.HandleFunc("POST /api/v1/publications/unpublish", s.handleUnpublishProject)
 	mux.HandleFunc("POST /api/v1/settings/unlock-at-login",
@@ -1289,6 +1295,13 @@ func (s *Session) handleInstance(w http.ResponseWriter, _ *http.Request) {
 	if s.opts.Publishing != nil {
 		if publishing, err := s.opts.Publishing(); err == nil {
 			view.Publishing = &publishing
+		}
+	}
+
+	if s.opts.Tunnel != nil {
+		if state, err := s.opts.Tunnel(); err == nil {
+			tunnel := tunnelView(state)
+			view.Tunnel = &tunnel
 		}
 	}
 
@@ -1561,6 +1574,46 @@ func (s *Session) handleSetAutoPublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writePublishing(w, PublishingView{AutoPublish: *body.Enabled})
+}
+
+// handleSetTunnel turns the tunnel upgrade on or off (decision AX). The field
+// is a pointer for the reason the signing budget's is: a missing one and a
+// deliberate off read alike in JSON, and an off that nobody meant is every
+// peer told to drop this machine's tunnel.
+func (s *Session) handleSetTunnel(w http.ResponseWriter, r *http.Request) {
+	if s.opts.SetTunnel == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot change the tunnel")
+
+		return
+	}
+
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+
+	if err := json.NewDecoder(
+		http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "the setting could not be read")
+
+		return
+	}
+
+	if body.Enabled == nil {
+		writeError(w, http.StatusBadRequest,
+			"the request does not say whether the tunnel is to be on")
+
+		return
+	}
+
+	state, err := s.opts.SetTunnel(r.Context(), *body.Enabled)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tunnelView(state))
 }
 
 // writePublishing answers a change to what is published with what a read now

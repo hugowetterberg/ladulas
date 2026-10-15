@@ -2,7 +2,9 @@ package peer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -197,6 +199,260 @@ func checkRelayURL(raw string) string {
 
 	return "this instance sends wake-ups to an https relay, " +
 		"or to one on the tailnet"
+}
+
+// The same hazard arrives a second way with the tunnel (decision AX). A
+// tailcat address embeds the whole DERP region its server uses — relay host
+// names and IP addresses — and a client raised against it opens DERP (HTTPS or
+// WebSocket) and STUN connections to whatever is embedded. So a paired peer's
+// tunnel offer is also a paired peer choosing addresses this daemon will
+// connect to, and decision AQ's reassurance that the worst an advertised
+// address can do is draw "connection attempts somewhere that will not
+// authenticate as it" does not cover it: a DERP connection is not a pinned TLS
+// dial.
+//
+// checkRelayRegion is the rule, beside checkRelayURL because it is the same
+// rule about the same thing. It is applied to every region an address embeds,
+// since a client connects to all of them. A region passes when it is one of
+// this instance's own: every relay it names is a relay of one region in the
+// local DERP map, by host name, with the same ports and certificate name and
+// the same addresses where it gives any. A region the local map does not name
+// passes only on checkRelayURL's terms for an https relay, made strict enough
+// that nothing about it is left to a lookup:
+//
+//   - DERP over TLS, never the plain-HTTP test mode, on the default DERP port,
+//     with the certificate expected to match the host name;
+//   - STUN on the default port or switched off — a peer choosing the STUN port
+//     is a peer choosing where this daemon sends UDP;
+//   - every address given as a literal, or "none" for a family, with at least
+//     one literal. An empty address field is a DNS lookup of the host name at
+//     connect time, and a name that resolves to 10.0.0.5 tomorrow passes any
+//     check made on the name today. A literal is checked here and connected to
+//     as checked;
+//   - no relay at a private, loopback, link-local, tailnet or unspecified
+//     address, whether given as the host or beside it, and no host name that
+//     is not a fully qualified name or that is localhost in any spelling.
+//
+// The region id is not part of the match, although §8 first said it would be:
+// a tailcat address does not carry it. ConnInfo.Addr zeroes the region id,
+// code and name to keep addresses short and ParseAddr makes up an id from the
+// region's position, so an id "from the address" would be one this instance
+// invented. Host names are what the address actually carries, and they are
+// what a client connects to.
+//
+// Ports, the certificate name and the requirement for literals were added
+// after review (2026-10-14). The first version read the host and the two
+// addresses only, matched our own regions on the host name alone, and looked
+// at the first region an address embedded: a peer could name a host that
+// resolves inside this network, any port on a public address, or a second
+// region pointing anywhere, and all three passed.
+
+// relayRegion is a DERP region as the region rule reads it. It is decoded from
+// the JSON Tunnel.RelayRegion and Tunnel.KnownRelays produce, because the
+// tailcat types it comes from are not linked here.
+type relayRegion struct {
+	ID    int         `json:"id,omitempty"`
+	Nodes []relayNode `json:"nodes"`
+}
+
+// relayNode is one relay in a region. IPv4 and IPv6 are what tailcfg puts
+// beside the host name: empty to resolve the name, "none" to not use that
+// family, or an address literal. DERPPort zero is 443; STUNPort zero is 3478
+// and -1 is no STUN. CertName empty is "the certificate matches the host".
+type relayNode struct {
+	Host     string `json:"host"`
+	IPv4     string `json:"ipv4,omitempty"`
+	IPv6     string `json:"ipv6,omitempty"`
+	DERPPort int    `json:"derp_port,omitempty"`
+	STUNPort int    `json:"stun_port,omitempty"`
+	CertName string `json:"cert_name,omitempty"`
+	Insecure bool   `json:"insecure,omitempty"`
+}
+
+// checkRelayRegionJSON is checkRelayRegion on the JSON a Tunnel hands over:
+// every region an address embeds, each of which has to pass.
+func checkRelayRegionJSON(regions, known string) string {
+	var embedded []relayRegion
+
+	if err := json.Unmarshal([]byte(regions), &embedded); err != nil {
+		return "that tunnel address names a DERP region this instance " +
+			"cannot read: " + err.Error()
+	}
+
+	var ours []relayRegion
+
+	if known != "" {
+		if err := json.Unmarshal([]byte(known), &ours); err != nil {
+			ours = nil
+		}
+	}
+
+	for _, region := range embedded {
+		if refused := checkRelayRegion(region, ours); refused != "" {
+			return refused
+		}
+	}
+
+	return ""
+}
+
+// checkRelayRegion decides whether this instance is willing to connect to one
+// DERP region a peer's tunnel address embeds, and returns the sentence to log
+// when it is not.
+func checkRelayRegion(region relayRegion, ours []relayRegion) string {
+	if len(region.Nodes) == 0 {
+		// An address that names a region by id only is resolved against this
+		// instance's own DERP map by the client, which is a map this instance
+		// chose; there is nothing peer-supplied to connect to.
+		return ""
+	}
+
+	for _, known := range ours {
+		if regionWithin(region, known) {
+			return ""
+		}
+	}
+
+	for _, node := range region.Nodes {
+		if refused := checkRelayNode(node); refused != "" {
+			return refused
+		}
+	}
+
+	return ""
+}
+
+// regionWithin reports whether every relay a region names is one of a known
+// region's: the same host name, ports, certificate name and test mode, and
+// agreeing on any address it gives. A relay that borrows one of our host names
+// with another port is not one of ours.
+func regionWithin(region, known relayRegion) bool {
+	for _, node := range region.Nodes {
+		found := false
+
+		for _, candidate := range known.Nodes {
+			if !strings.EqualFold(node.Host, candidate.Host) ||
+				node.DERPPort != candidate.DERPPort ||
+				node.STUNPort != candidate.STUNPort ||
+				node.CertName != candidate.CertName ||
+				node.Insecure != candidate.Insecure {
+				continue
+			}
+
+			if (node.IPv4 == "" || node.IPv4 == candidate.IPv4) &&
+				(node.IPv6 == "" || node.IPv6 == candidate.IPv6) {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
+// checkRelayNode is checkRelayURL's https rule for one relay this instance's
+// own map does not name.
+func checkRelayNode(node relayNode) string {
+	switch {
+	case node.Host == "":
+		return "that DERP region names a relay with no host"
+	case node.Insecure:
+		return "that DERP region names a relay without TLS"
+	case node.CertName != "":
+		return "that DERP region names a relay whose certificate is not its host's"
+	case node.DERPPort != 0 && node.DERPPort != 443:
+		return fmt.Sprintf("that DERP region names a relay on port %d", node.DERPPort)
+	case node.STUNPort != 0 && node.STUNPort != 3478 && node.STUNPort != -1:
+		return fmt.Sprintf("that DERP region names STUN on port %d", node.STUNPort)
+	}
+
+	host, hostErr := netip.ParseAddr(node.Host)
+	if hostErr != nil {
+		if refused := checkRelayHostName(node.Host); refused != "" {
+			return refused
+		}
+	} else if !publicRelayAddress(host) {
+		return "that DERP region names a relay at " + node.Host +
+			", which is not a public address"
+	}
+
+	literals := 0
+
+	for _, given := range []string{node.IPv4, node.IPv6} {
+		switch given {
+		case "none":
+			continue
+		case "":
+			// A host given as a literal is connected to as given; a host name
+			// with an empty address beside it is resolved at connect time.
+			if hostErr != nil {
+				return "that DERP region names a relay by host name alone, " +
+					"which would be looked up rather than checked"
+			}
+
+			continue
+		}
+
+		addr, err := netip.ParseAddr(given)
+		if err != nil {
+			return "that DERP region gives a relay address that is not one: " + given
+		}
+
+		if !publicRelayAddress(addr) {
+			return "that DERP region names a relay at " + given +
+				", which is not a public address"
+		}
+
+		literals++
+	}
+
+	if hostErr != nil && literals == 0 {
+		return "that DERP region names a relay with no address to connect to"
+	}
+
+	return ""
+}
+
+// checkRelayHostName refuses a relay host name that could only mean this
+// machine or this network: localhost in any spelling, and anything that is not
+// a fully qualified name, which a resolver completes with its own search
+// domains.
+func checkRelayHostName(host string) string {
+	name := strings.ToLower(strings.TrimSuffix(host, "."))
+
+	if name == "localhost" || strings.HasSuffix(name, ".localhost") {
+		return "that DERP region names a relay on this machine"
+	}
+
+	if !strings.Contains(name, ".") || strings.HasSuffix(name, ".local") ||
+		strings.HasSuffix(name, ".internal") || strings.HasSuffix(name, ".lan") ||
+		strings.HasSuffix(name, ".home.arpa") {
+		return "that DERP region names a relay at " + host +
+			", which is not a public name"
+	}
+
+	if isTailnet(name) {
+		return "that DERP region names a relay on the tailnet"
+	}
+
+	return ""
+}
+
+// publicRelayAddress reports whether an address is one a peer-supplied relay
+// may be at: not private, loopback, link-local, multicast, unspecified, or in
+// a tailnet's ranges.
+func publicRelayAddress(addr netip.Addr) bool {
+	addr = addr.Unmap()
+
+	return !addr.IsPrivate() && !addr.IsLoopback() &&
+		!addr.IsLinkLocalUnicast() && !addr.IsLinkLocalMulticast() &&
+		!addr.IsInterfaceLocalMulticast() && !addr.IsMulticast() &&
+		!addr.IsUnspecified() && !isTailnet(addr.String())
 }
 
 func isLoopback(host string) bool {

@@ -261,6 +261,14 @@ func (n *Node) completePending(
 	// withdrawal looks like.
 	record.PairingSessionId = pending.GetSessionId()
 
+	// And the tunnel offer the exchange carried, which is already admitted:
+	// the allowlist entry a pending peer had for SettlePairing is the one the
+	// paired peer keeps (decision AX).
+	if offer := pending.GetTunnel(); offer != nil {
+		record.Tunnel = offer
+		record.TunnelUpdatedAt = timestamppb.Now()
+	}
+
 	if err := n.trust.PutPeer(record); err != nil {
 		return nil, fmt.Errorf("store the trust record: %w", err)
 	}
@@ -296,6 +304,10 @@ func (n *Node) dropPending(pending *storepb.PendingPairing, message string) {
 	}
 
 	n.cancelPrompt(pending.GetSessionId())
+
+	// A declined or withdrawn pairing's client key stops reaching the tunnel
+	// listener with it (decision AX).
+	n.forgetPendingTunnel(pending)
 
 	n.engine.LogLifecycle(fmt.Sprintf("the pairing with %q, %s, ended: %s",
 		pending.GetName(), pending.GetFingerprint(), message))

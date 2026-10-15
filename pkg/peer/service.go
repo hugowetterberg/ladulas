@@ -176,6 +176,7 @@ func (s *peerService) Watch(
 	// A requester is a machine this instance only ever dials back, and opening
 	// its stream is the one time it says where (decision AQ).
 	s.node.learnAddresses(peer.Fingerprint, req.Msg.GetListenAddresses())
+	s.node.learnTunnel(peer.Fingerprint, req.Msg.GetTunnel())
 
 	ticker := time.NewTicker(s.node.heartbeat)
 	defer ticker.Stop()
@@ -188,6 +189,8 @@ func (s *peerService) Watch(
 			// Said on every beat rather than once, so an approver that
 			// changes networks under a held stream is still heard.
 			ListenAddresses: s.node.Advertised(),
+			// And the tunnel offer, on the same beat (decision AX).
+			Tunnel: s.node.offer(),
 		})
 		if err != nil {
 			return fmt.Errorf("send a presence heartbeat: %w", err)

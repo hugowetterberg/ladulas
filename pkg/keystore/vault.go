@@ -445,6 +445,15 @@ func (v *Vault) Wipe() {
 		for _, handover := range v.doc.GetQueuedKeyHandovers() {
 			Wipe(handover.GetPrivateKey())
 		}
+
+		// The tunnel keys (decision AX). What zeroing cannot reach of them is
+		// the copy tailcat made: key.NodePrivate is copied into magicsock and
+		// wireguard-go, and joins the list above of copies this does not touch.
+		if tunnel := v.doc.GetTunnel(); tunnel != nil {
+			Wipe(tunnel.GetServerKey())
+			Wipe(tunnel.GetClientKey())
+			Wipe(tunnel.GetPresharedKey())
+		}
 	}
 
 	v.dek = nil

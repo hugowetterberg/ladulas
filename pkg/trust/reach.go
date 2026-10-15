@@ -1,7 +1,11 @@
 package trust
 
 import (
+	"fmt"
 	"net"
+	"slices"
+	"strconv"
+	"strings"
 
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
@@ -74,16 +78,27 @@ func DirectAddresses(addresses []string) []string {
 // push and a wake-up for a key handover, and whether a requester is one an
 // approver can dial back.
 //
-// Today that is "the record carries a direct address".
+// That is "the record carries a direct address", and — once this build can
+// raise a client over the tunnel — "or a usable tunnel server address"
+// (decision AX). A peer reachable only through its tunnel is then a machine
+// that listens, not a phone: it gets a link or a dial-back, never an inbox it
+// would have no reason to collect from.
+//
+// Usable is a property of the offer and not of this instance or the moment:
+// it has versions and a server address. Whether this build has a tunnel to
+// raise with, whether the versions meet, and whether the offer has gone stale
+// are reasons a raise does not happen (DescribeTunnel), and none of them turns
+// a desktop into a phone. Deciding link-or-inbox on them would move a peer
+// between the two every time a beat aged out an offer.
 func Dialable(record *storepb.TrustRecord) bool {
-	return dialable(record.GetAddresses())
+	return dialable(record.GetAddresses(), record.GetTunnel())
 }
 
 // PendingDialable is Dialable for a pairing that has not completed. It is the
 // same question for the same reason: the convergence loop dials a pending peer
 // to settle the pairing, and a peer it cannot dial is one that will come to it.
 func PendingDialable(pending *storepb.PendingPairing) bool {
-	return dialable(pending.GetAddresses())
+	return dialable(pending.GetAddresses(), pending.GetTunnel())
 }
 
 // StatusDialable is Dialable as the control API reports it.
@@ -93,11 +108,86 @@ func PendingDialable(pending *storepb.PendingPairing) bool {
 // sends instead of the field; that half stays true whatever paths are added,
 // because a direct address is always a way to dial.
 func StatusDialable(status *ladulasv1.PeerStatus) bool {
-	return status.GetDialable() || dialable(status.GetAddresses())
+	return status.GetDialable() || dialable(status.GetAddresses(), nil)
 }
 
-// dialable is the one rule, over the parts of a record it reads. A path kind
-// that is not an address joins it as a second argument.
-func dialable(addresses []string) bool {
-	return len(addresses) > 0
+// dialable is the one rule, over the parts of a record it reads: a direct
+// address, or — when tunnelDialling is on — a tunnel offer that names a server.
+func dialable(addresses []string, tunnel *ladulasv1.TunnelOffer) bool {
+	return len(addresses) > 0 || (tunnelDialling && TunnelServes(tunnel))
+}
+
+// tunnelDialling is whether a link can reach a peer over its tunnel, and so
+// whether a tunnel offer counts towards Dialable. It is off until the step that
+// raises clients and dials through them lands (decision AX).
+//
+// The clause was first switched on with the offer itself, and that was a bug
+// with a victim: an approver running with no peer listener is a collector, and
+// one that turned the upgrade on still started its server and offered its
+// address, so its requesters' Reconcile moved it from an inbox to a link —
+// a link that could never connect, because links take the direct path only.
+// From that beat on, that approver was asked nothing at all. A path counts
+// towards Dialable when something can take it, not when it is announced.
+const tunnelDialling = false
+
+// TunnelServes reports whether an offer is one a client could be raised
+// against at all: it has versions, so it is not a withdrawal, and it names a
+// server, so it is not a phone's. Whether the versions meet this instance's is
+// a separate question (DescribeTunnel), because it is not about the peer.
+func TunnelServes(offer *ladulasv1.TunnelOffer) bool {
+	return len(offer.GetVersions()) > 0 && offer.GetServerAddress() != ""
+}
+
+// The tunnel's words, defined once (decision AX). §7 makes DescribeState the
+// single source of what the surfaces say about a peer, and the tunnel's half
+// of that is these: every surface that shows a peer's tunnel shows one of
+// them, so a pill, `ladulas status` and the desktop cannot drift apart.
+const (
+	TunnelOffHere    = "tunnel off here"
+	TunnelNoOffer    = "peer offers no tunnel"
+	TunnelWithdrawn  = "peer withdrew its tunnel"
+	TunnelStale      = "tunnel offer stale"
+	TunnelOffered    = "tunnel offered"
+	TunnelClientOnly = "peer offers a client key only"
+)
+
+// DescribeTunnel says what this instance knows about a tunnel to a peer.
+//
+// ours is the tunnel wire version this instance speaks, zero when it has no
+// tunnel to raise. It is an int32 rather than the offer's uint32 because
+// gomobile binds signed integers only (§21) — a build without tailcat, or the upgrade switched off.
+// stale is whether the offer has aged out (no beat has re-confirmed it for the
+// configured period, or a direct contact carrying no offer contradicted it).
+//
+// It describes what is known, not a path in use: "tunnel offered" is a peer
+// this instance could raise a client to, which is all this step can say.
+func DescribeTunnel(record *storepb.TrustRecord, ours int32, stale bool) string {
+	offer := record.GetTunnel()
+
+	switch {
+	case ours <= 0:
+		return TunnelOffHere
+	case offer == nil:
+		return TunnelNoOffer
+	case len(offer.GetVersions()) == 0:
+		return TunnelWithdrawn
+	case !slices.Contains(offer.GetVersions(), uint32(ours)):
+		return fmt.Sprintf("version mismatch (ours %d, theirs %s)",
+			ours, versionList(offer.GetVersions()))
+	case offer.GetServerAddress() == "":
+		return TunnelClientOnly
+	case stale:
+		return TunnelStale
+	default:
+		return TunnelOffered
+	}
+}
+
+func versionList(versions []uint32) string {
+	words := make([]string, 0, len(versions))
+	for _, version := range versions {
+		words = append(words, strconv.FormatUint(uint64(version), 10))
+	}
+
+	return strings.Join(words, ", ")
 }

@@ -180,6 +180,10 @@ export const bridge = {
   // its approvers automatically (decision Q).
   setAutoPublish: (enabled) =>
     call("POST", "/settings/auto-publish", { enabled: Boolean(enabled) }),
+  // The tunnel upgrade's switch (decision AX). The read rides on the instance
+  // view; this answers with the state as it now stands.
+  setTunnel: (enabled) =>
+    call("POST", "/settings/tunnel", { enabled: Boolean(enabled) }),
   // What is published by hand: a directory offered to the approvers, and one
   // project taken off the list. Both answer with what a read now says.
   publishProject: (path, name) =>

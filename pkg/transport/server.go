@@ -70,6 +70,10 @@ type Server struct {
 	addresses []string
 	selection *Selection
 	http      *http.Server
+	// tunnels are the servers ServeTunnel is running, closed with the rest;
+	// closed refuses a tunnel arriving after Close (decision AX).
+	tunnels []*http.Server
+	closed  bool
 
 	closeOnce sync.Once
 }
@@ -312,10 +316,21 @@ func (s *Server) Close() error {
 		s.mu.Lock()
 		server := s.http
 		listeners := append([]net.Listener(nil), s.listeners...)
+		tunnels := s.tunnels
+		s.tunnels = nil
+		s.closed = true
 		s.mu.Unlock()
 
+		for _, tunnel := range tunnels {
+			if closeErr := tunnel.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
+		}
+
 		if server != nil {
-			err = server.Close()
+			if closeErr := server.Close(); closeErr != nil && err == nil {
+				err = closeErr
+			}
 
 			return
 		}

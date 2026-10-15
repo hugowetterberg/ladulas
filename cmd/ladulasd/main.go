@@ -14,10 +14,16 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/hugowetterberg/ladulas/internal/command"
+	"github.com/hugowetterberg/ladulas/internal/tunnel"
 	"github.com/hugowetterberg/ladulas/internal/version"
 )
 
 func main() {
+	// The tunnel upgrade is this binary's to carry (decision AX): wired here,
+	// so that nothing shared imports tailcat. A build with the notailcat tag
+	// gets nil, and offers no tunnel.
+	command.Tunnels = tunnel.Factory()
+
 	cmd := &cli.Command{
 		Name:    "ladulasd",
 		Usage:   "the Ladulås daemon: SSH agent, approval engine, audit log",

@@ -136,6 +136,39 @@ its author meant, a phone that nobody is picking up.
   dropping UDP 5353 looks exactly like `announced` from here
   ([ops](ops.md#the-other-machine-does-not-show-up-in-the-list)).
 
+## The tunnel upgrade — the daemon
+
+* **`ladulas_tunnel_events_total{event}`** — what happened to the tunnel
+  upgrade ([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)), one
+  event at a time. `server_started` and `server_failed` are the long-lived
+  tailcat server coming up or not: one `server_started` per unseal and per
+  switch turned on is normal. A climbing `server_failed`, on the links'
+  backoff, is the first region pick failing — the DERP map unreachable —
+  since a start with a persisted region does not contact DERP and fails
+  only for local reasons; it costs the tunnel and nothing else
+  ([ops](ops.md#the-tunnel-is-on-and-its-server-never-comes-up)).
+  `offer_received` and `offer_withdrawn` are peers' offers changing a trust
+  record — written on change only, so these count changes, not beats.
+  `admitted` and `revoked` are client keys going on and off the allowlist
+  outside a server start (the rebuild at start is not counted, since it is
+  the same keys again). `refused` is a connection the tunnel listener's
+  gate turned away: an identity that is not paired, or a paired one with a
+  client key it never offered. `region_refused` is a peer's tunnel address
+  whose DERP region failed the region rule, so its server address was not
+  kept. `other` is a word this build does not know.
+* **`ladulas_tunnel_server{state}`** — the long-lived server, 1 for the
+  state it is in: `off` (the upgrade switched off, or a build without
+  tailcat), `starting` (built and not up yet — for long, the first region
+  pick cannot fetch the DERP map), `up` (built and offering its address to
+  peers). `up` does not say the server holds a DERP connection: with a
+  persisted region the server starts without contacting DERP, so a region
+  that is unreachable or withdrawn reads `up` here and nothing reports it
+  yet ([ops](ops.md#the-tunnel-says-up-and-nobody-can-reach-it)). Every state is emitted
+  so that off and absent read differently, and like the other peer-node
+  gauges it is absent while sealed. Nothing here says which path a peer is
+  on: nothing dials over the tunnel yet, and the `path` label on
+  `ladulas_peers` arrives with the dialling.
+
 ## State gauges — the daemon
 
 These are read off the running instance at scrape time rather than kept in

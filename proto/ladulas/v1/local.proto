@@ -149,6 +149,22 @@ service ControlService {
   // thing they need to find out about while they are still looking (§14).
   rpc SetPeerListen(SetPeerListenRequest) returns (SetPeerListenResponse);
 
+  // Tunnel reports the tunnel upgrade (decision AX): whether this build has
+  // it, whether it is on, which DERP map it picks from, whether the long-lived
+  // server is up and in which region, and the two sentences every surface that
+  // offers the switch shows beside it.
+  //
+  // Answerable while sealed, with what a sealed instance can say: whether the
+  // build has it at all. The setting is in the store.
+  rpc Tunnel(TunnelRequest) returns (TunnelResponse);
+
+  // SetTunnel turns the upgrade on or off, or points it at a self-hosted DERP
+  // map, and puts that into effect without a restart: turning it on generates
+  // the keys the first time, starts the long-lived server and starts offering
+  // it to peers; turning it off closes the server and sends every peer the
+  // withdrawal.
+  rpc SetTunnel(SetTunnelRequest) returns (TunnelResponse);
+
   // ListStoredKeys reports the keys this instance holds. A read, and it goes
   // through the daemon like every other one: the running instance is the only
   // thing that can answer without asking for a passphrase it has already been
@@ -523,6 +539,12 @@ message PeerStatus {
   // "direct" for a pinned TLS connection to or from one of its addresses,
   // which is the only kind there is. Empty when it is not in contact.
   string path = 14;
+  // What this instance knows about a tunnel to the peer, in the words of the
+  // state set decision AX defines once (trust.DescribeTunnel): "tunnel off
+  // here", "peer offers no tunnel", "peer withdrew its tunnel", "version
+  // mismatch (ours …, theirs …)", "tunnel offer stale", or "tunnel offered".
+  // Empty from an older daemon.
+  string tunnel = 15;
 }
 
 message StatusResponse {
@@ -758,6 +780,51 @@ message PeerListenState {
   // Why nothing is bound, when nothing is: "the store is sealed", "peering is
   // switched off". Empty when the listener is up.
   string detail = 10;
+}
+
+message TunnelRequest {}
+
+message SetTunnelRequest {
+  // Whether the upgrade is on. Optional so that a request that only changes
+  // the DERP map cannot turn the upgrade off by leaving the field out.
+  optional bool enabled = 1;
+  // A self-hosted DERP map URL, or the empty string with set_derp_map_url to
+  // go back to the default fleet. Ignored without set_derp_map_url.
+  string derp_map_url = 2;
+  bool set_derp_map_url = 3;
+  // Forget the persisted DERP region, so that the server picks again from the
+  // map. Deliberate only, and it strands any pair whose only carrier is the
+  // tunnel: the old address stops working and the new one has no way to reach
+  // such a peer (§8). Needs set_derp_map_url.
+  bool repick_region = 4;
+}
+
+// TunnelState is the tunnel upgrade as the daemon sees it (decision AX).
+message TunnelState {
+  // Whether this build carries tailcat at all. A build without it can still be
+  // told to turn the upgrade on, and says so here rather than pretending.
+  bool available = 1;
+  // Whether the upgrade is switched on in the store.
+  bool enabled = 2;
+  // The DERP map the region is picked from, and the default it goes back to.
+  string derp_map_url = 3;
+  string default_derp_map_url = 4;
+  // Whether the long-lived server is up, the region it is in, and why it is
+  // not when it is not.
+  bool running = 5;
+  string region = 6;
+  string detail = 7;
+  // The tailcat wire version this build offers.
+  uint32 version = 8;
+  // The two sentences decision AX requires beside the switch, from the daemon
+  // so that every surface says the same thing: what turning it on exposes, and
+  // what the DERP operator learns.
+  string exposure = 9;
+  string metadata = 10;
+}
+
+message TunnelResponse {
+  TunnelState state = 1;
 }
 
 message PeerListenRequest {}

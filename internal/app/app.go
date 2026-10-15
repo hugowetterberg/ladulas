@@ -77,6 +77,10 @@ type Config struct {
 	// Passphrase prompts the user. Required to create a store, and to open one
 	// that has not enrolled the keychain.
 	Passphrase keystore.PassphraseFunc
+	// Tunnels builds the tunnel upgrade's engine when the upgrade is on
+	// (decision AX). The daemon binaries set it from internal/tunnel; nil is a
+	// build without tailcat, which offers no tunnel and says so to its peers.
+	Tunnels TunnelFactory
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -205,6 +209,9 @@ type App struct {
 	// announced is told how each pairing announcement went (decision AW),
 	// for the metrics port. Set once by internal/observe.
 	announced func(outcome string)
+	// tunnelEvents is told about every tunnel event (decision AX), for the
+	// metrics port. Set once by internal/observe.
+	tunnelEvents func(event string)
 	// unsealWaiters are told when the data encryption key arrives, whichever
 	// way it arrived.
 	unsealWaiters []chan struct{}
@@ -570,6 +577,14 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 		AllowPublic:  built.listen.allowPublic,
 		Headless:     cfg.Headless,
 		Logger:       cfg.Logger,
+		// The tunnel is built with the node and closed with it, so that every
+		// engine belongs to the inner half sealing destroys (§3, decision AX).
+		Tunnel: a.buildTunnel(built.vault),
+		ObserveTunnel: func(event string) {
+			if observe := a.tunnelObserver(); observe != nil {
+				observe(event)
+			}
+		},
 	})
 	if err != nil {
 		return nil, err

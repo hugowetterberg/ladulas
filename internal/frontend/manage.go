@@ -145,6 +145,37 @@ func (f *Frontend) setListen(
 	return resp.Msg, nil
 }
 
+// tunnel is the tunnel upgrade (decision AX), asked for on every paint of the
+// instance view like the listener is.
+func (f *Frontend) tunnel() (*ladulasv1.TunnelState, error) {
+	ctx, cancel := call()
+	defer cancel()
+
+	resp, err := f.client.Tunnel(ctx, connect.NewRequest(&ladulasv1.TunnelRequest{}))
+	if err != nil {
+		return nil, fmt.Errorf("ask about the tunnel: %w", err)
+	}
+
+	return resp.Msg.GetState(), nil
+}
+
+// setTunnel turns the tunnel upgrade on or off. Turning it on can generate
+// keys and pick a DERP region, so this waits as long as a rebind does.
+func (f *Frontend) setTunnel(
+	ctx context.Context, enabled bool,
+) (*ladulasv1.TunnelState, error) {
+	ctx, cancel := context.WithTimeout(ctx, rebindTimeout)
+	defer cancel()
+
+	resp, err := f.client.SetTunnel(ctx,
+		connect.NewRequest(&ladulasv1.SetTunnelRequest{Enabled: &enabled}))
+	if err != nil {
+		return nil, fmt.Errorf("change the tunnel: %w", err)
+	}
+
+	return resp.Msg.GetState(), nil
+}
+
 // publishing is what this instance publishes and whether it does so
 // automatically (decision Q). It rides on the publications listing, which is
 // the one call that knows both.

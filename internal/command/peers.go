@@ -62,14 +62,15 @@ func peersListCommand() *cli.Command {
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
-			fmt.Fprintln(w, "NAME\tFINGERPRINT\tDIRECTION\tKEYS\tSTATE\tADDRESSES")
+			fmt.Fprintln(w, "NAME\tFINGERPRINT\tDIRECTION\tKEYS\tSTATE\tTUNNEL\tADDRESSES")
 
 			for _, peer := range peers {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					peer.GetName(), peer.GetFingerprint(),
 					directionWord(peer.GetMayApprove(), peer.GetMayRequest()),
 					keyWord(peer),
 					peerState(peer),
+					tunnelWord(peer),
 					strings.Join(peer.GetAddresses(), " "))
 			}
 
@@ -683,4 +684,15 @@ func printPaired(peer *ladulasv1.PeerStatus) {
 		peer.GetName(), peer.GetFingerprint())
 	fmt.Printf("It %s\n",
 		trust.Describe(peer.GetMayApprove(), peer.GetMayRequest()))
+}
+
+// tunnelWord is the tunnel's word for a peer, as the daemon chose it from the
+// one set decision AX defines (trust.DescribeTunnel), or a dash from a daemon
+// too old to say.
+func tunnelWord(peer *ladulasv1.PeerStatus) string {
+	if word := peer.GetTunnel(); word != "" {
+		return word
+	}
+
+	return "-"
 }

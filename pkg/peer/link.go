@@ -359,7 +359,7 @@ func (l *link) watch(ctx context.Context) {
 		// Where the approver can dial this instance back is read afresh for
 		// every stream, so a requester that moved networks says so on the
 		// reconnect (decision AQ).
-		err := l.presence(ctx, l.node.Advertised())
+		err := l.presence(ctx, l.node.Advertised(), l.node.offer())
 
 		if ctx.Err() != nil {
 			return
@@ -429,8 +429,11 @@ func (l *link) presenceOrder() []string {
 }
 
 // presence opens a presence stream and reads it until it breaks, telling the
-// approver where this instance can be dialled as it opens.
-func (l *link) presence(ctx context.Context, advertised []string) error {
+// approver where this instance can be dialled, and what it offers of its
+// tunnel, as it opens.
+func (l *link) presence(
+	ctx context.Context, advertised []string, offer *ladulasv1.TunnelOffer,
+) error {
 	addresses := l.presenceOrder()
 	if len(addresses) == 0 {
 		return errors.New("the peer has no address to dial")
@@ -448,6 +451,9 @@ func (l *link) presence(ctx context.Context, advertised []string) error {
 
 		stream, err := client.Watch(ctx, connect.NewRequest(&ladulasv1.WatchRequest{
 			ListenAddresses: advertised,
+			// The requester's tunnel offer rides beside its addresses
+			// (decision AX).
+			Tunnel: offer,
 		}))
 		if err != nil {
 			lastErr = err
@@ -487,14 +493,17 @@ func (l *link) presence(ctx context.Context, advertised []string) error {
 		// beat (decision AQ). succeeded ran first so the address this stream
 		// is on is what learnAddresses keeps.
 		l.node.learnAddresses(l.Fingerprint(), stream.Msg().GetListenAddresses())
+		l.node.learnTunnel(l.Fingerprint(), stream.Msg().GetTunnel())
 
 		for stream.Receive() {
 			l.succeeded(address)
 
 			// And again on every beat, so a key granted on the holder reaches
-			// the requester without either side being restarted.
+			// the requester without either side being restarted — and a
+			// rotated tunnel key, the same way (decision AX).
 			l.learnKeys(ctx, address)
 			l.node.learnAddresses(l.Fingerprint(), stream.Msg().GetListenAddresses())
+			l.node.learnTunnel(l.Fingerprint(), stream.Msg().GetTunnel())
 		}
 
 		closeErr := stream.Close()
