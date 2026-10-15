@@ -9,10 +9,17 @@
 // pairing for (decision AD), asked here because this is the side displaying the
 // code and that side decides for both. Then the invitation: the six-digit PIN
 // and the QR side by side (decision AV), and the full code under them to copy.
-// Another desktop or a headless box types the PIN with the address; a phone
-// points a camera at the picture; a window that cannot reach this one pastes
-// the full code. For one release an older version still types the ten
-// characters, labelled for what it is.
+// Another desktop or a headless box finds this machine in its own list of
+// what is showing a PIN on the network and types the PIN (decision AW), or
+// types it with the address when the list does not have it; a phone points a
+// camera at the picture; a window that cannot reach this one pastes the full
+// code. For one release an older version still types the ten characters,
+// labelled for what it is.
+//
+// The question's side of the screen has the other end: that list, for the
+// machine somebody else is showing a PIN on, read again every couple of
+// seconds for as long as it is on screen — and only then, because reading it
+// is what keeps the instance listening to the network.
 //
 // The invitation is read again every couple of seconds while it is on screen,
 // because what happens to a PIN while it is up is the thing worth seeing: each
@@ -164,9 +171,156 @@ function chooser(show, state) {
   };
 
   nodes.push(ui.heading("Or join a machine that is showing a PIN"));
+  nodes.push(nearbyCard(state));
   nodes.push(joinCard(state));
 
   return nodes;
+}
+
+// nearbyCard is the machines on this network showing a PIN, to pick from
+// rather than to type an address for (decision AW).
+//
+// It asks again every two seconds while it is on screen and tells the host to
+// stop looking when it goes. A host that cannot look at all — a phone, which
+// pairs by camera — answers 501, and the card takes itself away.
+//
+// What it does not do is choose. Anything on the network can announce any
+// name, so two entries with one name are both shown and both marked, and the
+// person picks — or picks neither and uses the full code. One press is one
+// attempt at the entry's one address, as with a typed address.
+function nearbyCard(state) {
+  const list = el("div", "nearby-list");
+  const pin = field("PIN", "the six digits it is showing", "text");
+  const join = el("button", "primary", "Join");
+  const said = ui.note("");
+  const form = append(el("div", "nearby-form"),
+    pin.root, append(el("div", "card-actions"), join), said);
+  const root = ui.card("nearby",
+    ui.note("Machines on this network showing a PIN right now. Pick the one "
+      + "you are pairing with and type the PIN on its screen."),
+    list,
+    form);
+
+  let entries = [];
+  let picked = null;
+  let attached = false;
+
+  said.hidden = true;
+  form.hidden = true;
+
+  const draw = () => {
+    if (picked && !entries.some((entry) => entry.id === picked.id)) {
+      picked = null;
+    }
+
+    form.hidden = !picked;
+
+    if (entries.length === 0) {
+      list.replaceChildren(ui.note("Looking… nothing yet. If the other "
+        + "machine is showing a PIN and does not appear, something between "
+        + "the two is dropping multicast DNS — a firewall without UDP 5353, "
+        + "Wi-Fi client isolation, or a VPN. Type its address below instead."));
+
+      return;
+    }
+
+    const rows = entries.map((entry) => {
+      const where = entry.address
+        + (entry.interface ? " on " + entry.interface : "");
+      const row = ui.row(
+        "intent",
+        () => {
+          picked = entry;
+          said.hidden = true;
+          join.disabled = false;
+          draw();
+          pin.input.focus();
+        },
+        ui.icon("machine", "kind"),
+        ui.stack(ui.title(entry.name), ui.sub(entry.duplicate
+          ? where + " — another machine has this name"
+          : where)));
+
+      row.setAttribute("aria-pressed",
+        picked && picked.id === entry.id ? "true" : "false");
+
+      return row;
+    });
+
+    const warnings = entries.some((entry) => entry.duplicate)
+      ? [ui.warning("Two machines on this network claim the same name, and "
+        + "anything on it can announce any name. If you are not sure which is "
+        + "the one you mean, pick neither and paste its full code below.")]
+      : [];
+
+    list.replaceChildren(...warnings, ...rows);
+  };
+
+  draw();
+
+  join.onclick = () => {
+    if (!picked) {
+      return;
+    }
+
+    join.disabled = true;
+    said.hidden = true;
+
+    bridge
+      .joinNearby(picked.id, pin.input.value)
+      .then((joined) => {
+        said.textContent = (joined && joined.message)
+          || "The other machine answered. Compare the fingerprints on the card.";
+        said.hidden = false;
+        state.refresh();
+      })
+      .catch((error) => {
+        join.disabled = false;
+        said.textContent = error.message;
+        said.hidden = false;
+      });
+  };
+
+  // Only the ids, names and marks decide whether to redraw: a redraw while
+  // somebody is choosing would move the row under the pointer.
+  const shape = (items) => (items || [])
+    .map((entry) => entry.id + ":" + entry.duplicate).join("|");
+
+  const poll = () => {
+    if (!root.isConnected) {
+      // Not on screen yet is the first poll racing the screen being drawn;
+      // not on screen any more is somebody having left it.
+      if (attached) {
+        clearInterval(timer);
+        bridge.stopNearby().catch(() => {});
+      }
+
+      return;
+    }
+
+    attached = true;
+
+    bridge
+      .nearby()
+      .then((now) => {
+        if (shape(now) !== shape(entries)) {
+          entries = now || [];
+          draw();
+        }
+      })
+      .catch((error) => {
+        if (error.status === 501) {
+          clearInterval(timer);
+          root.remove();
+        }
+      });
+  };
+
+  const timer = setInterval(poll, 2000);
+
+  setTimeout(poll, 0);
+
+  return root;
 }
 
 // joinCard is the other end of the screen above: the PIN from a machine that
@@ -211,11 +365,12 @@ function joinCard(state) {
   return ui.card(null,
     code.root,
     address.root,
-    ui.note("Type the PIN the other machine is showing and the address under "
-      + "it. The full code — the long string under the PIN on the other "
-      + "machine — carries its address and identity instead, so there is "
-      + "nothing else to type. Either way both machines then show the same two "
-      + "fingerprints, and somebody at each has to agree they match."),
+    ui.note("For a machine the list above does not have: type the PIN it is "
+      + "showing and the address under it. The full code — the long string "
+      + "under the PIN on the other machine — carries its address and "
+      + "identity instead, so there is nothing else to type. Either way both "
+      + "machines then show the same two fingerprints, and somebody at each "
+      + "has to agree they match."),
     append(el("div", "card-actions"), join),
     said);
 }
@@ -268,6 +423,13 @@ function displayed(invitation, stopped, show, state) {
 
   const code = ui.card("pairing-code", pair);
 
+  // Whether a machine looking for this one will find it in its list, in the
+  // core's words, because the reason it will not is the thing worth knowing
+  // (decision AW).
+  if (invitation.announcement) {
+    append(code, ui.note(invitation.announcement));
+  }
+
   // The full code under them: what a window that cannot see this one pastes,
   // and what the phone scans, as a string.
   append(code,
@@ -307,9 +469,12 @@ function displayed(invitation, stopped, show, state) {
 
   nodes.push(ui.heading("From a terminal"));
   nodes.push(ui.card(null,
+    ui.copyable("ladulas pair --join"),
+    ui.note("Lists the machines showing a PIN on the network, this one "
+      + "among them, and asks for the PIN."),
     ui.copyable(invitation.join),
-    ui.note("The address is the one this machine thinks is most likely to "
-      + "work; the rest are below.")));
+    ui.note("For when it does not show up there. The address is the one this "
+      + "machine thinks is most likely to work; the rest are below.")));
 
   if (invitation.olderJoin) {
     nodes.push(ui.card(null,

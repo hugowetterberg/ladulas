@@ -33,16 +33,23 @@ const joinTimeout = 30 * time.Second
 func (f *Frontend) join(
 	ctx context.Context, code, address string,
 ) (bridge.JoinView, error) {
+	return f.joinWith(ctx, &ladulasv1.PairWithPeerRequest{
+		Address: address,
+		Code:    code,
+	})
+}
+
+// joinWith is join for any way of naming the machine: an address, a full
+// code, or an entry from the local-network list (decision AW).
+func (f *Frontend) joinWith(
+	ctx context.Context, req *ladulasv1.PairWithPeerRequest,
+) (bridge.JoinView, error) {
 	// The stream outlives the request that asked for it, for the same reason
 	// the pairing window's does: the answer goes back as soon as the dial has
 	// worked, and the rest of the exchange is followed on its own.
 	streamCtx, cancel := context.WithCancel(context.Background())
 
-	stream, err := f.client.PairWithPeer(streamCtx,
-		connect.NewRequest(&ladulasv1.PairWithPeerRequest{
-			Address: address,
-			Code:    code,
-		}))
+	stream, err := f.client.PairWithPeer(streamCtx, connect.NewRequest(req))
 	if err != nil {
 		cancel()
 

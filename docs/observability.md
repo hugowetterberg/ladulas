@@ -119,6 +119,23 @@ its author meant, a phone that nobody is picking up.
   was not them. `lifecycle` covers unlocking, sealing, key imports and the
   daemon starting.
 
+## Pairing discovery — the daemon
+
+* **`ladulas_pairing_announcements_total{outcome}`** — pairing windows put
+  on the local network over DNS-SD while their PIN was on screen
+  ([decision AW](architecture.md#7-identity-pairing-and-trust)).
+  `announced` is one whose probe finished and that went out — or whose
+  probe was still renaming past "desk (2)" after three seconds, which
+  goes out once it settles; `not_announced` is a PIN shown with the
+  listener bound nowhere on a local network — off, loopback, or a tailnet
+  only — the multicast socket refusing to open, the probe failing, or the
+  screen closing before the probe finished, so no joining machine could
+  have listed it. A `not_announced` is not a failed pairing:
+  the PIN with an address and the full code both still work. What this
+  cannot show is whether anybody *heard* an announcement — a firewall
+  dropping UDP 5353 looks exactly like `announced` from here
+  ([ops](ops.md#the-other-machine-does-not-show-up-in-the-list)).
+
 ## State gauges — the daemon
 
 These are read off the running instance at scrape time rather than kept in

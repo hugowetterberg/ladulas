@@ -242,10 +242,18 @@ type Node struct {
 	// In memory rather than in the store: presence is worth nothing after a
 	// restart, and stamping the encrypted store on every poll would be a write a
 	// second for a fact that expires.
-	seen          map[string]time.Time
-	collecting    map[string]int
-	window        *pairingWindow
-	confirmations map[string]chan *approval.Answer
+	seen       map[string]time.Time
+	collecting map[string]int
+	window     *pairingWindow
+	// announcer is what puts a window on the local network, and announced
+	// is the window it is announcing, if any (decision AW). Nil on a phone.
+	// Both are read under mu, but the announcer is called under windowAnnounceMu
+	// and not under mu, since announcing waits for a probe (see announce.go).
+	announcer        PairingAnnouncer
+	announcedWindow  *pairingWindow
+	windowAnnounceMu sync.Mutex
+	pairingClosed    bool
+	confirmations    map[string]chan *approval.Answer
 	// prompts are the confirmation prompts currently raised for pending
 	// pairings, by session id, so that a pairing withdrawn from either end
 	// takes its card off whatever screen it is on.
@@ -443,6 +451,10 @@ func (n *Node) Close() error {
 	var err error
 
 	n.closeOnce.Do(func() {
+		// An instance that is going away announces nothing: a window whose
+		// node has closed cannot take a PIN, and an entry for it in somebody's
+		// list would be a guess at nothing (decision AW).
+		n.withdrawAny()
 		n.stopWatching()
 		n.stopLinks()
 		n.closeDialers()

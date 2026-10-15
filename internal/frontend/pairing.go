@@ -168,6 +168,8 @@ func invitationFrom(progress *ladulasv1.PairingProgress) bridge.Invitation {
 		FullCode:  progress.GetFullCode(),
 		Addresses: progress.GetListenAddresses(),
 		Intent:    trust.IntentFromWire(progress.GetIntent()),
+
+		Announcement: progress.GetAnnouncement(),
 	}
 
 	if expires := progress.GetExpiresAt(); expires != nil {

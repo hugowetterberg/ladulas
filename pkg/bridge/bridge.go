@@ -138,6 +138,9 @@ type Invitation struct {
 	// because its attempts were spent (decision AV): the screen says
 	// something is guessing and offers a new PIN rather than going quiet.
 	Ended string
+	// Announcement is where the window is announced on the local network,
+	// or why it is not, as the instance's own sentence (decision AW).
+	Announcement string
 }
 
 // PairingAttempt is one failed attempt at a displayed code.
@@ -169,6 +172,26 @@ type Pairing interface {
 	Invitation() (Invitation, bool)
 	// Stop takes the code off display. Calling it with nothing on display is
 	// not an error: it is the state the caller wanted.
+	Stop()
+}
+
+// Nearby is a joining screen's list of the machines on the local network
+// that are showing a pairing PIN (decision AW).
+//
+// It is an interface for the reason Pairing is one: a host either browses or
+// does not. A phone does not — it pairs by scanning the QR, which carries the
+// key the list cannot — and leaves it nil, and the screen then shows only the
+// boxes for a full code and for a PIN with an address.
+type Nearby interface {
+	// List is what is on the network now. Calling it is also what keeps the
+	// host browsing: a host stops looking shortly after the last call, so a
+	// screen that went away without saying so does not leave the instance
+	// listening for nobody.
+	List(ctx context.Context) ([]NearbyView, error)
+	// Join joins a listed machine with the PIN it is showing. One call is
+	// one attempt, at the one address the host checked for that entry.
+	Join(ctx context.Context, id, pin string) (JoinView, error)
+	// Stop ends the browsing now, which is what leaving the screen does.
 	Stop()
 }
 
@@ -418,6 +441,10 @@ type Options struct {
 	// screen (§14). Optional, like Pairing; the phones join by camera and have
 	// their own path.
 	Join func(ctx context.Context, code, address string) (JoinView, error)
+	// Nearby lists the machines on the local network showing a PIN, and
+	// joins one by the PIN alone (decision AW). Optional: the desktop sets it,
+	// and a phone, which pairs by camera, does not.
+	Nearby Nearby
 	// Projects is the documentation paired instances have published here (§6).
 	// Optional.
 	Projects Projects
@@ -1015,6 +1042,8 @@ func (s *Session) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/pairings/invite", s.handleInvite)
 	mux.HandleFunc("POST /api/v1/pairings/stop", s.handleStopInviting)
 	mux.HandleFunc("POST /api/v1/pairings/join", s.handleJoin)
+	mux.HandleFunc("GET /api/v1/pairings/nearby", s.handleNearby)
+	mux.HandleFunc("POST /api/v1/pairings/nearby/stop", s.handleStopNearby)
 	mux.HandleFunc("GET /api/v1/pairings/qr", s.handlePairingQR)
 	mux.HandleFunc("POST /api/v1/keys", s.handleGenerateKey)
 	// The key is named in the body for the same reason the peer is: a
@@ -1898,6 +1927,9 @@ func (s *Session) handleJoin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code    string `json:"code"`
 		Address string `json:"address"`
+		// Nearby is an entry from the list, instead of an address
+		// (decision AW).
+		Nearby string `json:"nearby"`
 	}
 
 	if err := json.NewDecoder(
@@ -1909,6 +1941,7 @@ func (s *Session) handleJoin(w http.ResponseWriter, r *http.Request) {
 
 	body.Code = strings.TrimSpace(body.Code)
 	body.Address = strings.TrimSpace(body.Address)
+	body.Nearby = strings.TrimSpace(body.Nearby)
 
 	if body.Code == "" {
 		writeError(w, http.StatusBadRequest,
@@ -1917,7 +1950,28 @@ func (s *Session) handleJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	joined, err := s.opts.Join(r.Context(), body.Code, body.Address)
+	var (
+		joined JoinView
+		err    error
+	)
+
+	switch {
+	case body.Nearby != "" && s.opts.Nearby == nil:
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot look for machines on the network")
+
+		return
+	case body.Nearby != "" && body.Address != "":
+		writeError(w, http.StatusBadRequest,
+			"pick a machine from the list or type an address, not both")
+
+		return
+	case body.Nearby != "":
+		joined, err = s.opts.Nearby.Join(r.Context(), body.Nearby, body.Code)
+	default:
+		joined, err = s.opts.Join(r.Context(), body.Code, body.Address)
+	}
+
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 
@@ -1925,6 +1979,41 @@ func (s *Session) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, joined)
+}
+
+// handleNearby is the list of machines showing a PIN on the local network,
+// and asking for it is what keeps the host looking (decision AW). A host
+// without a list answers 501, which the screen reads as "draw no list".
+func (s *Session) handleNearby(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Nearby == nil {
+		writeError(w, http.StatusNotImplemented,
+			"this host cannot look for machines on the network")
+
+		return
+	}
+
+	entries, err := s.opts.Nearby.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	if entries == nil {
+		entries = []NearbyView{}
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleStopNearby is the screen going away: stop looking now rather than
+// when the host notices nobody is asking.
+func (s *Session) handleStopNearby(w http.ResponseWriter, _ *http.Request) {
+	if s.opts.Nearby != nil {
+		s.opts.Nearby.Stop()
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleStopInviting takes the code off display, which is what leaving the

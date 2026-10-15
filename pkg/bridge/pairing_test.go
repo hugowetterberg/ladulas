@@ -383,3 +383,112 @@ func TestAKeyIsMadeInTheDaemonsStore(t *testing.T) {
 		t.Errorf("an unnamed key said %d", status)
 	}
 }
+
+// nearbyHost is a host that can look at the local network (decision AW).
+type nearbyHost struct {
+	mu      sync.Mutex
+	listed  int
+	stopped int
+	joined  [][2]string
+}
+
+func (h *nearbyHost) List(context.Context) ([]bridge.NearbyView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.listed++
+
+	return []bridge.NearbyView{
+		{ID: "m1", Name: "desk", Interface: "wlan0", Address: "192.168.1.10:7373"},
+		{ID: "m2", Name: "desk (2)", Interface: "wlan0",
+			Address: "192.168.1.66:7373", Duplicate: true},
+	}, nil
+}
+
+func (h *nearbyHost) Join(
+	_ context.Context, id, pin string,
+) (bridge.JoinView, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.joined = append(h.joined, [2]string{id, pin})
+
+	return bridge.JoinView{RequestID: "req-pair-2"}, nil
+}
+
+func (h *nearbyHost) Stop() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.stopped++
+}
+
+// TestAJoiningScreenPicksFromTheNetwork: the list is served, a join names an
+// entry and a PIN and never an address, and a host that cannot look says so
+// in a way the screen reads as "draw no list" — which is every phone.
+func TestAJoiningScreenPicksFromTheNetwork(t *testing.T) {
+	server, _ := newPairingFixture(t)
+
+	status, out := send(t, server, http.MethodGet, "/api/v1/pairings/nearby", "")
+	if status != http.StatusNotImplemented {
+		t.Errorf("a host without a list said %d: %s", status, out)
+	}
+
+	status, out = send(t, server, http.MethodPost, "/api/v1/pairings/join",
+		`{"nearby":"m1","code":"042917"}`)
+	if status != http.StatusNotImplemented {
+		t.Errorf("a list join on a host without a list said %d: %s", status, out)
+	}
+
+	host := &nearbyHost{}
+	session := bridge.NewSession(bridge.Options{
+		Name:   "workstation",
+		Join:   (&pairingHost{}).Join,
+		Nearby: host,
+	})
+
+	listing := httptest.NewServer(session.Handler())
+	t.Cleanup(listing.Close)
+
+	status, out = send(t, listing, http.MethodGet, "/api/v1/pairings/nearby", "")
+	if status != http.StatusOK {
+		t.Fatalf("the list said %d: %s", status, out)
+	}
+
+	var entries []bridge.NearbyView
+	if err := json.Unmarshal(out, &entries); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(entries) != 2 || !entries[1].Duplicate || entries[0].Duplicate {
+		t.Errorf("the list was %+v", entries)
+	}
+
+	status, out = send(t, listing, http.MethodPost, "/api/v1/pairings/join",
+		`{"nearby":"m1","address":"192.168.1.10:7373","code":"042917"}`)
+	if status != http.StatusBadRequest {
+		t.Errorf("an entry and an address said %d: %s", status, out)
+	}
+
+	status, out = send(t, listing, http.MethodPost, "/api/v1/pairings/join",
+		`{"nearby":" m1 ","code":" 042917 "}`)
+	if status != http.StatusOK || !strings.Contains(string(out), "req-pair-2") {
+		t.Fatalf("the join said %d: %s", status, out)
+	}
+
+	status, _ = send(t, listing, http.MethodPost, "/api/v1/pairings/nearby/stop", "")
+	if status != http.StatusNoContent {
+		t.Errorf("stopping said %d", status)
+	}
+
+	host.mu.Lock()
+	defer host.mu.Unlock()
+
+	if len(host.joined) != 1 || host.joined[0] != [2]string{"m1", "042917"} {
+		t.Errorf("the host was asked to join %v", host.joined)
+	}
+
+	if host.stopped != 1 {
+		t.Errorf("stopped %d times", host.stopped)
+	}
+}

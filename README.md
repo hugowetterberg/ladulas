@@ -77,6 +77,9 @@ internal/         the desktop's and the daemon's own halves, which no phone
   app/            the assembly: store, engine, sockets, lock states
   branding/       the app icon; icon-1024.png here is the master
   command/        the shared command tree of ladulas and ladulasd
+  cpace/          the PIN exchange (CPace on ristretto255)
+  discovery/      the pairing window on the LAN: DNS-SD announce and browse
+  dnssd/          brutella/dnssd v1.2.14, patched to keep to named interfaces
   frontend/       the desktop's half: a viewer host that is a socket client
   gui/            the Wails shell: tray, windows, notifications (tag: gui)
   integration/    cross-package tests: two instances, an agent, a signer
@@ -259,7 +262,9 @@ unlock it again. `systemctl --user show ladulas.service -p ExecStart
 
 ```
 ladulas pair --listen --intent approver      # displays a PIN, waits
-ladulas pair --address host:7373 --pin 123456   # on the other instance
+ladulas pair --join                          # on the other instance: pick it
+                                             # from the LAN list, type the PIN
+ladulas pair --address host:7373 --pin 123456   # or with its address
 ladulas pair --code ladulas-pair-v1.…        # or the full code: no address
 ladulas pairings list                        # if the confirmation outlived
                                              # the command that raised it
@@ -275,8 +280,23 @@ alternative was two independent guesses that routinely disagreed; changing
 it later means removing the peer and pairing again. On a desktop the same
 question, the PIN beside a QR and the full code under them are the **Add a
 machine** screen in the window, and the bottom of that screen is the other
-end: a box that takes a PIN with the address beside it, or the full code
-pasted from another window, and then says to look for the confirmation card.
+end: the machines on this network showing a PIN right now, to pick from and
+type the PIN for, and under it a box that takes a PIN with the address
+beside it, or the full code pasted from another window. Either then says to
+look for the confirmation card.
+
+**On a LAN nobody types an address** (decision AW). While a PIN is on
+screen the instance announces it over mDNS/DNS-SD as `_ladulas-pair._tcp`,
+under its instance name, on the local-network interfaces its listener bound
+— never on container bridges or the tailnet, and never at any other time.
+A joining desktop's list and `ladulas pair --join` show what answers; two
+entries with one name are both flagged, because anything on the network can
+announce any name, and the fingerprints on both cards are still what
+decide. Discovery needs inbound UDP 5353 (firewalld's `mdns` service, or
+`ufw allow 5353/udp`) and does not cross Wi-Fi client isolation, a router or
+most VPNs; `avahi-browse -r _ladulas-pair._tcp` on the joining machine says
+whether the announcement is reaching it. Phones never use the list: they
+scan the QR.
 
 **The PIN is six digits, good once, for five minutes and five attempts**
 (decision AV). It is proved with a CPace exchange, never sent and never
@@ -884,10 +904,10 @@ online — which means the race is no longer *visible* in CI while still being
 there in the product. Reproduce it by submitting inside the gap; do not
 expect the suite to catch it.
 
-**The PIN still needs an address beside it, and the overlap has to end.**
-Pairing by PIN (decision AV) is built; finding the displaying machine on the
-local network, so that nobody types `host:port` at all, is the next step
-and is not. The ten-character code and its HMAC proof are there for one
+**The overlap has to end.** Pairing by PIN (decision AV) is built, and so
+is finding the displaying machine on the local network (decision AW); until
+2026-10-14 this paragraph said the PIN still needed an address beside it.
+Off the LAN it still does, or the full code. The ten-character code and its HMAC proof are there for one
 release so older instances and phones can still join; removing them, and
 moving the full code to version 2, is a later change that phones need a
 core release for first. The displaying side's card does not yet flag a

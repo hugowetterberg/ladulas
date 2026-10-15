@@ -103,6 +103,12 @@ export const bridge = {
   // The other end: a code another machine is showing, pasted here. The
   // address is only for a short code; the full one carries its own.
   join: (code, address) => call("POST", "/pairings/join", { code, address }),
+  // The machines on the local network showing a PIN (decision AW). Asking is
+  // what keeps the host looking, and it stops on its own shortly after the
+  // screen stops asking; a 501 is a host that never looks, which a phone is.
+  nearby: () => call("GET", "/pairings/nearby"),
+  stopNearby: () => call("POST", "/pairings/nearby/stop"),
+  joinNearby: (nearby, code) => call("POST", "/pairings/join", { nearby, code }),
 
   // Making a key in the instance's store. Importing one is `ladulas keys
   // import`: a key file is a file to pick and its passphrase is a secret to

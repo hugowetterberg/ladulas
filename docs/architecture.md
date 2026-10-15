@@ -984,11 +984,163 @@ the port from raising a prompt at all — and a handshake that fails the pin
 stops a wrong address from receiving a guess. A longer QR-only secret was
 considered and rejected, because the listener has to take the PIN anyway.
 
-**What is not here yet.** A joiner still needs the displaying side's address
-beside the PIN; finding the machine on the local network instead (DNS-SD)
-is the next step, and is why the joiner's messages say "address" where they
-will one day say "entry". The displaying side's card does not yet flag a
-peer name that matches an existing peer or this machine.
+**What is not here yet.** The displaying side's card does not yet flag a
+peer name that matches an existing peer or this machine. Until 2026-10-14
+this paragraph also said a joiner still needed the displaying side's
+address beside the PIN; finding the machine on the local network is the
+next section, and the joiner's refusal now says "machine or address"
+rather than only "address".
+
+### Finding the machine: local discovery — **decision AW**
+
+**A desktop or a headless box joining on the same LAN picks the machine
+from a list and types the PIN**, since 2026-10-14. The displaying side
+announces its pairing window over DNS-SD (`internal/discovery`, on a
+patched copy of `github.com/brutella/dnssd` in `internal/dnssd`, below) as
+`_ladulas-pair._tcp`; the joining side's
+*Add a machine* screen and `ladulas pair --join` browse for it and list
+what answers by instance name. Picking one and typing its PIN dials the
+address the list checked for it, over direct TCP, and runs exactly the
+exchange above. The typed address and the full code both stay, for the
+machine the list does not have.
+
+**Announced only while a PIN is on a screen.** The announcement starts
+when `BeginPairing` has a window and stops — with goodbye packets — when
+the window is spent, abandoned, or replaced, or the node closes (so a seal
+withdraws it). The window is withdrawn on arrival too, before the
+confirmation is followed: from then on the screen shows a card, not a PIN.
+Normal operation announces nothing; that is the deliberate departure from
+Syncthing, whose local discovery announces every thirty seconds for as
+long as it runs. The PIN goes on screen once the responder has probed for
+the name — a second or so, bounded at three — so that the sentence under it
+names what actually went out, "desk (2)" included, and a probe that failed
+or was cut short by the screen closing says "not announced" rather than
+"announced". One announcement at a time, and the node serialises the
+announce and the withdraw: when they ran unserialised, a closing screen's
+withdraw could land after a newer screen's announce and take it down,
+leaving a PIN that said "announced" over nothing, and two overlapping
+announces could orphan a responder nobody could stop. What goes out:
+
+* the **instance name** as the DNS-SD instance name, because that is what
+  every browser shows and what the person at the other machine is looking
+  for;
+* a **neutral host name minted per window**, `ladulas-<random>`, so the
+  box's own host name — on a laptop, often its owner's name — stays off the
+  network;
+* the **addresses the peer channel actually bound** on the interfaces it
+  announces on, and its port — passed to the responder explicitly, because
+  left alone it announces every address on each interface, including ones
+  nothing is listening on;
+* TXT **`v=2`** and a **random session tag**. Nothing in it is a
+  credential. The tag tells list entries from different screen openings
+  apart and nothing else; anybody on the link can copy it, so it is never a
+  PAKE input — the listener's own session id is (decision AV).
+
+**On the interfaces the bind policy chose** (decisions H, AH, AR): an
+interface with a bound address on it, or every eligible one when the
+listener was explicitly bound to a wildcard. Container bridges and VM
+interfaces are left out by the same name list the automatic policy uses
+(`transport.IsVirtualInterface`), and so is the tailnet although the
+listener binds it — a tailnet already has names, and an announcement that
+reached every node on somebody's tailnet would be a stranger's list entry
+on all of them. Loopback is left out. **The responder hears and answers on
+those interfaces and no others**, which is not what the library does
+unpatched: `Config.Ifaces` confines the records and the unsolicited
+announcements, but upstream's responder joins the multicast groups on every
+interface and answers a query on whichever one it arrived — so for the
+first draft of this, a container on `docker0` running `avahi-browse` while
+a PIN was up was told the name, the neutral host, the port and the tag, the
+very thing the zeroconf libraries were rejected for below. Joining the
+groups on fewer interfaces would not have been enough either: a socket
+bound to `*:5353` is handed datagrams for groups any socket on the host
+joined, on any interface, so the patched connection also drops what
+arrives elsewhere. A listener bound nowhere on a local
+network announces nothing, and the PIN screen says why in one sentence
+(`PairingProgress.announcement`); the PIN is shown either way.
+
+**Browsed only while somebody is looking.** The core holds one browser;
+`BrowsePairings` subscribes to it for as long as its stream is open, the
+last subscriber leaving stops the browse and forgets everything heard, and
+sealing closes it and ends every listing. A desktop screen is a page that
+polls, so the front end holds the stream on the page's behalf under a
+ten-second lease that each poll renews, and leaving the screen stops it at
+once. A browse queries and listens on the interfaces eligible when it
+starts and nowhere else — unpatched, the library put the question on
+`docker0` and `tailscale0` too — so a machine that joins a network while
+its screen is open finds what is on it when the screen is reopened.
+
+**Nothing heard is believed, and three rules stand between an
+announcement and a dial**, because anybody on the link can announce any
+name, add records to the real host's name, or send a goodbye that takes the
+real entry out of a joiner's list:
+
+* **The interface is checked.** The browse is confined to the eligible
+  interfaces, and each answer is checked again on `IfaceName` with the
+  announcer's eligibility rules, since an interface can change under a
+  browse that is still running.
+* **The address belongs to that interface.** An entry's address must be
+  link-local, or private and inside a subnet of the interface it was heard
+  on; IPv6 link-local carries that interface as its zone. Otherwise a forged
+  SRV and A record could point this daemon at any host:port anywhere.
+* **One address per entry, resolved once.** The list carries the single
+  address a join dials; a join names the entry, the daemon resolves it when
+  the join starts, and a refusal ends the attempt. That is the joiner's half
+  of decision AV's cap: one exchange per press, never the same PIN at
+  another entry or another address, never an automatic retry.
+
+**Duplicates are shown, not resolved.** One window heard on two interfaces
+is one row. Two rows claiming one name — counting a responder's conflict
+rename, "desk (2)", as the same name, and counting rows rather than tags,
+since the tag is copyable — are both listed and both flagged, with a
+warning to pick neither and use the full code when unsure. Choosing between
+them is exactly what a forged announcement wants done for it. A refused PIN
+says the person may have picked the wrong machine, and a spent code says
+"another machine used this code" as before.
+
+**What announcing leaks**: the instance name, the neutral host name, the
+box's addresses on that link and the pairing port, for as long as an *Add a
+machine* screen is open. If the daemon dies without saying goodbye, peers'
+caches keep the record until its TTL runs out (two minutes for the SRV and
+address records, seven and a half for the PTR and TXT the library sets). A LAN attacker is told exactly when a window opens and
+can race the real joiner to type the PIN — which is what the fingerprint
+comparison is now for (above).
+
+**Phones never browse and never announce.** They pair by the QR, which
+carries the displaying side's identity key and so pins the right machine
+from the first byte; a phone accepts no peer connections, so it never shows
+a code somebody else dials. Discovery is Go code in the daemon and nothing
+else — `internal/discovery`, reached from `pkg/peer` only through the
+`PairingAnnouncer` interface, so the responder and its netlink dependency
+stay out of the gomobile build. This reverses the plan §8 and §19 used to
+carry, that mDNS would arrive with the mobile milestone so the phone could
+find `desktop.local`: the camera is a better channel than any list.
+
+**Why DNS-SD and this library.** Syncthing's own local discovery (UDP
+21027, broadcast and multicast, a device id and addresses) would have been
+easy to copy. DNS-SD won narrowly: no port of our own, it coexists with the
+responder most Linux desktops already run, and standard tools debug it
+(`avahi-browse -r _ladulas-pair._tcp`). `brutella/dnssd` is pure Go,
+maintained, probes and renames on conflict, sends goodbyes, and runs beside
+Avahi; port 5353 is shared with Avahi through `SO_REUSEADDR`, which Go sets
+on any UDP socket bound to a multicast address. **It is carried in the tree
+as `internal/dnssd`, v1.2.14 with a patch**, because it was chosen for
+restricting itself to named interfaces and turned out to restrict only what
+it publishes unprompted: its responder answers queries on every interface,
+its browser asks on every interface, and its `Respond` leaked both sockets
+when the context ended during the probe — which a PIN screen opened and
+closed within a second does. The patch takes interface names in
+`NewResponder` and `LookupType` and filters the connection's sends and
+receives to them, closes the connection on that early return, and adds
+`Responder.Ready` so the screen can wait for the probe; `doc.go` lists it,
+and moving to a newer upstream means re-applying exactly that list. A
+`replace` directive pointing at a fork was the other way to carry it, and
+was rejected because `go install …@version` refuses a module whose
+`go.mod` has one. Rejected: `grandcat/zeroconf` (unmaintained) and its
+`libp2p` fork, which answer on any interface and send goodbyes that can
+evict Avahi's own host records from peers' caches; `hashicorp/mdns`, which
+has no goodbye, no probing and no live browse; and Avahi over D-Bus, which
+is sound but needs the daemon and the system bus, and announces into
+`docker0` and `tailscale0` by default.
 
 ### What a peer's state says, and what it must not
 
@@ -1123,9 +1275,16 @@ buys nothing except owning correlation/cancellation/versioning ourselves.
 
 **Reachability and discovery.** Peers are configured as `host:port`; only
 listeners (desktops/headless boxes) need to be reachable — phones always
-dial out. No NAT traversal is built in (§1 non-goals). Optional later:
-mDNS announcement for LAN discovery during pairing, so the phone can find
-`desktop.local` without typing an address. tsnet (an embedded Tailscale
+dial out. No NAT traversal is built in (§1 non-goals). A pairing on a LAN
+does not need an address typed: the displaying side announces its window
+over DNS-SD while the PIN is on screen, and a joining desktop or headless
+box picks it from a list and dials the address it heard (decision AW, §7).
+That is for pairing only — an established peer is still dialled at its
+recorded addresses, never rediscovered. This paragraph planned, until
+2026-10-14, an optional mDNS announcement "so the phone can find
+`desktop.local` without typing an address"; that plan is superseded,
+because phones pair by the QR, which carries the identity key a list
+cannot, and so never browse at all. tsnet (an embedded Tailscale
 node) stays available as an *option* for exotic embedders of the library,
 but is not load-bearing — and embedding tsnet via gomobile on Android is
 currently broken anyway (tailscale/tailscale#17311).
@@ -3156,7 +3315,10 @@ question decision AD says belongs on this side — what the pairing is for,
 as three rows worded as what each does rather than as which flag it sets.
 Then the invitation: the six-digit PIN and the QR side by side, the full
 code to copy beneath them, and the ways in each is for. Another desktop or
-a headless box types the PIN with the address; another window that cannot
+a headless box finds this one in its own list of machines showing a PIN on
+the network and types the PIN (decision AW), or types it with the address
+when the list does not have it, and the screen says in one sentence whether
+the window is announced and why not when it is not; another window that cannot
 reach this one by address pastes the full code, which carries the identity
 key and so leaves that side nothing to compare by hand; a phone points a
 camera at the QR (decision AE). For the overlap release an older version
@@ -3178,7 +3340,18 @@ draws every other one.
 The screen has had the other end since 2026-09-04: under the question, a
 box for a PIN another machine is showing. The full code carries the address
 and the identity key and needs nothing beside it; a PIN takes the address in
-the second field, as the ten-character code did before it (decision AV). One
+the second field, as the ten-character code did before it (decision AV).
+Above that box, since 2026-10-14, is the list of machines on this network
+showing a PIN right now (decision AW): rows by instance name with the
+address and interface under each, so that two can be told apart rather than
+so that one can be typed. Picking a row opens a PIN box under the list.
+Two rows claiming one name are both marked and a warning says to pick
+neither and paste the full code when unsure; the list never chooses. It is
+read every two seconds while it is on screen and only then — reading it is
+what keeps the daemon browsing, the front end lets go a few seconds after
+the reads stop, and leaving the screen tells it to stop at once. A host
+that cannot browse, which every phone is, answers 501 and the card takes
+itself away. One
 press is one attempt, and a refusal is shown, never retried. The screen said "paste this into the other
 machine's own Add a machine screen" for two weeks before that screen could
 take a paste, which is the kind of promise a sweep finds. Joining asks
@@ -3639,8 +3812,13 @@ The surface (existing pieces from M2/M3 plus planned):
 * pairing — `ladulas pair --listen --intent <approver|requester|mutual>`
   starts one and says what it is for, which settles both sides (decision
   AD), and prints the PIN, the full code and each failed attempt as it
-  happens; `ladulas pair --address <host:port> --pin <PIN>` uses one, as
-  does `--code` with the full code and no address, and declares nothing
+  happens, and whether the window is announced on the local network;
+  `ladulas pair --join` lists the machines showing a PIN on the network
+  (the `BrowsePairings` stream, held for as long as the list is up), takes
+  a pick by number and asks for the PIN, and joins the address the daemon
+  checked for that entry, once (decision AW); `ladulas pair --address
+  <host:port> --pin <PIN>` uses one for a machine the list does not have,
+  as does `--code` with the full code and no address, and declares nothing
   (decision AV). `ladulas pair <host:port> --code <ten characters>` is an
   older instance's code, for the overlap release. Either gives the terminal back once this side's user has
   answered. `ladulas pairings
@@ -4029,7 +4207,15 @@ Threat model sketch (to be expanded in its own document):
   (decision AV), and always prompts. Anybody who can reach the port while a
   PIN is up can spend those five, which denies the pairing and is shown on
   the displaying screen; it does not get them in. Public binds are
-  explicit opt-in (§7) — supported, never accidental.
+  explicit opt-in (§7) — supported, never accidental. Since decision AW
+  the LAN is *told* when a PIN is up: the window is announced over DNS-SD
+  for exactly as long, which hands anybody on the link the moment to
+  start spending attempts, or to race the real joiner with a PIN read off
+  the screen. The first is still only a denial; the second is what the
+  fingerprints on both cards are for. A forged announcement can put a
+  stranger in a joiner's list under the right name, but cannot point the
+  joining daemon off the link: a discovered address is dialled only if it
+  is link-local or private and on the interface it was heard on.
 * **Compromised Tailscale control plane** (when Tailscale is used): outer
   layer only; app-level TOFU identities survive (§7). Tailnet Lock
   optional hardening.
@@ -4299,6 +4485,7 @@ Added 2026-10-14:
 | # | Decision | Resolution |
 |---|----------|------------|
 | AV | What the code a person types is, and what proves it | **a six-digit PIN, proved with CPace and never with an HMAC.** CPace per draft-irtf-cfrg-cpace-21 (CPACE-RISTR255-SHA512, the draft's §10.4 key confirmation), written in `internal/cpace` on `gtank/ristretto255` and tested on the draft's vectors, run inside the pinned TLS channel by two new RPCs, `PairStart` and `PairFinish`. The listener is the initiator and the joiner the responder, so the joiner commits its tag before it receives anything key-derived and the listener verifies it before answering; both identity keys go into CI, joiner first; the associated data carries `ladulas-pairing-v2` and a direction; the listener mints the session id; both rounds must come from one TLS identity; what the joiner says about itself is read only after its tag verifies. An attempt is charged when round one is accepted and refunded only on a verified confirmation, so an unfinished round counts; one counter of five per window covers the PIN and the older proof, and in-flight exchanges are capped by what is left. The displaying side shows each failed attempt with its source, and offers a new PIN when they are spent. For one release the window also holds an independent ten-character secret for older joiners, the full code stays at version 1 with the PIN as a new field, and a joiner holding a PIN never calls the older `Pair` — an unimplemented `PairStart` is a hard failure that names a possible impostor. A spent window answers late joiners "another machine used this code" until it would have expired. Supersedes decision M's *mechanism* — the ten characters, the HMAC proof and the fifty-bit bound — and leaves M's two halves exactly as they were. Rejected: keeping the ten characters and the HMAC (a code, not a PIN, and the PIN is the point); SPAKE2 (needs nothing-up-my-sleeve constants, and the Go implementation is unmaintained); vendoring `the-sarge/cpace` (unreviewed, and a newer Go than the module's); and above all an HMAC keyed with the PIN on any path, including a fallback for older listeners, because twenty bits of HMAC is an offline search of milliseconds. Rationale in §7 |
+| AW | How a joining machine finds the one showing a PIN | **it picks it from a DNS-SD list while both screens are open, and dials the one address the list checked for it.** `_ladulas-pair._tcp` through `github.com/brutella/dnssd` v1.2.14, carried patched as `internal/dnssd` so that its responder answers and its browser asks on the chosen interfaces only (upstream answers queries on every interface whatever `Config.Ifaces` says, which put the name, port and tag in reach of anything on `docker0` while a PIN was up), in `internal/discovery` and reached from `pkg/peer` only through `PairingAnnouncer`. Announced only while a pairing window's PIN is on screen, withdrawn with goodbyes when it is spent, abandoned, replaced or answered and when the node closes; on the interfaces with a bound peer address (every eligible one on an explicit wildcard), minus container and VM interfaces, the tailnet and loopback; instance name as the DNS-SD name, a neutral `ladulas-<random>` host per window, the bound link-local and private addresses, TXT `v=2` and a random session tag that de-duplicates the list and is never a PAKE input. Browsed only while a `BrowsePairings` stream is open — the desktop screen holds one through a lease its polls renew, `ladulas pair --join` for as long as it is listing — and forgotten when nobody is; sealing closes it. The PIN is shown once the probe has settled the name, up to three seconds, and announce and withdraw are serialised per node so a stale withdraw cannot take down a newer window's announcement. A result is listed only if it was heard on an eligible interface (the browse is confined to those, and each answer is checked again on `IfaceName`) and has an address that is link-local or private and inside that interface's subnet; one row per window, every row sharing a name with another flagged as a duplicate and never chosen between. A join names the entry; the daemon resolves it to its one address when the join starts and makes one PIN exchange there, over direct TCP. Phones neither browse nor announce: they pair by the QR, whose identity key a list cannot carry. Supersedes the resolved "mDNS/Bonjour discovery lands with the mobile milestone" and §8's plan for the phone to find `desktop.local`. Rejected: Syncthing-style custom announcements (a port of our own, invisible to standard tools); `grandcat/zeroconf` and its fork (answer on any interface, goodbyes that evict Avahi's host records); `hashicorp/mdns` (no goodbye, no probing, no live browse); Avahi over D-Bus (needs the system bus, announces into `docker0` and `tailscale0`); announcing for as long as the daemon runs, which tells the whole LAN about the box all day for the minute a pairing needs; and listing every address an entry carries, which turns one press into a PIN sprayed at as many addresses as an attacker cares to put in a record. Rationale in §7 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
@@ -4718,9 +4905,15 @@ Open questions resolved 2026-08-08:
   standalone age/rage tooling and the passphrase.
 * **Audit log is append-only JSONL** with identity-key-signed approval
   responses stored on both ends; hash-chaining the log itself is deferred.
-* **mDNS/Bonjour discovery lands with the mobile milestone** (Bonjour is
+* ~~**mDNS/Bonjour discovery lands with the mobile milestone** (Bonjour is
   native on iOS); until then pairing types `host:port`, and the pairing QR
-  carries the address anyway.
+  carries the address anyway.~~ — **superseded 2026-10-14 by decision AW.**
+  Discovery landed for desktops and headless boxes, and not for phones at
+  all: a phone pairs by scanning the QR, which carries the displaying
+  side's identity key and pins the right machine from the first byte, so
+  a list a phone browsed would be a strictly weaker channel than the camera
+  it already has — and would have brought the iOS multicast entitlement
+  and a Swift and a Kotlin half with it.
 
 Still open, to resolve during early implementation:
 

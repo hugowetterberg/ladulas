@@ -279,9 +279,6 @@ func (n *Node) BeginPairing(
 	req *connect.Request[ladulasv1.BeginPairingRequest],
 	stream *connect.ServerStream[ladulasv1.PairingProgress],
 ) error {
-	session := n.newSession(stream)
-	defer session.close()
-
 	intent := trust.IntentFromWire(req.Msg.GetIntent())
 
 	window, secret, err := n.beginPairing(intent)
@@ -298,6 +295,14 @@ func (n *Node) BeginPairing(
 
 	defer n.closeWindow(window)
 
+	// On the local network for as long as the PIN is on this screen, and not a
+	// moment longer: a spent or abandoned window has nothing a list entry could
+	// lead anybody to (decision AW). The deferred withdraw covers every way out
+	// of the loop below; arrival withdraws before following the pairing, because
+	// the screen is showing a card from then on rather than a PIN.
+	announcement := n.announce(window)
+	defer n.withdrawWindow(window)
+
 	addresses := n.Advertised()
 
 	full, err := trust.EncodeCode(trust.NewCode(
@@ -307,6 +312,16 @@ func (n *Node) BeginPairing(
 		return connect.NewError(connect.CodeInternal, err)
 	}
 
+	// The session is registered as an approver only now, with the code ready
+	// to send. Registered any earlier, it is a screen that can be handed a
+	// confirmation still waiting from an earlier pairing — the engine puts
+	// those on whatever answers — and a command line given a card before its
+	// code reads its terminal for an answer and never prints the PIN. The
+	// announcement and the resolver behind Advertised are what made "earlier"
+	// long enough to lose that race.
+	session := n.newSession(stream)
+	defer session.close()
+
 	err = session.send(&ladulasv1.PairingProgress{
 		Kind:            ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_CODE,
 		Pin:             string(window.pin),
@@ -315,6 +330,7 @@ func (n *Node) BeginPairing(
 		ExpiresAt:       timestamppb.New(window.expires),
 		ListenAddresses: addresses,
 		Intent:          trust.IntentToWire(intent),
+		Announcement:    announcement,
 	})
 	if err != nil {
 		return err
@@ -325,6 +341,8 @@ func (n *Node) BeginPairing(
 	for {
 		select {
 		case pairing := <-window.arrived:
+			n.withdrawWindow(window)
+
 			return n.followPairing(ctx, session, pairing)
 		case attempt := <-window.attempted:
 			err := session.send(&ladulasv1.PairingProgress{

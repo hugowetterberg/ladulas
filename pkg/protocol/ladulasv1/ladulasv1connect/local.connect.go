@@ -129,6 +129,9 @@ const (
 	// ControlServicePairWithPeerProcedure is the fully-qualified name of the ControlService's
 	// PairWithPeer RPC.
 	ControlServicePairWithPeerProcedure = "/ladulas.v1.ControlService/PairWithPeer"
+	// ControlServiceBrowsePairingsProcedure is the fully-qualified name of the ControlService's
+	// BrowsePairings RPC.
+	ControlServiceBrowsePairingsProcedure = "/ladulas.v1.ControlService/BrowsePairings"
 	// ControlServiceAnswerPairingProcedure is the fully-qualified name of the ControlService's
 	// AnswerPairing RPC.
 	ControlServiceAnswerPairingProcedure = "/ladulas.v1.ControlService/AnswerPairing"
@@ -450,6 +453,12 @@ type ControlServiceClient interface {
 	// PairWithPeer dials a peer that is displaying a code. Same stream, same
 	// confirmation.
 	PairWithPeer(context.Context, *connect.Request[ladulasv1.PairWithPeerRequest]) (*connect.ServerStreamForClient[ladulasv1.PairingProgress], error)
+	// BrowsePairings lists the machines on the local network that are showing a
+	// pairing PIN (decision AW). The instance browses for as long as somebody
+	// holds a stream open and not otherwise; each message is the whole list as
+	// it now stands. A join names an entry by id in PairWithPeerRequest.nearby,
+	// while the stream that listed it is still open.
+	BrowsePairings(context.Context, *connect.Request[ladulasv1.BrowsePairingsRequest]) (*connect.ServerStreamForClient[ladulasv1.NearbyPairings], error)
 	// AnswerPairing settles the confirmation a PairingProgress asked for, by the
 	// request id of the prompt. It is the surface a pairing command uses while it
 	// is still on screen; the pairings verbs below are the surface for everything
@@ -769,6 +778,12 @@ func NewControlServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(controlServiceMethods.ByName("PairWithPeer")),
 			connect.WithClientOptions(opts...),
 		),
+		browsePairings: connect.NewClient[ladulasv1.BrowsePairingsRequest, ladulasv1.NearbyPairings](
+			httpClient,
+			baseURL+ControlServiceBrowsePairingsProcedure,
+			connect.WithSchema(controlServiceMethods.ByName("BrowsePairings")),
+			connect.WithClientOptions(opts...),
+		),
 		answerPairing: connect.NewClient[ladulasv1.AnswerPairingRequest, ladulasv1.AnswerPairingResponse](
 			httpClient,
 			baseURL+ControlServiceAnswerPairingProcedure,
@@ -942,6 +957,7 @@ type controlServiceClient struct {
 	retractEndorsement   *connect.Client[ladulasv1.RetractEndorsementRequest, ladulasv1.RetractEndorsementResponse]
 	beginPairing         *connect.Client[ladulasv1.BeginPairingRequest, ladulasv1.PairingProgress]
 	pairWithPeer         *connect.Client[ladulasv1.PairWithPeerRequest, ladulasv1.PairingProgress]
+	browsePairings       *connect.Client[ladulasv1.BrowsePairingsRequest, ladulasv1.NearbyPairings]
 	answerPairing        *connect.Client[ladulasv1.AnswerPairingRequest, ladulasv1.AnswerPairingResponse]
 	listPendingPairings  *connect.Client[ladulasv1.ListPendingPairingsRequest, ladulasv1.ListPendingPairingsResponse]
 	answerPendingPairing *connect.Client[ladulasv1.AnswerPendingPairingRequest, ladulasv1.AnswerPendingPairingResponse]
@@ -1115,6 +1131,11 @@ func (c *controlServiceClient) BeginPairing(ctx context.Context, req *connect.Re
 // PairWithPeer calls ladulas.v1.ControlService.PairWithPeer.
 func (c *controlServiceClient) PairWithPeer(ctx context.Context, req *connect.Request[ladulasv1.PairWithPeerRequest]) (*connect.ServerStreamForClient[ladulasv1.PairingProgress], error) {
 	return c.pairWithPeer.CallServerStream(ctx, req)
+}
+
+// BrowsePairings calls ladulas.v1.ControlService.BrowsePairings.
+func (c *controlServiceClient) BrowsePairings(ctx context.Context, req *connect.Request[ladulasv1.BrowsePairingsRequest]) (*connect.ServerStreamForClient[ladulasv1.NearbyPairings], error) {
+	return c.browsePairings.CallServerStream(ctx, req)
 }
 
 // AnswerPairing calls ladulas.v1.ControlService.AnswerPairing.
@@ -1398,6 +1419,12 @@ type ControlServiceHandler interface {
 	// PairWithPeer dials a peer that is displaying a code. Same stream, same
 	// confirmation.
 	PairWithPeer(context.Context, *connect.Request[ladulasv1.PairWithPeerRequest], *connect.ServerStream[ladulasv1.PairingProgress]) error
+	// BrowsePairings lists the machines on the local network that are showing a
+	// pairing PIN (decision AW). The instance browses for as long as somebody
+	// holds a stream open and not otherwise; each message is the whole list as
+	// it now stands. A join names an entry by id in PairWithPeerRequest.nearby,
+	// while the stream that listed it is still open.
+	BrowsePairings(context.Context, *connect.Request[ladulasv1.BrowsePairingsRequest], *connect.ServerStream[ladulasv1.NearbyPairings]) error
 	// AnswerPairing settles the confirmation a PairingProgress asked for, by the
 	// request id of the prompt. It is the surface a pairing command uses while it
 	// is still on screen; the pairings verbs below are the surface for everything
@@ -1713,6 +1740,12 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 		connect.WithSchema(controlServiceMethods.ByName("PairWithPeer")),
 		connect.WithHandlerOptions(opts...),
 	)
+	controlServiceBrowsePairingsHandler := connect.NewServerStreamHandler(
+		ControlServiceBrowsePairingsProcedure,
+		svc.BrowsePairings,
+		connect.WithSchema(controlServiceMethods.ByName("BrowsePairings")),
+		connect.WithHandlerOptions(opts...),
+	)
 	controlServiceAnswerPairingHandler := connect.NewUnaryHandler(
 		ControlServiceAnswerPairingProcedure,
 		svc.AnswerPairing,
@@ -1913,6 +1946,8 @@ func NewControlServiceHandler(svc ControlServiceHandler, opts ...connect.Handler
 			controlServiceBeginPairingHandler.ServeHTTP(w, r)
 		case ControlServicePairWithPeerProcedure:
 			controlServicePairWithPeerHandler.ServeHTTP(w, r)
+		case ControlServiceBrowsePairingsProcedure:
+			controlServiceBrowsePairingsHandler.ServeHTTP(w, r)
 		case ControlServiceAnswerPairingProcedure:
 			controlServiceAnswerPairingHandler.ServeHTTP(w, r)
 		case ControlServiceListPendingPairingsProcedure:
@@ -2086,6 +2121,10 @@ func (UnimplementedControlServiceHandler) BeginPairing(context.Context, *connect
 
 func (UnimplementedControlServiceHandler) PairWithPeer(context.Context, *connect.Request[ladulasv1.PairWithPeerRequest], *connect.ServerStream[ladulasv1.PairingProgress]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.PairWithPeer is not implemented"))
+}
+
+func (UnimplementedControlServiceHandler) BrowsePairings(context.Context, *connect.Request[ladulasv1.BrowsePairingsRequest], *connect.ServerStream[ladulasv1.NearbyPairings]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("ladulas.v1.ControlService.BrowsePairings is not implemented"))
 }
 
 func (UnimplementedControlServiceHandler) AnswerPairing(context.Context, *connect.Request[ladulasv1.AnswerPairingRequest]) (*connect.Response[ladulasv1.AnswerPairingResponse], error) {

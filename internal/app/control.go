@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/hugowetterberg/ladulas/internal/discovery"
 	"github.com/hugowetterberg/ladulas/pkg/agent"
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	"github.com/hugowetterberg/ladulas/pkg/keystore"
@@ -16,6 +17,7 @@ import (
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // controlService is the instance's complete management surface (§14), and the
@@ -694,7 +696,123 @@ func (s *controlService) PairWithPeer(
 		return err
 	}
 
+	if req.Msg.GetNearby() != "" {
+		resolved, err := s.resolveNearby(req.Msg)
+		if err != nil {
+			return err
+		}
+
+		req = connect.NewRequest(resolved)
+	}
+
 	return node.PairWithPeer(ctx, req, stream)
+}
+
+// resolveNearby turns a join that names a listed machine into one that names
+// the address the list checked for it (decision AW).
+//
+// It is resolved here, once, when the join starts: the entry's one address is
+// dialled and nothing else is, and a refusal is the end of the attempt. The
+// joiner's cap in decision AV is "one PIN exchange per press, never the same
+// PIN at another entry or another address", and resolving to a single address
+// before anything is dialled is the half of that the list is responsible for.
+//
+// The code has to be the PIN. A machine found this way was found by name, so
+// a typed PIN is all the person has; a full code carries its own key and its
+// own addresses and has no use for a list.
+func (s *controlService) resolveNearby(
+	msg *ladulasv1.PairWithPeerRequest,
+) (*ladulasv1.PairWithPeerRequest, error) {
+	if msg.GetAddress() != "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("name a machine from the list or give an address, not both"))
+	}
+
+	pin, err := trust.ParsePIN(msg.GetCode())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("a machine picked from the list takes the six-digit PIN "+
+				"it is showing"))
+	}
+
+	nearby := s.app.Nearby()
+	if nearby == nil {
+		return nil, connect.NewError(
+			connect.CodeFailedPrecondition, s.app.noStoreError())
+	}
+
+	entry, ok := nearby.Resolve(msg.GetNearby())
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound,
+			errors.New("that machine is no longer showing a PIN on the "+
+				"network; look again"))
+	}
+
+	return &ladulasv1.PairWithPeerRequest{
+		Address: entry.Address,
+		Code:    string(pin),
+	}, nil
+}
+
+// BrowsePairings lists the machines on the local network showing a pairing
+// PIN, for as long as the caller holds the stream (decision AW). The instance
+// browses only while somebody does.
+//
+// It needs the peer channel, not just the store, because a list of machines
+// to pair with is no use to an instance that cannot dial one.
+func (s *controlService) BrowsePairings(
+	ctx context.Context,
+	_ *connect.Request[ladulasv1.BrowsePairingsRequest],
+	stream *connect.ServerStream[ladulasv1.NearbyPairings],
+) error {
+	if _, err := s.peerControl(); err != nil {
+		return err
+	}
+
+	nearby := s.app.Nearby()
+	if nearby == nil {
+		return connect.NewError(connect.CodeFailedPrecondition, s.app.noStoreError())
+	}
+
+	updates, release, err := nearby.Subscribe()
+	if err != nil {
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	defer release()
+
+	for {
+		if err := stream.Send(nearbyToWire(nearby.List())); err != nil {
+			return err
+		}
+
+		select {
+		case _, open := <-updates:
+			if !open {
+				return connect.NewError(connect.CodeFailedPrecondition,
+					discovery.ErrBrowserClosed)
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func nearbyToWire(entries []discovery.Entry) *ladulasv1.NearbyPairings {
+	out := &ladulasv1.NearbyPairings{}
+
+	for _, entry := range entries {
+		out.Pairings = append(out.Pairings, &ladulasv1.NearbyPairing{
+			Id:        entry.ID,
+			Name:      entry.Name,
+			Interface: entry.Interface,
+			Address:   entry.Address,
+			Duplicate: entry.Duplicate,
+			SeenAt:    timestamppb.New(entry.SeenAt),
+		})
+	}
+
+	return out
 }
 
 func (s *controlService) AnswerPairing(

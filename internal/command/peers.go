@@ -336,17 +336,24 @@ func pairCommand() *cli.Command {
 	return &cli.Command{
 		Name: "pair",
 		Usage: "pair with another instance: --listen --intent <what for> to " +
-			"display a PIN, or --address <host:port> --pin <PIN> to use one",
+			"display a PIN, or --join to pick a machine showing one on the " +
+			"local network and type its PIN",
 		ArgsUsage: "[host:port]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "listen",
 				Usage: "display a pairing PIN and wait for the other instance",
 			},
+			&cli.BoolFlag{
+				Name: "join",
+				Usage: "list the machines on the local network showing a " +
+					"pairing PIN, pick one, and type its PIN",
+			},
 			&cli.StringFlag{
 				Name: "address",
-				Usage: "`host:port` of the instance displaying the PIN; the " +
-					"same as giving it as the argument",
+				Usage: "`host:port` of the instance displaying the PIN, for " +
+					"when --join does not find it; the same as giving it as " +
+					"the argument",
 			},
 			&cli.StringFlag{
 				Name:  "pin",
@@ -378,6 +385,7 @@ func pairCommand() *cli.Command {
 // pairUsage is both ways in, because somebody who got the command wrong is as
 // likely to be on either machine.
 const pairUsage = "Usage: ladulas pair --listen --intent <approver|requester|mutual>, " +
+	"or ladulas pair --join, " +
 	"or ladulas pair --address <host:port> --pin <PIN>, " +
 	"or ladulas pair --code <full code>"
 
@@ -421,6 +429,15 @@ func runPair(ctx context.Context, cmd *cli.Command) error {
 		code = string(parsed)
 	}
 
+	if cmd.Bool("join") {
+		if listening || address != "" || cmd.String("code") != "" {
+			return cli.Exit("--join finds the machine by itself: give it no "+
+				"address and no code, and run --listen on the other machine.", 1)
+		}
+
+		return runJoin(ctx, cmd, client, trust.PIN(code))
+	}
+
 	var (
 		stream *connect.ServerStreamForClient[ladulasv1.PairingProgress]
 		err    error
@@ -455,7 +472,7 @@ func runPair(ctx context.Context, cmd *cli.Command) error {
 		_ = stream.Close()
 	}()
 
-	return followPairing(ctx, cmd, client, stream)
+	return followPairing(ctx, cmd, client, stream, nil)
 }
 
 // pairIntentUsage is the question rather than a complaint about the answer: a
@@ -471,14 +488,22 @@ Whichever you choose settles both sides, so the machine that joins is not
 asked again. Changing it later means removing the peer and pairing again.`
 
 // followPairing prints the exchange as it happens and answers the confirmation.
+// first, when set, is called once the instance has said anything at all, which
+// is how a join from the list knows it no longer needs the list.
 func followPairing(
 	ctx context.Context,
 	cmd *cli.Command,
 	client *localapi.Client,
 	stream *connect.ServerStreamForClient[ladulasv1.PairingProgress],
+	first func(),
 ) error {
 	for stream.Receive() {
 		progress := stream.Msg()
+
+		if first != nil {
+			first()
+			first = nil
+		}
 
 		switch progress.GetKind() {
 		case ladulasv1.PairingProgressKind_PAIRING_PROGRESS_KIND_CODE:
@@ -532,8 +557,17 @@ func printPairingCode(progress *ladulasv1.PairingProgress) {
 		fmt.Printf("The machine that joins %s\n", intent.Describe())
 	}
 
+	// Whether the other machine will find this one by itself, said before the
+	// instructions that depend on it (decision AW).
+	if announcement := progress.GetAnnouncement(); announcement != "" {
+		fmt.Printf("%s.\n", strings.TrimSuffix(announcement, "."))
+	}
+
 	fmt.Println()
-	fmt.Println("On the other machine:")
+	fmt.Println("On the other machine, pick this one from the list and type the PIN:")
+	fmt.Println("  ladulas pair --join")
+	fmt.Println()
+	fmt.Println("Or, if it does not show up there:")
 	fmt.Printf("  ladulas pair --address %s --pin %s\n",
 		firstAddress(progress.GetListenAddresses()), string(pin))
 

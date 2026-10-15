@@ -130,6 +130,7 @@ calls a normal state.
 | Agent socket | `$XDG_RUNTIME_DIR/ladulas/agent.sock` | The SSH agent. `SSH_AUTH_SOCK` points here. 0600 in a 0700 directory, plus a peer-uid check |
 | Control socket | `$XDG_RUNTIME_DIR/ladulas/control.sock` | `SigningService` (`ladulas-sign`) and `ControlService` (the CLI). Same gate |
 | Peer channel | TCP 7373, on the tailnet **and** the local network, whichever the machine has; loopback only when it has neither | Pinned-TLS connect RPCs from paired instances. `ladulas listen` says what was chosen and what was passed over; public binds need `--peer-listen-public` |
+| Pairing discovery | UDP 5353 multicast (mDNS), shared with Avahi | `_ladulas-pair._tcp`, announced only while a PIN is on screen and browsed only while a joining screen or `ladulas pair --join` is listing ([decision AW](architecture.md#7-identity-pairing-and-trust)). Nothing is sent or listened for at any other time; a firewall that drops it costs the list, never the pairing |
 | Daemon debug | **off** | Prometheus metrics and pprof, when `LADULAS_DEBUG_ADDR` names an address |
 | Relay API | TCP 8443 (guppy's tailnet address) | `RelayService`, cleartext HTTP/2 by design — WireGuard is the transport security |
 | Relay debug | `127.0.0.1:8444` | Prometheus metrics and pprof |
@@ -525,6 +526,48 @@ The peer sees the rejection; this machine sees nothing at all, because the
 packet never reached a socket. A daemon that says its channel is up is
 reporting a bind, not a route, and the report is honest as far as it goes.
 
+### The other machine does not show up in the list
+
+**Signal:** one machine is showing a PIN, and the other's *Add a machine*
+list or `ladulas pair --join` stays empty, or lists other machines but not
+that one.
+**Action:** the list is DNS-SD on the local network
+([decision AW](architecture.md#7-identity-pairing-and-trust)), and nothing
+on either side reports a failure to hear it: silence is the symptom. First
+read the sentence under the PIN on the **displaying** side — it says where
+the window is announced, or why it is not (a listener bound only to the
+tailnet or loopback announces nothing, and container bridges and
+`tailscale0` are never announced on). Then, on the **joiner**, run
+
+```
+avahi-browse -r _ladulas-pair._tcp
+```
+
+If Avahi sees the record, multicast is getting through and the joiner's
+daemon is passing it over on purpose: the address it carries is not
+link-local or private inside the subnet of the interface it arrived on, or
+it arrived on an interface the daemon leaves out — the reason is logged at
+debug. If Avahi does not see it either, something between the two is
+dropping multicast DNS:
+
+* **a firewall without inbound UDP 5353** on either machine — firewalld's
+  `mdns` service, or `ufw allow 5353/udp`. It fails silently on both sides;
+* **multicast filtering** on the switch or access point, or
+  **Wi-Fi client isolation** (guest networks, many offices), which stops
+  two clients on one access point from reaching each other at all;
+* **a VPN** that has taken the default route or the LAN interface, or the
+  two machines being on different subnets — mDNS does not cross a router.
+
+One cause that is neither: the joiner looks only on the interfaces that
+were up and eligible when its screen opened (or when `ladulas pair --join`
+started), so a laptop that joined the network after that lists nothing
+until the screen is left and opened again.
+
+Checking from the announcing box itself proves little: Avahi's cache there
+lists the record on every interface and keeps copies after the goodbye. The
+way round all of it is the one the screen offers — the PIN with an address,
+or the full code — and neither needs multicast.
+
 ### A PIN is refused, or the code was already used
 
 **Signal:** the joining side says the PIN was refused, that another machine
@@ -535,8 +578,9 @@ on the network is guessing.
 that PIN, charged when it starts and given back only when it verifies, so
 an exchange started and abandoned counts too
 ([decision AV](architecture.md#7-identity-pairing-and-trust)). A refused
-PIN is a typo or the wrong address: check both and try once more. Nothing
-retries on its own. "Another machine used this code" means the displaying
+PIN is a typo, the wrong address, or the wrong entry picked from the list —
+two entries with one name are both flagged, and one of them is not the
+machine you mean: check and try once more. Nothing retries on its own. "Another machine used this code" means the displaying
 side now holds a pending pairing with somebody else — reject it there, with
 `ladulas pairings reject` or on the card, and show a new PIN. "May be an
 impostor" means what answered at that address does not speak the PIN
@@ -842,7 +886,10 @@ build reattaches to the new daemon perfectly happily.
   open pairing window, nor half way through a written-down pairing gets a
   handshake and a refusal. One arriving at a window gets the pairing
   service, five attempts at the PIN shared with everybody else, and
-  nothing it can search offline (decision AV). The relay's is the signature check on every
+  nothing it can search offline (decision AV). While a PIN is up the
+  window is announced over mDNS on the LAN (decision AW), which tells the
+  link when to try; a discovered address is dialled only if it is
+  link-local or private and on the interface it was heard on. The relay's is the signature check on every
   call, and a clock more than the allowed skew from its own is refused.
 * **Outbound credentials:** the APNs `.p8` reaches the relay through
   systemd `LoadCredential=` and is never in the unit's environment. The

@@ -27,6 +27,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/hugowetterberg/ladulas/internal/discovery"
 	"github.com/hugowetterberg/ladulas/internal/localapi"
 	"github.com/hugowetterberg/ladulas/pkg/agent"
 	"github.com/hugowetterberg/ladulas/pkg/approval"
@@ -201,6 +202,9 @@ type App struct {
 	prompt    string
 	core      *core
 	approvers []*approverSlot
+	// announced is told how each pairing announcement went (decision AW),
+	// for the metrics port. Set once by internal/observe.
+	announced func(outcome string)
 	// unsealWaiters are told when the data encryption key arrives, whichever
 	// way it arrived.
 	unsealWaiters []chan struct{}
@@ -241,6 +245,11 @@ type core struct {
 	// stop and served are the peer listener's lifetime, when one is running.
 	stop   context.CancelFunc
 	served chan error
+	// nearby lists the machines on the local network showing a pairing PIN,
+	// while somebody is looking (decision AW). It is the core's because it
+	// exists only to pair, and pairing needs the store: sealing closes it,
+	// and every listing open at the time ends with it.
+	nearby *discovery.Browser
 }
 
 // listenSetting is a peer-channel bind specification and where it came from.
@@ -474,6 +483,7 @@ func (a *App) buildCore(vault *keystore.Vault) (*core, error) {
 		engine:   engine,
 		projects: projects,
 		versions: versions,
+		nearby:   discovery.NewBrowser(a.log),
 	}
 
 	built.listen = a.listenSetting(vault)
@@ -565,6 +575,18 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 		return nil, err
 	}
 
+	// A window is put on the local network while its PIN is on screen, on the
+	// interfaces this node's listener bound (decision AW). The announcer asks
+	// the node rather than being told once, because the node can be rebound
+	// without being rebuilt.
+	announcer := discovery.NewAnnouncer(a.log, node.Addresses)
+	announcer.Observe = func(outcome string) {
+		if observe := a.announcementObserver(); observe != nil {
+			observe(outcome)
+		}
+	}
+	node.AnnouncePairingWith(announcer)
+
 	// The engine decides and the node reaches; a delegated use needs both, and
 	// the node is built around the engine, so this is where the two are
 	// introduced (decision P).
@@ -576,6 +598,39 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 	built.engine.PublishEndorsements(node.PublishEndorsement)
 
 	return node, nil
+}
+
+// ObservePairingAnnouncements registers what is told how each pairing
+// announcement went: "announced", or "not_announced" when the listener had
+// nothing on a local network to announce (decision AW). It is read at each
+// announcement, so it does not matter whether the store was unsealed first.
+func (a *App) ObservePairingAnnouncements(fn func(outcome string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.announced = fn
+}
+
+// announcementObserver is the registered observer, read under the lock,
+// since a peer channel is built while the instance is serving.
+func (a *App) announcementObserver() func(outcome string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	return a.announced
+}
+
+// Nearby is the local-network pairing list, or nil while sealed (decision
+// AW).
+func (a *App) Nearby() *discovery.Browser {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.core == nil {
+		return nil
+	}
+
+	return a.core.nearby
 }
 
 // Log returns the logger the instance was built with.

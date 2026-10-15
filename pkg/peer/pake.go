@@ -68,10 +68,12 @@ var (
 		"another machine used this code — reject the pairing on the other screen")
 
 	// ErrPINRefused is the listener refusing the PIN, which is either a typo
-	// or the wrong machine.
+	// or the wrong machine: a wrong address typed, or a wrong entry picked
+	// from the list (decision AW), which can be a stranger's announcement
+	// under the right name.
 	ErrPINRefused = errors.New(
 		"that machine refused the PIN — if you typed it correctly, " +
-			"you may have the wrong address")
+			"you may have picked the wrong machine or address")
 
 	// ErrPossibleImpostor is a machine that answered at the address but does
 	// not behave like one displaying this PIN: one that does not speak the PIN

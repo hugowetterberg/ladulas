@@ -277,6 +277,13 @@ service ControlService {
   // confirmation.
   rpc PairWithPeer(PairWithPeerRequest) returns (stream PairingProgress);
 
+  // BrowsePairings lists the machines on the local network that are showing a
+  // pairing PIN (decision AW). The instance browses for as long as somebody
+  // holds a stream open and not otherwise; each message is the whole list as
+  // it now stands. A join names an entry by id in PairWithPeerRequest.nearby,
+  // while the stream that listed it is still open.
+  rpc BrowsePairings(BrowsePairingsRequest) returns (stream NearbyPairings);
+
   // AnswerPairing settles the confirmation a PairingProgress asked for, by the
   // request id of the prompt. It is the surface a pairing command uses while it
   // is still on screen; the pairings verbs below are the surface for everything
@@ -1181,7 +1188,7 @@ message BeginPairingRequest {
 
 message PairWithPeerRequest {
   // host:port of the instance displaying the code. May be empty when the code
-  // is a full one, which carries the address.
+  // is a full one, which carries the address, and is empty with `nearby`.
   string address = 1;
   // The code as it was displayed: the six-digit PIN, the ten-character code
   // an older instance shows, or the full string a QR carries.
@@ -1192,6 +1199,39 @@ message PairWithPeerRequest {
   // the confirmation card rather than choosing it in advance.
   reserved 3, 4;
   reserved "peer_may_approve", "peer_may_request";
+
+  // An entry from BrowsePairings, instead of an address (decision AW). The
+  // instance dials the one address it checked for that entry, once, and the
+  // code must then be the PIN: a full code carries its own addresses and
+  // needs no list.
+  string nearby = 5;
+}
+
+message BrowsePairingsRequest {}
+
+// NearbyPairing is one machine showing a pairing PIN, as heard on the local
+// network. Nothing in it is authenticated — anybody on the link can announce
+// any name — which is why duplicates are flagged rather than resolved, and why
+// the PIN exchange and the fingerprints on both cards still decide.
+message NearbyPairing {
+  // What PairWithPeerRequest.nearby names. Meaningful to this instance only,
+  // and only while it is listed.
+  string id = 1;
+  // The instance name the machine announced.
+  string name = 2;
+  // The interface the announcement was heard on.
+  string interface = 3;
+  // The one address a join would dial: link-local, or private and on that
+  // interface's subnet.
+  string address = 4;
+  // Another listed machine claims the same name. At most one of them is the
+  // machine the person means, and the list cannot say which.
+  bool duplicate = 5;
+  google.protobuf.Timestamp seen_at = 6;
+}
+
+message NearbyPairings {
+  repeated NearbyPairing pairings = 1;
 }
 
 // PairingProgressKind is where a pairing exchange has got to.
@@ -1245,6 +1285,10 @@ message PairingProgress {
   // rather than the clock running out, and the surface offers a new PIN
   // rather than closing quietly.
   bool exhausted = 12;
+  // On CODE: where the window is announced on the local network, or why it
+  // is not, as one sentence (decision AW). Empty on an instance that never
+  // announces.
+  string announcement = 13;
 }
 
 message AnswerPairingRequest {

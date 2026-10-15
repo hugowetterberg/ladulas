@@ -339,6 +339,12 @@ func (a *App) tearDown(current *core) {
 
 	a.stopPeer(current)
 
+	// Nothing is listed for an instance that cannot pair, and every listing
+	// open now ends here rather than going quiet (decision AW).
+	if current.nearby != nil {
+		current.nearby.Close()
+	}
+
 	// The parked keys go with the seal (decision AU). Seal means the machine
 	// holds nothing usable, and a parked key surviving it would make that
 	// false; the tools that parked them were written against an agent that

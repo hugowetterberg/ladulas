@@ -1420,6 +1420,17 @@ button.danger:hover:not(:disabled) {
   background: var(--control);
 }
 
+/* The machines on the network showing a PIN (decision AW): rows to pick from,
+   with the PIN box appearing under them once one is picked. */
+.card.nearby .nearby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.card.nearby .nearby-form { margin-top: 6px; }
+
 .card.pairing-code { text-align: center; }
 
 .card.pairing-code .code {

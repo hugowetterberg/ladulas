@@ -378,6 +378,14 @@ func checkBindHost(host string, allowPublic bool) error {
 // rule; an explicit address always wins, and every skip is reported with its
 // reason so that a listener missing from somewhere is a question with an answer.
 func virtualInterface(name string) bool {
+	return IsVirtualInterface(name)
+}
+
+// IsVirtualInterface is virtualInterface for the rest of the daemon: the
+// pairing announcement (decision AW) leaves out the same interfaces the
+// automatic policy does, for the same reason, and one list of names is what
+// keeps the two from disagreeing about what a container bridge is.
+func IsVirtualInterface(name string) bool {
 	for _, prefix := range []string{
 		"docker", "br-", "veth", "virbr", "vnet", "podman", "cni", "flannel",
 		"kube", "lxcbr", "lxdbr", "vboxnet", "vmnet", "mpqemubr", "tap", "dummy",

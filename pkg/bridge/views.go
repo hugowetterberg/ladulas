@@ -464,6 +464,9 @@ type InvitationView struct {
 	// Ended is why the code was withdrawn early, when it was: its attempts
 	// were spent, and the screen offers a new PIN.
 	Ended string `json:"ended,omitempty"`
+	// Announcement says whether a joining machine will find this one in its
+	// list, and if not why not (decision AW).
+	Announcement string `json:"announcement,omitempty"`
 }
 
 // PairingAttemptView is a failed attempt at a displayed code.
@@ -475,13 +478,14 @@ type PairingAttemptView struct {
 
 func invitationView(invitation Invitation) InvitationView {
 	view := InvitationView{
-		PIN:       trust.PIN(invitation.PIN).Display(),
-		Code:      invitation.Code,
-		FullCode:  invitation.FullCode,
-		Addresses: invitation.Addresses,
-		Intent:    invitation.Intent.String(),
-		Direction: invitation.Intent.Describe(),
-		Ended:     invitation.Ended,
+		PIN:          trust.PIN(invitation.PIN).Display(),
+		Code:         invitation.Code,
+		FullCode:     invitation.FullCode,
+		Addresses:    invitation.Addresses,
+		Intent:       invitation.Intent.String(),
+		Direction:    invitation.Intent.Describe(),
+		Ended:        invitation.Ended,
+		Announcement: invitation.Announcement,
 	}
 
 	for _, attempt := range invitation.Attempts {
@@ -903,6 +907,19 @@ func localTierWord(bound []string) string {
 	}
 
 	return "the tailnet and local network addresses"
+}
+
+// NearbyView is one machine showing a PIN on the local network, as a joining
+// screen lists it (decision AW). The address is shown so that two entries can
+// be told apart, not so that it can be typed.
+type NearbyView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Interface string `json:"interface,omitempty"`
+	Address   string `json:"address,omitempty"`
+	// Duplicate is another listed machine with the same name. The screen
+	// says so, and does not choose between them.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // JoinView is what a screen is told when a typed PIN or a pasted code reached

@@ -25,6 +25,7 @@ type Daemon struct {
 	decisions *prometheus.CounterVec
 	wait      *prometheus.HistogramVec
 	signature prometheus.Counter
+	announced *prometheus.CounterVec
 }
 
 // RegisterDaemon builds the daemon's metrics, registers them, and attaches
@@ -53,6 +54,13 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 			"Time from a request arriving to it being decided. The long tail is "+
 				"a person walking back to their desk, not a slow machine.",
 			waitBuckets, labelOrigin),
+		announced: r.counter("", "pairing_announcements_total",
+			"Pairing windows put on the local network for discovery, by "+
+				"outcome (decision AW). not_announced is a window whose PIN "+
+				"was shown with the listener bound nowhere on a local network "+
+				"— off, loopback, or a tailnet only — so no joining machine "+
+				"could have listed it.",
+			labelOutcome),
 		signature: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "signatures_total",
@@ -70,8 +78,22 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 	}
 
 	instance.Audit.Observe(metrics.record)
+	instance.ObservePairingAnnouncements(metrics.announcement)
 
 	return nil
+}
+
+// announcement counts one pairing announcement. The outcome is one of the
+// announcer's two words, and anything else is other, so the vocabulary stays
+// the one declared here.
+func (d *Daemon) announcement(outcome string) {
+	switch outcome {
+	case "announced", "not_announced":
+	default:
+		outcome = other
+	}
+
+	d.announced.WithLabelValues(outcome).Inc()
 }
 
 // record turns one audit entry into counts. It is the audit log's observer, so
