@@ -76,7 +76,9 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 				"while in use; switched is a link moving path make-before-break "+
 				"and fallback one moving after its path broke, neither of them "+
 				"a presence change; reoffered is the offer said again over a "+
-				"direct contact after a failure.",
+				"direct contact after a failure. pairing_server_started and "+
+				"pairing_server_failed are a displayed code's pairing server "+
+				"coming up or not (decision AZ).",
 			labelEvent),
 		signature: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -107,7 +109,8 @@ func (d *Daemon) tunnelEvent(event string) {
 	switch event {
 	case "server_started", "server_failed", "offer_received", "offer_withdrawn",
 		"admitted", "revoked", "refused", "region_refused",
-		"raised", "raise_failed", "failed", "switched", "fallback", "reoffered":
+		"raised", "raise_failed", "failed", "switched", "fallback", "reoffered",
+		"pairing_server_started", "pairing_server_failed":
 	default:
 		event = other
 	}

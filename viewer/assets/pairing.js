@@ -430,6 +430,12 @@ function displayed(invitation, stopped, show, state) {
     append(code, ui.note(invitation.announcement));
   }
 
+  // And whether the full code reaches this machine from another network,
+  // through its pairing server, or why it does not (decision AZ).
+  if (invitation.offNetwork) {
+    append(code, ui.note(invitation.offNetwork));
+  }
+
   // The full code under them: what a window that cannot see this one pastes,
   // and what the phone scans, as a string.
   append(code,

@@ -547,6 +547,12 @@ func printPairingCode(progress *ladulasv1.PairingProgress) {
 		fmt.Printf("%s.\n", strings.TrimSuffix(announcement, "."))
 	}
 
+	// And whether the full code reaches it from another network, through the
+	// pairing server, or why not (decision AZ).
+	if offNetwork := progress.GetOffNetwork(); offNetwork != "" {
+		fmt.Printf("%s.\n", strings.TrimSuffix(offNetwork, "."))
+	}
+
 	fmt.Println()
 	fmt.Println("On the other machine, pick this one from the list and type the PIN:")
 	fmt.Println("  ladulas pair --join")

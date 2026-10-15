@@ -103,13 +103,17 @@ func Dialable(record *storepb.TrustRecord, ours int32) bool {
 // convergence loop dials a pending peer to settle the pairing, and a peer it
 // cannot dial is one that will come to it.
 //
-// It counts direct addresses only. Settling a pending pairing over the tunnel
-// arrives with the pairing server, which is the only way a pending pairing can
-// be born with no direct address; until then every pending peer that can be
-// dialled at all has an address, and counting a tunnel the settle path does
-// not take would make a pending peer neither dialled nor waited for.
-func PendingDialable(pending *storepb.PendingPairing) bool {
-	return len(pending.GetAddresses()) > 0
+// It is the same rule as Dialable: a direct address, or a tunnel offer this
+// instance can raise a client against. The offer counts since the pairing
+// server (decision AZ), which is how a pairing is born with no direct path
+// between its two sides at all — a café laptop and a desktop at home — and
+// then the long-lived tunnels the exchange carried are the only way either
+// side can reach the other to settle. Until then this counted direct
+// addresses only, because nothing could produce a pending pairing that was
+// dialable any other way, and counting a tunnel the settle path did not take
+// would have made a pending peer neither dialled nor waited for.
+func PendingDialable(pending *storepb.PendingPairing, ours int32) bool {
+	return len(pending.GetAddresses()) > 0 || TunnelRaisable(pending.GetTunnel(), ours)
 }
 
 // StatusDialable is Dialable as the control API reports it.

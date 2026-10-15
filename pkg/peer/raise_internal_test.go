@@ -210,8 +210,13 @@ func (c *fabricClient) Dial(int64) (transport.TunnelConn, error) {
 	c.fabric.conns = append(c.fabric.conns, near, far)
 	c.fabric.mu.Unlock()
 
+	path := server.server.path
+	if path == "" {
+		path = "tunnel, direct"
+	}
+
 	select {
-	case server.accept <- &pipeConn{Conn: far, path: "tunnel, direct", key: c.key}:
+	case server.accept <- &pipeConn{Conn: far, path: path, key: c.key}:
 	case <-server.closed:
 		return nil, net.ErrClosed
 	}

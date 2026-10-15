@@ -93,12 +93,43 @@ var ErrTunnelClosed = errors.New("transport: the peer channel is closed")
 // in the same registry, so Disconnect drops a forgotten peer's tunnel
 // connections along with its direct ones.
 func (s *Server) ServeTunnel(listener TunnelListener, gate TunnelGate) error {
+	return s.serveTunnel(listener, gate, s.handler, "the tunnel")
+}
+
+// ServePairingTunnel serves a pairing server's listener: the same pinned TLS
+// under the same identity, behind the caller's gate, with a handler that is
+// only the PIN exchange (decision AZ).
+//
+// The handler is the caller's, not the peer handler, and that is the point. A
+// pairing server admits any tailcat client key for the length of a window, so
+// what is behind it is reachable by anybody holding the full code; the PIN
+// exchange is all a joiner needs there, and a mux that mounts nothing else
+// cannot be talked into anything else by a gate that has a bug in it. It
+// returns when the listener is closed, and the http.Server it ran is dropped
+// from the ones Close would close, so a window a minute does not accumulate
+// them.
+//
+// The handler is an http.Handler, which gomobile does not bind (§21); a phone
+// never displays a code, so it never runs a pairing server.
+func (s *Server) ServePairingTunnel(
+	listener TunnelListener, gate TunnelGate, handler http.Handler,
+) error {
+	if handler == nil {
+		return errors.New("transport: a pairing server needs a handler")
+	}
+
+	return s.serveTunnel(listener, gate, handler, "a pairing server")
+}
+
+func (s *Server) serveTunnel(
+	listener TunnelListener, gate TunnelGate, handler http.Handler, what string,
+) error {
 	if listener == nil || gate == nil {
 		return errors.New("transport: a tunnel needs a listener and a gate")
 	}
 
 	server := &http.Server{
-		Handler:   s.withPeerIdentity(permitted(gate, s.handler)),
+		Handler:   s.withPeerIdentity(permitted(gate, handler)),
 		TLSConfig: s.tunnelTLSConfig(gate),
 		// The same deadline on the same unauthenticated surface (§15).
 		ReadHeaderTimeout: 15 * time.Second,
@@ -116,7 +147,9 @@ func (s *Server) ServeTunnel(listener TunnelListener, gate TunnelGate) error {
 	s.tunnels = append(s.tunnels, server)
 	s.mu.Unlock()
 
-	s.log.Info("peer channel serving through the tunnel",
+	defer s.forgetTunnel(server)
+
+	s.log.Info("peer channel serving through "+what,
 		"identity", s.identity.Fingerprint())
 
 	// ServeTLS rather than a pre-wrapped listener, for the reason Serve gives:
@@ -132,7 +165,24 @@ func (s *Server) ServeTunnel(listener TunnelListener, gate TunnelGate) error {
 		return nil
 	}
 
-	return fmt.Errorf("transport: serve the peer channel through the tunnel: %w", err)
+	return fmt.Errorf("transport: serve the peer channel through %s: %w", what, err)
+}
+
+// forgetTunnel drops a server whose listener has closed from the ones Close
+// closes. Its connections are closed with it: a listener that has gone away
+// is a tunnel that has, and what was accepted through it reaches nothing.
+func (s *Server) forgetTunnel(server *http.Server) {
+	s.mu.Lock()
+	for i, held := range s.tunnels {
+		if held == server {
+			s.tunnels = append(s.tunnels[:i], s.tunnels[i+1:]...)
+
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	_ = server.Close()
 }
 
 // tunnelTLSConfig is the bound listener's TLS configuration with the gate
@@ -344,6 +394,14 @@ func NewTunnelClient(opts ClientOptions, tunnel TunnelDialer) (*Client, error) {
 	}
 
 	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialTunnel(ctx, tunnel)
+	}
+
+	// Handshake dials for itself rather than through the HTTP transport, so
+	// it is told where to dial as well: a pairing joined through a pairing
+	// server pins its handshake through the tunnel before the PIN exchange
+	// starts, exactly as a direct one does against an address (decision AZ).
+	client.dial = func(ctx context.Context) (net.Conn, error) {
 		return dialTunnel(ctx, tunnel)
 	}
 

@@ -3015,7 +3015,20 @@ type PairingCode struct {
 	ExpiresAt         *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// The six-digit PIN, as six ASCII digits. It is only ever a CPace password
 	// (PairStart, PairFinish), and never goes into an HMAC on any code path.
-	Pin           string `protobuf:"bytes,7,opt,name=pin,proto3" json:"pin,omitempty"`
+	Pin string `protobuf:"bytes,7,opt,name=pin,proto3" json:"pin,omitempty"`
+	// The pairing server's tailcat address (tc…), for a joiner that cannot
+	// reach any of `addresses` (decision AZ). Present only while the displaying
+	// side runs a pairing server for this window, which it does only when its
+	// own long-lived tunnel server is up. It lives for the window and no
+	// longer, admits any client key up to a small cap, serves the PIN exchange
+	// and nothing else, and is never recorded by the joiner: what a pairing
+	// writes down is the long-lived offer the exchange carries, never the
+	// address that was dialled. Old decoders ignore it.
+	TunnelAddress string `protobuf:"bytes,8,opt,name=tunnel_address,json=tunnelAddress,proto3" json:"tunnel_address,omitempty"`
+	// The tunnel wire version `tunnel_address` speaks (TunnelOffer.versions).
+	// A joiner on another version cannot use the address, and falls back to
+	// the direct addresses alone.
+	TunnelVersion uint32 `protobuf:"varint,9,opt,name=tunnel_version,json=tunnelVersion,proto3" json:"tunnel_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3097,6 +3110,20 @@ func (x *PairingCode) GetPin() string {
 		return x.Pin
 	}
 	return ""
+}
+
+func (x *PairingCode) GetTunnelAddress() string {
+	if x != nil {
+		return x.TunnelAddress
+	}
+	return ""
+}
+
+func (x *PairingCode) GetTunnelVersion() uint32 {
+	if x != nil {
+		return x.TunnelVersion
+	}
+	return 0
 }
 
 // PairRequest is the older joiner's proof. Overlap release only (decision AV).
@@ -4374,7 +4401,7 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"project_id\x18\x03 \x01(\tR\tprojectId\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12\x12\n" +
-	"\x04head\x18\x05 \x01(\tR\x04head\"\xff\x01\n" +
+	"\x04head\x18\x05 \x01(\tR\x04head\"\xcd\x02\n" +
 	"\vPairingCode\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x05R\aversion\x12\x16\n" +
 	"\x06secret\x18\x02 \x01(\tR\x06secret\x12.\n" +
@@ -4383,7 +4410,9 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\rinstance_name\x18\x05 \x01(\tR\finstanceName\x129\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x10\n" +
-	"\x03pin\x18\a \x01(\tR\x03pin\"\xfa\x01\n" +
+	"\x03pin\x18\a \x01(\tR\x03pin\x12%\n" +
+	"\x0etunnel_address\x18\b \x01(\tR\rtunnelAddress\x12%\n" +
+	"\x0etunnel_version\x18\t \x01(\rR\rtunnelVersion\"\xfa\x01\n" +
 	"\vPairRequest\x12\x14\n" +
 	"\x05proof\x18\x01 \x01(\fR\x05proof\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12.\n" +

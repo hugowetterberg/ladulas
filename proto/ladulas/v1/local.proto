@@ -1386,6 +1386,10 @@ message PairingProgress {
   // is not, as one sentence (decision AW). Empty on an instance that never
   // announces.
   string announcement = 13;
+  // On CODE: whether the full code reaches this machine across networks,
+  // through the pairing server, or why it does not — "off-network pairing
+  // unavailable: …" — as one sentence (decision AZ).
+  string off_network = 14;
 }
 
 message AnswerPairingRequest {

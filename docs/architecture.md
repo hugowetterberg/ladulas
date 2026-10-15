@@ -258,6 +258,15 @@ because an instance serves one account on one machine.
 * **While a pairing screen is open, a DNS-SD responder** announces it, and
   while an "Add a machine" screen is open a browser lists what is
   announced (decision AW).
+* **And, with the tunnel up, a pairing server for that screen (decision
+  AZ)** — a second tailcat server with keys of its own, the same whole
+  network stack again, serving the PIN exchange and nothing else through
+  one more accept loop, and a goroutine that closes it: a grace after the
+  exchange that spent the code has answered, when the window stops
+  admitting anybody, or at its five minutes. It is started before the code
+  goes on screen, bounded at eight seconds, because its address is part of
+  the code — beside the DNS-SD announcement rather than after it, so the
+  code waits for the longer of the two and not their sum.
 * **The lock-trigger watcher** is a goroutine over logind's system bus
   (suspend, session lock) plus an idle timer where one is configured, and
   it is what turns those events into soft locks or seals (§10, decision J).
@@ -267,14 +276,17 @@ because an instance serves one account on one machine.
 
 **Sealing destroys the inner half rather than flagging it.** The engine,
 the vault, the project cache and the peer node — links, listener,
-convergence loop, the DNS-SD responder and browser, and the tailcat server
+convergence loop, the DNS-SD responder and browser, and the tailcat servers
 with them — are built by unsealing and dropped by sealing, which is what
 makes "the DEK is not in memory" a statement about the process rather than
 a hope. The sockets and the audit log outlive it. The tunnel's order on the
-way down is clients, then the server (§8): the links and the dialer, which
-are what raise clients, stop and hang up first, and an instance that claimed
-to hold nothing usable while keeping a DERP presence and live WireGuard
-sessions would be lying.
+way down is the pairing server, then clients, then the long-lived server
+(§8, decision AZ): the server that admits anybody goes first, the links and
+the dialer, which are what raise clients, stop and hang up next, and an
+instance that claimed to hold nothing usable while keeping a DERP presence
+and live WireGuard sessions would be lying. A pairing screen open at seal
+loses its pairing server with the rest; its PIN stops working because the
+node that held the window has gone.
 
 The relay's process model is one sentence: an HTTP server, a debug server,
 and no background work at all. It holds its device registrations in memory
@@ -356,10 +368,16 @@ decided its shape: a requester with the upgrade off, or on a tunnel version
 the collector does not speak, cannot take that path either, and reading the
 offer alone would have brought the bug straight back for exactly those
 requesters. So the rule takes this instance's version, the constant is gone,
-and turning the upgrade on or off reconciles. A pending pairing is still
-dialable by its addresses only (`trust.PendingDialable`): settling over the
-tunnel arrives with the pairing server, which is the only way a pending
-pairing could be born without one.
+and turning the upgrade on or off reconciles. A pending pairing is dialable
+by the same rule (`trust.PendingDialable`, with this instance's version)
+since the pairing server (decision AZ), which is how a pending pairing is
+born with no direct path between its two sides: the convergence loop probes
+its addresses, takes one that answers, and otherwise settles through a
+client raised for the call against the long-lived server its offer named.
+Until then a pending pairing was dialable by its addresses only, because
+nothing could produce one that was dialable any other way, and counting a
+tunnel the settle path did not take would have made a pending peer neither
+dialled nor waited for.
 What changed is where the question
 is asked. It used to be asked as `len(Addresses) > 0` in every place that
 needed it — the link-or-inbox choice in `Reconcile`, the pairing convergence
@@ -861,9 +879,11 @@ to cover a key generated tomorrow.
 Flow: instance A says what the pairing is for and displays a six-digit PIN
 beside a QR — the Krypton pattern. B either types the PIN with A's
 `host:port`, or scans the QR (or pastes the same string, the *full code*),
-which carries the PIN, A's addresses and A's identity public key; a B that
-has the key pins A's handshake before anything else happens, which makes
-the visual channel the integrity root. The two then run the PIN exchange
+which carries the PIN, A's addresses and A's identity public key — and,
+while A's tunnel is up, the address of a pairing server A runs for that
+code alone (decision AZ, below); a B that has the key pins A's handshake
+before anything else happens, which makes the visual channel the integrity
+root. The two then run the PIN exchange
 over the TLS channel (decision AV, below), both sides display both
 fingerprints and the same sentence about what the pairing does, and *each
 side's user confirms on that side*. Trust records live in the encrypted
@@ -931,19 +951,49 @@ From there, three rules:
   session id presented by an identity it does not belong to. Those are
   errors. Unreachable, asleep, backgrounded, restarted and slow are not.
 
-**Withdrawal propagates by asking, not by remembering.** Calling a pairing
-off removes it here and tells the peer if it happens to be reachable; a
-peer that was not finds out the next time it asks, because an instance
-with no record of a session says so and the side still holding one drops
-it. The alternative — keeping a tombstone until it has been delivered —
-was rejected for a specific reason rather than a general one: a phone has
-no address, so a desktop could never deliver a tombstone to one at all,
-and the side-that-holds-it-asks mechanism has to exist anyway. Having two
-mechanisms where one covers every case is worse than the cost, which is
-that a peer that was unreachable at the moment of the decision is told
-"the other side has no record of this pairing" rather than "declined" or
-"called off". The exact reason is delivered whenever the peer is reachable
-at the time, which is most of the time and is never load-bearing.
+**A refusal is held until it is heard** (since 2026-10-14, decision AZ).
+Declining or calling a pairing off removes it from the pending set here at
+once and tells the peer if it happens to be reachable. If it is not, the
+refusal is kept in memory — identity, session, answer, reason, and the
+client key the exchange admitted, which stays on the tunnel allowlist —
+until the peer has heard it: both gates admit that identity (the tunnel
+listener's for `SettlePairing` only, as for a pending one), `SettlePairing`
+answers its session with the refusal in the words it was made in, and the
+convergence loop goes on taking it to the peer on the pairing cadence by
+every path a pending pairing would use, the tunnel included. Whichever end
+gets through first ends the hold; one answered from it is held a minute
+longer, so an answer lost on the way can be asked for again. It is bounded
+at thirty-two, the oldest let go first, and a restart or a seal forgets it.
+A pending pairing ended by the peer's own word has nothing to hold, and its
+client key comes off the allowlist a minute later rather than at once,
+because when that word arrived through the tunnel, revoking the key at once
+disconnects the client the answer is going back on.
+
+*What it replaced, and why.* Withdrawal used to **propagate by asking, not
+by remembering**: the side that dropped a pairing forgot it, and a peer
+that had been unreachable found out the next time it asked, "because an
+instance with no record of a session says so". A tombstone kept until
+delivered was rejected (decision M) because a phone has no address and
+could never be handed one, so asking had to exist anyway, and two
+mechanisms where one covers every case seemed worse than a less precise
+reason. The flaw was that the asker never reached the question. Both doors
+refuse an identity with no record and nothing pending — the bound
+listener's gate in the TLS handshake unless a window happened to be open,
+and the tunnel listener's gate behind an allowlist the drop had just taken
+the asker's key off — so the peer was refused at the door, not told. On a
+LAN this rarely showed, because the deciding side's own call usually got
+through. For a pair born through a pairing server, whose only path is the
+tunnel, it was permanent: a café laptop asleep when the desk declined
+retried for ever, kept the desk's client key admitted, and never resolved —
+and the same in reverse for a desk whose joiner never wrote its half down.
+The hold is not the tombstone M rejected: it is never the only way to be
+told, a phone that asks is answered from it, and delivery is the loop the
+pending pairing already had. **Do not go back to dropping a refusal on the
+spot while the gates refuse an unknown identity**; that is the
+combination that strands the far side. What is left: a peer that stays
+unreachable through a restart or seal of the side that refused is back to
+the old behaviour, and `ladulas pairings withdraw` on its own side is the
+remedy (ops.md).
 
 **The pending set is bounded**, at one entry per peer identity and sixteen
 in total. It is clutter control rather than a security boundary — every
@@ -1263,6 +1313,105 @@ evict Avahi's own host records from peers' caches; `hashicorp/mdns`, which
 has no goodbye, no probing and no live browse; and Avahi over D-Bus, which
 is sound but needs the daemon and the system bus, and announces into
 `docker0` and `tailscale0` by default.
+
+### Across networks: the pairing server — **decision AZ**
+
+**A full code reaches a machine on another network** since 2026-10-14,
+when both machines have the tunnel upgrade on (§8, decision AX). A café
+laptop and a desktop at home have no direct path, no tailnet and no port
+forward between them, and neither discovery nor the code's direct
+addresses can help; the tunnel can, and the code carries a way into it.
+
+**The code cannot carry the long-lived server's address.** The displaying
+side does not know the joiner's tailcat client key until the joiner's
+`MEOW` arrives, so the long-lived server would have to admit anybody for the
+length of the window, and its address — which lasts as long as the
+instance's keys — would then be a bearer capability. So **displaying a code
+while the long-lived server is up starts a second tailcat server for that
+window** (`peer.Tunnel.StartPairing`, `pkg/peer/pairserver.go`): a node key
+and pre-shared key made for it and never stored, any client key admitted
+(`AllowClient` set, never nil and never an empty `KeySet`, which admits
+everybody and nobody respectively) **up to eight distinct keys and none
+after** (`PairingServerClients`), because each admitted key is a WireGuard
+peer inside the process that signs, and a **pairing-only mux**: the pairing
+service mounted alone, behind a gate that admits any identity while its own
+window is open and permits `PairStart` and `PairFinish` and nothing else —
+not `SettlePairing`, which belongs to the long-lived listener, and not the
+older proof, since a joiner that found this address speaks the PIN. Its
+address goes into the full code (`PairingCode.tunnel_address`, with the
+tunnel version it speaks), and nowhere else.
+
+**Only when the long-lived server is up**, and the code says why when it is
+not: the screen and `ladulas pair` print *off-network pairing unavailable:*
+and the reason (`PairingProgress.off_network`) — the tunnel off here, its
+server not up and why, or the pairing server not starting inside its eight
+seconds — started beside the local-network announcement, not after it,
+since the code waits for both and in sequence their bounds added up past
+what the desktop gives the first message. Otherwise a joiner could complete
+the exchange and have nowhere to settle. Its region is picked from the DERP map at the moment the code is
+shown, and is **the long-lived server's persisted region when the map
+cannot be fetched or measured in a few seconds**, so that displaying a code
+does not depend on the map's host; the pick is not persisted, since nothing
+records a pairing server's address.
+
+**Spent and closed are different moments.** Spending the code refuses new
+exchanges at once, on every listener — that is the window's (§7 above),
+not the pairing server's. The pairing server stays up until the exchange
+that spent the code has returned its last message, the listener's
+confirmation and the pairing session, and then for a short grace so the
+response leaves the tunnel before the tunnel does, all bounded by the
+window's own five minutes. A window that closes unused, one replaced by
+another, the tunnel switched off, a seal and a shutdown all close it at
+once. **Closing on spend, the obvious implementation, is the one not to
+reintroduce**: it tears down the connection carrying the response, and
+leaves the displaying side with a pending pairing the joiner never heard
+about, which nothing times out (decision M).
+
+**The joiner tries the code's direct addresses first, all at once**, each
+handshake pinned to the key in the code so none can reach anybody else,
+and takes the first that completes; only when none does does it raise a
+tailcat client against the pairing server and pin the handshake through
+it. With a pairing server to fall back on, the direct phase is held to
+three seconds: off the network the code was shown on those addresses are
+silently dropped, and each would otherwise spend the full ten-second dial
+timeout before the path that works was tried. **Once `PairFinish` has been
+sent the joiner finishes the join whatever its caller does** — the
+listener writes its half down when the tag verifies, so a join cancelled
+there (the desktop's wait running out, a command line interrupted) would
+leave a pending pairing at the other end with nothing to settle against. Either way the PIN exchange starts only once the pin has held, so a
+wrong address never receives a guess. **Joining through the pairing server
+needs the joiner's own upgrade on and its long-lived server up**, and is
+refused before anything is sent otherwise — "turn on the tunnel to pair
+across networks" — because the pair it would make could have no tunnel and
+no direct path, and could never settle. The joiner's client is raised with
+its own long-lived client key, since the pairing server admits any key, and
+the pairing server's address is held to the region rule (§11) like every
+other relay a peer names. **The dialled address is never recorded**: the
+joiner writes down the listener's advertised direct addresses and its
+long-lived `TunnelOffer`, and the card on each side says *via pairing
+server* where it would otherwise show an address — the in-netstack one is
+nobody's.
+
+**On spend both sides admit the other's long-lived client key and hold its
+long-lived offer** (decision AX's pairing carriers, unchanged): the keys
+arrived inside a PIN exchange bound to both identity keys, read only after
+the tag verified. Declining or withdrawing the pairing removes them, once
+the other side has heard (the hold above: for this pair the tunnel is the
+only way it can ask). Both
+sides, because either may settle and either may dial — and for a pair born
+this way the long-lived tunnels are the only path there is, which is why a
+pending pairing now counts a raisable tunnel as dialable (§3) and
+`SettlePairing` goes through a client raised for the call when no direct
+address answers a probe. The long-lived listener's gate already admitted a
+pending identity with the key it offered, for `SettlePairing` on its own
+session only.
+
+Considered and not chosen: keeping the pairing server up, restricted to the
+joiner's key, until the pending pairing resolves, and sending the long-lived
+offer only in the completing `SettlePairing`. That keeps the long-lived
+address from unconfirmed peers altogether, but a pending pairing has no
+clock (decision M), so the pairing server would have to survive seals, with
+its key persisted, for as long as nobody answers.
 
 ### What a peer's state says, and what it must not
 
@@ -1746,9 +1895,10 @@ when the tailcat client key the connection came from (`Server.PeerKey`) is
 the one that identity offered — so a leaked client key reaches nothing an
 unpaired identity could use, and a paired identity comes in through its own
 tunnel only. It **never** admits an identity because a pairing window is
-open: that admission belongs to the bound listener and, later, the pairing
-server, and a door reachable from every DERP region that let strangers in
-while a PIN was on screen would be a guessing surface open to the world. A
+open: that admission belongs to the bound listener and the pairing server
+(§7, decision AZ), and a door reachable from every DERP region that let
+strangers in while a PIN was on screen would be a guessing surface open to
+the world. A
 second check per request refuses the pairing RPCs to everybody, and
 everything but `SettlePairing` to an identity that is only pending;
 `SettlePairing` checks for itself that the session is the caller's own.
@@ -1835,8 +1985,8 @@ documentation — the one large flow —
 would fail off-LAN in exactly the case the upgrade is for: the approver at
 home opening a café laptop's project pages would dial the laptop's
 unreachable direct addresses. The engine count is one server, one client
-per peer and direction in use, and later one pairing server while a code
-is displayed.
+per peer and direction in use, and one pairing server while a code is
+displayed with the tunnel up (§7, decision AZ).
 
 *Raised in the background, proved by the pinned Ping.* A raise builds the
 client against the server address, waits for tailcat's own MEOW
@@ -1978,10 +2128,10 @@ them (`StatusResponse.inbound_tunnels`); and `ladulas_peers` carries a `path`
 label, with raises, failures, switches, fallbacks and re-offers counted in
 `ladulas_tunnel_events_total` (observability.md).
 
-*Not in this step.* A pending pairing is still settled over its direct
-addresses only. (The dialer hearing whether its tunnel has punched was on
-this list in the first draft; it asks once a heartbeat now, above.) The pairing server
-and phones on the tunnel are later steps.
+*Not in this step.* Phones on the tunnel. This list also named settling a
+pending pairing over the tunnel and the pairing server until both arrived
+with decision AZ (§7), and the dialer hearing whether its tunnel has punched
+in its first draft, which it asks once a heartbeat now, above.
 
 **A link is not up until the peer has said something.** The presence stream
 is what tells this instance whether there is anybody to ask before it has
@@ -4861,7 +5011,14 @@ Threat model sketch (to be expanded in its own document):
   the handshake the tunnel listener's gate is narrower than the bound
   listener's: a paired or pending identity with the client key it
   offered, never anybody because a PIN is up, no pairing RPCs at all, and
-  `SettlePairing` only for a pending identity (§8).
+  `SettlePairing` only for a pending identity (§8). **A displayed code adds
+  a pairing server for its window (decision AZ)**, whose address is in the
+  full code: the same tailcat surface again, admitting *any* client key up
+  to eight, and behind the handshake the PIN exchange and nothing else, to
+  any identity, for five minutes at most. Anybody who holds the code can
+  spend the window's five attempts through it — a denial, as on the LAN,
+  shown on the displaying screen as *via pairing server* — and nothing
+  else, since what the PIN exchange leaks is one online guess per attempt.
 * **DERP operator** (when the tunnel upgrade is on): sees both node
   public keys in every `MEOW`, both sides' addresses, and the time of
   every tunnel set-up, which is the pairing graph of upgraded pairs and
@@ -5150,6 +5307,7 @@ Added 2026-10-14:
 | AW | How a joining machine finds the one showing a PIN | **it picks it from a DNS-SD list while both screens are open, and dials the one address the list checked for it.** `_ladulas-pair._tcp` through `github.com/brutella/dnssd` v1.2.14, carried patched as `internal/dnssd` so that its responder answers and its browser asks on the chosen interfaces only (upstream answers queries on every interface whatever `Config.Ifaces` says, which put the name, port and tag in reach of anything on `docker0` while a PIN was up), in `internal/discovery` and reached from `pkg/peer` only through `PairingAnnouncer`. Announced only while a pairing window's PIN is on screen, withdrawn with goodbyes when it is spent, abandoned, replaced or answered and when the node closes; on the interfaces with a bound peer address (every eligible one on an explicit wildcard), minus container and VM interfaces, the tailnet and loopback; instance name as the DNS-SD name, a neutral `ladulas-<random>` host per window, the bound link-local and private addresses, TXT `v=2` and a random session tag that de-duplicates the list and is never a PAKE input. Browsed only while a `BrowsePairings` stream is open — the desktop screen holds one through a lease its polls renew, `ladulas pair --join` for as long as it is listing — and forgotten when nobody is; sealing closes it. The PIN is shown once the probe has settled the name, up to three seconds, and announce and withdraw are serialised per node so a stale withdraw cannot take down a newer window's announcement. A result is listed only if it was heard on an eligible interface (the browse is confined to those, and each answer is checked again on `IfaceName`) and has an address that is link-local or private and inside that interface's subnet; one row per window, every row sharing a name with another flagged as a duplicate and never chosen between. A join names the entry; the daemon resolves it to its one address when the join starts and makes one PIN exchange there, over direct TCP. Phones neither browse nor announce: they pair by the QR, whose identity key a list cannot carry. Supersedes the resolved "mDNS/Bonjour discovery lands with the mobile milestone" and §8's plan for the phone to find `desktop.local`. Rejected: Syncthing-style custom announcements (a port of our own, invisible to standard tools); `grandcat/zeroconf` and its fork (answer on any interface, goodbyes that evict Avahi's host records); `hashicorp/mdns` (no goodbye, no probing, no live browse); Avahi over D-Bus (needs the system bus, announces into `docker0` and `tailscale0`); announcing for as long as the daemon runs, which tells the whole LAN about the box all day for the minute a pairing needs; and listing every address an entry carries, which turns one press into a PIN sprayed at as many addresses as an attacker cares to put in a record. Rationale in §7 |
 | AX | Whether two paired instances may reach each other through a NAT traversal layer, and on what terms | **yes, as an upgrade both sides opt into, with the same pinned TLS inside it and the direct path kept as the fallback; this step builds the listening half, and decision AY the dialling half.** The tunnel is [tailcat](https://github.com/tailscale/tailcat) pinned at `main` `52fbad3` (2026-10-07) for its `AllowClient` hook, `KeySet`, `DisconnectClient` and `Server.PeerKey`, which raises the module's `go` line to 1.27.1. **The tunnel never authenticates anybody**: every connection through it is decision A1's TLS 1.3 handshake pinned to the identity key, the tailcat keys (a server node key, a client node key and a pre-shared key per instance, generated once into the encrypted store) decide only who reaches that handshake, and `pkg/transport` asserts X25519MLKEM768 so that the post-quantum claim rests on the TLS rather than on tailcat's pre-shared key. **Opt-in per instance and described as a public exposure** in decision H's sense: `ladulas tunnel on`, `SetTunnel`, or the desktop's switch, each with the daemon's two sentences beside it — what it exposes, and what the DERP operator learns. **Capability rides AQ's carriers** as `TunnelOffer` (versions of ours, server address, client key): `WatchRequest`, every `PresenceEvent`, `FetchPendingResponse`, pairing's `PairRequest`/`PairResponse` and `PairFinishRequest`/`PairFinishResponse`, and `FetchPendingRequest` for a phone that has no other way back. Absent changes nothing, empty versions withdraws (and a build without tailcat or with the upgrade off sends that form on every carrier), a withdrawal from a peer that never offered is not written, the record is written on change only, the offer is kept on the pending pairing too, and an offer no beat has confirmed for fourteen days or that direct contacts without one have contradicted for ten minutes stops being raised — **except for a peer with no direct address**, whose tunnel is the only carrier of the next offer. **The allowlist** is the client keys of the trust records and pending pairings, rebuilt at every server start, changed for free (`KeySet`), with revoke, decline and withdraw removing the key and dropping the client. **The tunnel listener has its own gate**: a paired or pending identity arriving with the client key it offered, never anybody because a pairing window is open, no pairing RPCs, `SettlePairing` only for a pending identity, and `RemoteAddr` shown as the path. **The region is a contract**: picked once from the DERP map, persisted, and never re-picked implicitly; Tailscale's public fleet through tailcat's map is the default, a self-hosted map is a setting, and a re-pick is deliberate (`--repick`) and strands tunnel-only pairs until the two-server grace exists. A peer-supplied region — every one an address embeds — is held to the relay URL's rule (§11), by host name, ports and certificate name because the address does not carry the id, with literal addresses required for a region not our own. **Lifecycle is the inner half's**: unseal starts the server in the background and nothing is offered until it is up, seal closes clients then the server, a closing or closed node offers nothing rather than the withdrawal and takes no new tunnel, and the tunnel keys join the copies zeroing cannot reach. **tailcat stays out of `pkg/`**: `pkg/peer.Tunnel` and `pkg/transport`'s tunnel interfaces are strings and bytes, `internal/tunnel` is the only importer, the binaries hand a factory to `internal/app`, and `notailcat` builds without it. **Dialable** is written to count a usable tunnel server address and switched off until links can dial over the tunnel (§3): counting it on the offer alone moved collectors off their inboxes onto links that could not connect. (Switched on by decision AY, with this instance's own version made part of the rule so that the same failure cannot return through an instance with the upgrade off.) Retires §1's NAT-traversal non-goal (history kept there) and restates decision S's premise (§10); §1's no-mandatory-infrastructure goal survives because LAN pairing needs no relay and an upgraded pair falls back to direct. Not in this step: raising clients and dialling over the tunnel, the path order and hysteresis (all three decision AY's), the pairing server, phones. Rejected: tailcat as the only transport (a relay mandatory on every connection, the allowlist forced off, a flag day); trusting the node key as the identity (loses the hardware phone identity and the fingerprint confirmation); building against v0.7.0's add-only allowlist (revocation would restart the server and drop every other tunnel); a nested module to keep the root on 1.26.5 (two modules for one toolchain gap); a relay of our own as the default (author-hosted infrastructure on the path, §1). Rationale in §8 |
 | AY | How an upgraded pair chooses between the tunnel and the direct path, and what moving between them costs | **every side that issues RPCs raises its own client in the background, no call waits for one, and the link moves between paths without its presence ever changing; a punched tunnel beats direct TCP, and direct TCP beats a relayed tunnel.** A link holds a client for its lifetime (a mutual pair has one each way) and the dialer raises one on demand for a peer whose offer names a server, reaped after five minutes unused because `CloseIdle` cannot reach a network stack. A raise runs the same pinned TLS through the tunnel against the same fingerprint and counts only once a pinned `Ping` succeeds; the region rule is applied again at the raise; `Ping` answers any paired peer, since the dial-back that raises is an approver calling a requester. A call with no established path races the raise against the direct probe inside five seconds — direct answering or a punched raise win at once, a relayed raise waits for the probe — and the raise's timeout bounds only the background attempt; this holds for link presence, link calls and dialer calls. The link moves make-before-break (new `Watch`, first beat, then close the old) and, when its path breaks, tries the other before declaring anything lost; neither goes through `link.failed()`, so the agent's key list never blanks, no grant activity is pushed and nothing logs a new link; a key listing that broke on the way leaves the offered set alone, and a call whose only target is a tunnel not yet up returns an error rather than no answer. Precedence is re-evaluated on beats from the listening side's report of how it sees the caller's client (`TunnelPathReport` on every `PresenceEvent` and in `PingResponse`, from `Server.Status`), a fresh tunnel counting as relayed until reported punched; the dialer, with no stream, re-asks with a Ping through the tunnel once a heartbeat. A call's own deadline running out does not tear the tunnel down. A tunnel that failed in use is not preferred again until it has been re-raised and held for three minutes; raises back off between the presence loop's floor and ceiling, reset by presence returning on any path. A direct contact after a failure re-offers. `trust.Dialable` now takes this instance's tunnel version and counts a tunnel offer only when it can be raised, the switch-off constant is gone, and turning the upgrade on or off reconciles; a pending pairing stays dialable by address only until the pairing server. Status: `trust.DescribeTunnel` gains the path and state words from `trust.TunnelFacts`, `PeerStatus.path` names the tunnel, `ladulas status` has a TUNNEL column and an inbound-tunnels section, a tunnel failure has its own error type and rank, and `ladulas_peers` a `path` label beside raise, failure, switch, fallback and re-offer counts. Amends AQ's reached-address rule to direct dials only (§8). Rejected: raise-then-fall-back (spends AJ's ssh budget per holder, turns AT's fall-through into a wait, pushes a woken phone past its grace); the tunnel whenever it is up (a throttled relay carrying pairs that can reach each other in milliseconds); direct first and the tunnel only when direct fails (gives up the punched path where direct TCP is fragile); the tunnel exclusively once upgraded (a pair with the uplink down could not approve, and every upgraded pair would die with the DERP fleet); a switch through `failed()` (blanks the agent's keys for a reconnect); counting a tunnel towards dialable on the offer alone (moves collectors onto links an instance with the upgrade off cannot connect). Rationale in §8 |
+| AZ | How a machine on another network joins with the full code | **through a pairing server: a second tailcat server the displaying side runs for one window, whose address only the full code carries.** Started only while the long-lived server is up, before the code is shown and beside the DNS-SD announcement, bounded at eight seconds; otherwise the code is shown without it and says *off-network pairing unavailable:* and why (`PairingProgress.off_network`). Fresh node and pre-shared keys, never stored; `AllowClient` admitting any key up to eight distinct ones and refusing every later one; a pairing-only mux (`transport.Server.ServePairingTunnel`) whose gate admits any identity while its window is open and permits `PairStart` and `PairFinish` only; connections named *via pairing server*. Region picked from the DERP map, or the persisted one when the map fails, and not persisted. **Spent is not closed**: the window refuses new exchanges at once, and the pairing server closes a short grace after the exchange that spent it has returned, bounded by the five minutes, or at once when the window closes unused, is replaced, the tunnel is switched off, or the node seals or shuts down — pairing server first, then clients, then the long-lived server. The joiner tries the direct addresses all at once, pinned, for at most three seconds when the code names a pairing server, then raises a client against the pairing server and pins the handshake through it, and the PIN exchange starts only after the pin holds; joining that way needs the joiner's own upgrade on and its server up ("turn on the tunnel to pair across networks"), a matching tunnel version and the region rule. The dialled address is never recorded. On spend both sides admit the other's long-lived client key and keep its long-lived offer (AX's carriers), decline and withdraw remove them once the peer has heard — a refusal is held in memory, its key admitted and both gates letting the peer in to ask, until it is delivered or asked for (§7; this amends decision M's "propagates by asking", which never reached the question) — `trust.PendingDialable` counts a raisable tunnel, and `SettlePairing` goes through a client raised for the call when no direct address answers a probe. `PairingCode.tunnel_address` and `tunnel_version` are new fields; the code stays at version 1 for AV's overlap. Rejected: the long-lived server's address in the code (a bearer capability for as long as the keys live, admitting anybody for every window); closing the pairing server on spend (tears down the connection carrying the response, stranding the displayer's pending pairing); keeping it up for the joiner until the pairing resolves and sending the long-lived offer only at completion (a pending pairing has no clock, so the server would outlive seals with a persisted key); joining across networks with the upgrade off (a pair with no path that could never settle); dropping a refusal on the spot (the far side is refused at the door for ever). Rationale in §7 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
@@ -5205,7 +5363,10 @@ What follows from splitting them:
 * **Withdrawal is manual and propagates by asking.** No tombstone: a
   phone could not be handed one, and the ask-on-reconnect path has to
   exist regardless. The cost is a less precise reason when the peer was
-  unreachable at the moment of the decision.
+  unreachable at the moment of the decision. *Amended 2026-10-14 (decision
+  AZ, §7):* asking never reached the question, because both gates refuse an
+  identity with nothing pending, so a refusal made here is now held in
+  memory until the peer has heard it, and answers its asking.
 * **The pending set is bounded** at one per identity and sixteen in
   total — clutter control, not a boundary, since every entry is listed and
   dismissible.

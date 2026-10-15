@@ -62,6 +62,10 @@ func (s *stubTunnel) Raise(string) (peer.TunnelClient, error) {
 
 func (s *stubTunnel) ClientPath([]byte) string { return "" }
 
+func (s *stubTunnel) StartPairing(int32) (peer.PairingServer, error) {
+	return nil, errors.New("the stub runs no pairing server")
+}
+
 func (s *stubTunnel) Close() error {
 	s.once.Do(func() { close(s.closed) })
 

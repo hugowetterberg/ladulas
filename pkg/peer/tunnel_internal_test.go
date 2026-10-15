@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -42,6 +43,15 @@ type fakeTunnel struct {
 	// of the dialling half (decision AY); nil where only the bookkeeping is
 	// under test, and then nothing can be raised.
 	fabric *fabric
+	// open is a pairing server's cap: any client key is admitted, up to this
+	// many distinct ones (decision AZ); zero for a long-lived server, which
+	// admits what the node put on its allowlist.
+	open int
+	// path is what the server side of a connection through it is called,
+	// "tunnel, direct" when empty.
+	path string
+	// pairings are the pairing servers started from it, newest last.
+	pairings []*fakePairingServer
 }
 
 func newFakeTunnel(address string, client byte) *fakeTunnel {
@@ -115,7 +125,64 @@ func (f *fakeTunnel) admits(key []byte) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.open > 0 && !f.admitted[string(key)] && len(f.admitted) < f.open {
+		f.admitted[string(key)] = true
+	}
+
 	return f.admitted[string(key)]
+}
+
+// StartPairing starts a pairing server on the fabric: a fake tunnel of its
+// own, at an address of its own, admitting any key up to the cap.
+func (f *fakeTunnel) StartPairing(maxClients int32) (PairingServer, error) {
+	if f.fabric == nil {
+		return nil, errors.New("no fabric to run a pairing server on")
+	}
+
+	f.mu.Lock()
+	server := f.fabric.tunnel(fmt.Sprintf("tcpair-%s-%d", f.address, len(f.pairings)), 0)
+	server.open = int(maxClients)
+	server.path = PairingServerPath
+
+	pairing := &fakePairingServer{tunnel: server, listener: f.fabric.listen(server)}
+	f.pairings = append(f.pairings, pairing)
+	f.mu.Unlock()
+
+	return pairing, nil
+}
+
+// pairing is the newest pairing server started from the tunnel, nil if none.
+func (f *fakeTunnel) pairing() *fakePairingServer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.pairings) == 0 {
+		return nil
+	}
+
+	return f.pairings[len(f.pairings)-1]
+}
+
+// fakePairingServer is a pairing server on the fabric.
+type fakePairingServer struct {
+	tunnel   *fakeTunnel
+	listener *fabricListener
+}
+
+func (p *fakePairingServer) Address() string { return p.tunnel.address }
+
+func (p *fakePairingServer) Listener() transport.TunnelListener { return p.listener }
+
+func (p *fakePairingServer) Close() error { return p.listener.Close() }
+
+// isClosed reports whether the pairing server has been closed.
+func (p *fakePairingServer) isClosed() bool {
+	select {
+	case <-p.listener.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (f *fakeTunnel) RelayRegion(address string) (string, error) {
@@ -612,6 +679,9 @@ func TestForgettingAPeerRevokesItsClientKey(t *testing.T) {
 	approver.node.SetTunnel(deskTunnel)
 	requester.node.SetTunnel(laptopTunnel)
 
+	// The delay before a dropped pending pairing's key comes off, shortened.
+	approver.node.refusalGrace = 10 * time.Millisecond
+
 	waitOffer(t, approver.node)
 	waitOffer(t, requester.node)
 
@@ -630,7 +700,9 @@ func TestForgettingAPeerRevokesItsClientKey(t *testing.T) {
 		Fingerprint: requester.identity.Fingerprint(),
 		Name:        "laptop",
 		Tunnel:      offerFrom("tclaptop", 2),
-	}, "declined")
+	}, "declined", "")
+
+	time.Sleep(50 * time.Millisecond)
 
 	if !deskTunnel.admits(laptopTunnel.client) {
 		t.Error("dropping a re-pair revoked a key the trust record still holds")
@@ -668,11 +740,10 @@ func TestForgettingAPeerRevokesItsClientKey(t *testing.T) {
 			t.Fatalf("a pending pairing's client key was not admitted (%s)", ending)
 		}
 
-		approver.node.dropPending(pending, ending)
+		approver.node.dropPending(pending, ending, "")
 
-		if deskTunnel.admits(stranger.GetClientKey()) {
-			t.Errorf("a %s pairing's client key is still admitted", ending)
-		}
+		waitUntil(t, "a "+ending+" pairing's client key comes off the allowlist",
+			func() bool { return !deskTunnel.admits(stranger.GetClientKey()) })
 	}
 }
 

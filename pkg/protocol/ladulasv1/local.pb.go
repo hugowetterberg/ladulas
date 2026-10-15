@@ -5790,7 +5790,11 @@ type PairingProgress struct {
 	// On CODE: where the window is announced on the local network, or why it
 	// is not, as one sentence (decision AW). Empty on an instance that never
 	// announces.
-	Announcement  string `protobuf:"bytes,13,opt,name=announcement,proto3" json:"announcement,omitempty"`
+	Announcement string `protobuf:"bytes,13,opt,name=announcement,proto3" json:"announcement,omitempty"`
+	// On CODE: whether the full code reaches this machine across networks,
+	// through the pairing server, or why it does not — "off-network pairing
+	// unavailable: …" — as one sentence (decision AZ).
+	OffNetwork    string `protobuf:"bytes,14,opt,name=off_network,json=offNetwork,proto3" json:"off_network,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5912,6 +5916,13 @@ func (x *PairingProgress) GetExhausted() bool {
 func (x *PairingProgress) GetAnnouncement() string {
 	if x != nil {
 		return x.Announcement
+	}
+	return ""
+}
+
+func (x *PairingProgress) GetOffNetwork() string {
+	if x != nil {
+		return x.OffNetwork
 	}
 	return ""
 }
@@ -9719,7 +9730,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"\tduplicate\x18\x05 \x01(\bR\tduplicate\x123\n" +
 	"\aseen_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06seenAt\"G\n" +
 	"\x0eNearbyPairings\x125\n" +
-	"\bpairings\x18\x01 \x03(\v2\x19.ladulas.v1.NearbyPairingR\bpairings\"\xa1\x04\n" +
+	"\bpairings\x18\x01 \x03(\v2\x19.ladulas.v1.NearbyPairingR\bpairings\"\xc2\x04\n" +
 	"\x0fPairingProgress\x123\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1f.ladulas.v1.PairingProgressKindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x1b\n" +
@@ -9735,7 +9746,9 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	" \x01(\tR\x03pin\x124\n" +
 	"\aattempt\x18\v \x01(\v2\x1a.ladulas.v1.PairingAttemptR\aattempt\x12\x1c\n" +
 	"\texhausted\x18\f \x01(\bR\texhausted\x12\"\n" +
-	"\fannouncement\x18\r \x01(\tR\fannouncement\"i\n" +
+	"\fannouncement\x18\r \x01(\tR\fannouncement\x12\x1f\n" +
+	"\voff_network\x18\x0e \x01(\tR\n" +
+	"offNetwork\"i\n" +
 	"\x14AnswerPairingRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +

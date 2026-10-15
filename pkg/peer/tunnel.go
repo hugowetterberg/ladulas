@@ -87,9 +87,40 @@ type Tunnel interface {
 	// region when it is known — for a DERP relay, and "" for a client that is
 	// not connected.
 	ClientPath(clientKey []byte) string
+	// StartPairing starts a pairing server for one pairing window (decision
+	// AZ): a second tailcat server, separate from the long-lived one, with a
+	// node key and pre-shared key of its own made for it and never stored. It
+	// admits any client key — the joiner's is not known until its MEOW
+	// arrives — up to maxClients distinct keys, and refuses every further
+	// one, because each admitted key is a WireGuard peer inside the process
+	// that signs. Its region is picked from the DERP map, or is the
+	// long-lived server's persisted one when the map cannot be fetched, so
+	// that displaying a code does not depend on the map's host. It returns
+	// once the server is up and listening on the peer port.
+	StartPairing(maxClients int32) (PairingServer, error)
 	// Close closes the server and every client connection it holds.
 	Close() error
 }
+
+// PairingServer is one pairing server: started for one pairing window, and
+// closed with it (decision AZ).
+type PairingServer interface {
+	// Address is the server's tailcat address, which goes into the full code
+	// and nowhere else.
+	Address() string
+	// Listener is its listener on the peer port. A connection through it
+	// reports its path as PairingServerPath.
+	Listener() transport.TunnelListener
+	// Close tears the server down, listener and clients with it.
+	Close() error
+}
+
+// PairingServerPath is what a connection through a pairing server is called
+// wherever a remote address is shown — the failed attempts on the displaying
+// screen, the confirmation card — because the in-netstack address it has is
+// nobody's address, and "via pairing server" is the honest answer to where it
+// came from (decision AZ).
+const PairingServerPath = "via pairing server"
 
 // TunnelClient is one raised client: a tailcat client to one peer's server
 // (decision AY). The deadlines are Unix nanoseconds, zero for none, because
@@ -146,6 +177,12 @@ type tunnelState struct {
 	// seal or shutdown. From then on SetTunnel refuses, nothing starts, and
 	// the offer says nothing rather than "withdrawn" (closeTunnel).
 	tunnelClosed bool
+	// pairing is the pairing server of the window on screen, nil when there
+	// is none (decision AZ).
+	pairing *pairingServe
+	// pairingGrace is how long a pairing server outlives the exchange that
+	// spent its code, zero for pairingServerGrace. Tests shorten it.
+	pairingGrace time.Duration
 	// tunnelSeen is when a beat last re-confirmed each peer's offer, and
 	// tunnelContradicted when each peer's direct contacts started carrying no
 	// offer at all, for as long as they have kept doing so. In memory, like
@@ -254,6 +291,11 @@ func (n *Node) SetTunnel(tunnel Tunnel) {
 	n.tunnelAddress = ""
 	n.tunnelDetail = ""
 	n.tunnelMu.Unlock()
+
+	// A pairing server belongs to the tunnel it was started from, and turning
+	// the tunnel off ends a public exposure; the code on screen keeps its
+	// direct addresses (decision AZ).
+	n.closePairingServer()
 
 	if old != nil {
 		if err := old.Close(); err != nil {
@@ -422,6 +464,10 @@ func (n *Node) startServer(tunnel Tunnel) bool {
 // each of them a store write and this instance's allowlist entry — on every
 // seal and every restart. Withdrawal is for the upgrade being turned off.
 func (n *Node) closeTunnel() {
+	// The pairing server first, which admits anybody (§3, decision AZ). Close
+	// and Serve's defers have normally closed it already.
+	n.closePairingServer()
+
 	n.tunnelMu.Lock()
 	n.tunnelClosed = true
 	tunnel := n.tunnel
@@ -526,6 +572,12 @@ func (n *Node) admissibleKeys() map[string]bool {
 		if key := admissible(pending.GetTunnel()); key != nil {
 			keys[string(key)] = true
 		}
+	}
+
+	// And the refusals still waiting to be heard, whose peers have to be able
+	// to reach SettlePairing to hear them (refusal.go).
+	for _, key := range n.heldRefusalKeys() {
+		keys[string(key)] = true
 	}
 
 	return keys
@@ -744,21 +796,27 @@ func (n *Node) pendingOffer(name string, offer *ladulasv1.TunnelOffer) *ladulasv
 }
 
 // forgetPendingTunnel takes a pending pairing's client key off the allowlist,
-// when a pairing is declined, withdrawn or forgotten — unless the same identity
-// has a trust record holding the same key, which is a re-pair of a peer that
-// is still admitted for its own reasons.
+// when a pairing ends by the peer's own word or is let go — unless something
+// still holds the same key by then: a trust record, which is a re-pair of a
+// peer that is still admitted for its own reasons, or a refusal still waiting
+// to be heard. A refusal made here does not come through this at all; it is
+// held with its key until the peer has heard it (holdRefusal).
+//
+// Not at once. The drop is usually the peer's own SettlePairing arriving, and
+// when it arrived through the tunnel, revoking the key disconnects the very
+// client its answer is about to go back on — tailcat drops a revoked client's
+// sessions — so the peer would never hear that its word was taken and would
+// go on saying it. The gate refuses the identity from the moment the entry is
+// gone, so the minute the key outlives it reaches nothing.
 func (n *Node) forgetPendingTunnel(pending *storepb.PendingPairing) {
 	key := admissible(pending.GetTunnel())
 	if key == nil {
 		return
 	}
 
-	if record, ok := n.trust.Peer(pending.GetFingerprint()); ok &&
-		bytes.Equal(admissible(record.GetTunnel()), key) {
-		return
-	}
-
-	n.revokeKey(key)
+	time.AfterFunc(n.lingerFor(), func() {
+		n.revokeUnheld(key)
+	})
 }
 
 // forgetRecordTunnel takes a revoked peer's client key off the allowlist and
@@ -839,8 +897,9 @@ type tunnelGate struct {
 
 var _ transport.TunnelGate = tunnelGate{}
 
-// Admit lets in a paired identity, or one half way through a pairing written
-// down here, arriving with the client key it offered.
+// Admit lets in a paired identity, one half way through a pairing written
+// down here, or one whose pairing was refused here and has not heard so yet,
+// arriving with the client key it offered.
 func (g tunnelGate) Admit(fingerprint string, clientKey []byte) error {
 	n := g.node
 
@@ -851,6 +910,13 @@ func (g tunnelGate) Admit(fingerprint string, clientKey []byte) error {
 	if pending, ok := n.trust.PendingPairing(fingerprint); ok &&
 		pending.GetFingerprint() == fingerprint {
 		return g.matches(pending.GetName(), pending.GetTunnel(), clientKey)
+	}
+
+	// A pairing refused here that the peer has not heard about yet: admitted
+	// with the key it offered, so that it can ask and be told (refusal.go).
+	// Permit holds it to SettlePairing, as it does a pending identity.
+	if held, ok := n.heldRefusalOf(fingerprint); ok {
+		return g.matches(held.pending.GetName(), held.pending.GetTunnel(), clientKey)
 	}
 
 	n.observedTunnel("refused")

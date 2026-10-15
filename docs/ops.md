@@ -595,13 +595,63 @@ hand whoever answered something it could search offline. Spent attempts
 close the window: that is a denial somebody on the network can cause, never
 a way in, and the remedy is a new PIN.
 
+### The full code does not pair across networks
+
+**Signal:** the code's screen, or `ladulas pair`, says *off-network pairing
+unavailable: …*; or a joiner whose direct addresses for the code did not
+answer says "turn on the tunnel to pair across networks", or that the
+other machine's tunnel speaks another version, or that the pairing server
+did not answer; or `ladulas_tunnel_events_total{event="pairing_server_failed"}`
+counts.
+**Action:** the sentence on the displaying side is the cause. *The tunnel
+is off on this machine* — `ladulas tunnel on`, then show a new code. *The
+tunnel server is not up* — see the two sections below; a code shown before
+the server is up carries no pairing server, and showing it again once
+`ladulas tunnel` says up is the fix. *The pairing server did not start* —
+it had eight seconds, alongside the local-network announcement, before the
+code went on screen without it; its region
+is picked from the DERP map, or is the persisted one when the map cannot be
+fetched, so this is the region's relays being unreachable from here, the
+same cause as "The tunnel says `up` and nobody can reach it".
+On the joining side the upgrade has to be on and its own server up,
+because a pair made through the pairing server may have no direct path and
+could otherwise never settle
+([decision AZ](architecture.md#7-identity-pairing-and-trust)); a version
+mismatch is the two builds pinning tailcats that cannot talk, and is fixed
+by updating one. The direct addresses are always tried first and on the
+same LAN they win, so none of this matters to two machines that can see
+each other. A pairing server lives for its window and no longer — it closes
+a few seconds after the code is used, or when the screen closes, the five
+minutes run out, the tunnel is switched off or the store is sealed — so a
+code copied earlier and used later finds nothing, which is the five
+minutes doing their job. Attempts through it are listed on the displaying
+screen as *via pairing server* and count against the same five.
+
 ### A pairing never completes
 
 **Signal:** `ladulas_pending_pairings` non-zero and staying there.
 **Action:** it needs a person, and nothing will time it out. `ladulas
 pairings list` is where one is found; `approve`, `reject` or `withdraw`
-ends it. A sealed instance can neither list nor answer one, because pending
+ends it. Once both have answered, each side takes its answer to the other
+by a direct address that answers a probe, and otherwise through the other's
+long-lived tunnel, which is the only path a pair joined through a pairing
+server may have; one that is answered on both sides and still pending is
+two machines that cannot reach each other by either — the tunnel sections
+below apply. (Until the pairing server, settling took the direct addresses
+only, and this section did not need the sentence.) A sealed instance can neither list nor answer one, because pending
 pairings live in the store — that is a stated cost, not a bug.
+
+**A pending pairing the other side has already refused** resolves the next
+time the two can reach each other: the side that declined or withdrew holds
+the refusal in memory, with this side's client key still admitted, and
+answers this side's asking with it, or delivers it itself (§7 of the
+[architecture](architecture.md#7-identity-pairing-and-trust)). The hold does
+not survive a restart or seal of the side that refused. One that has
+outlived that, or whose other side never wrote its half down — a join
+abandoned mid-exchange on an older build — stays here, failing to settle on
+every retry and logging that at debug. Ask the person at the other machine
+whether it is still pending there; if not, `ladulas pairings withdraw` here
+ends it.
 
 ### The tunnel is on and its server never comes up
 
@@ -1042,8 +1092,6 @@ build reattaches to the new daemon perfectly happily.
 * **No alerting exists.** The metrics are there and nothing scrapes them on
   a schedule; the watch list above is a description of what an operator
   should look at, not of something that pages anybody.
-* **A pending pairing is settled over its direct addresses only.** Settling
-  through the tunnel arrives with the pairing server.
 * **A DERP region cannot be moved gracefully.** A re-pick forgets the old
   region at once; keeping it serving beside the new one until every peer
   has the new address is designed and not built.

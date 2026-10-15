@@ -168,8 +168,16 @@ its author meant, a phone that nobody is picking up.
   neither is a presence change, so neither shows anywhere else — a
   `switched` rate that keeps pace with beats is a tunnel flapping between
   punched and relayed. `reoffered` is this instance saying its offer again
-  over a direct contact after a failure. `other` is a word this build does
-  not know.
+  over a direct contact after a failure. The pairing server
+  ([decision AZ](architecture.md#7-identity-pairing-and-trust)) adds two:
+  `pairing_server_started` and `pairing_server_failed` are a displayed
+  code's pairing server coming up, or not inside the eight seconds the code
+  waits for it — one `pairing_server_started` per code shown with the
+  tunnel up is normal, and a `pairing_server_failed` is a code that went on
+  screen saying *off-network pairing unavailable*
+  ([ops](ops.md#the-full-code-does-not-pair-across-networks)). A code shown
+  with the tunnel off or its server not up counts neither. `other` is a
+  word this build does not know.
 * **`ladulas_tunnel_server{state}`** — the long-lived server, 1 for the
   state it is in: `off` (the upgrade switched off, or a build without
   tailcat), `starting` (built and not up yet — for long, the first region

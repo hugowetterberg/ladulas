@@ -44,6 +44,10 @@ type Client struct {
 	expect *Pin
 	self   Pin
 
+	// dial is how Handshake reaches the peer when it is not a TCP dial to an
+	// address: a tunnel client's, which ignores the address (NewTunnelClient).
+	dial func(ctx context.Context) (net.Conn, error)
+
 	mu   sync.Mutex
 	peer *PeerIdentity
 }
@@ -136,15 +140,13 @@ const IdleConnTimeout = 90 * time.Second
 // end presents, so the key has to be in hand before the first RPC. It also
 // fixes the pin for a dialler that started with nothing to expect, so
 // everything after the handshake is pinned to what the handshake met.
+//
+// A tunnel client's handshake goes through its tunnel, whatever the address
+// says, so that the pin is checked there before anything else is sent.
 func (c *Client) Handshake(ctx context.Context, address string) (*PeerIdentity, error) {
-	dialer := tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: DialTimeout},
-		Config:    c.tls,
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	conn, err := c.handshakeConn(ctx, address)
 	if err != nil {
-		return nil, fmt.Errorf("transport: connect to %s: %w", address, err)
+		return nil, err
 	}
 
 	defer func() {
@@ -160,6 +162,38 @@ func (c *Client) Handshake(ctx context.Context, address string) (*PeerIdentity, 
 	peer.RemoteAddr = conn.RemoteAddr().String()
 
 	return peer, nil
+}
+
+// handshakeConn is a connection that has completed the pinned handshake.
+func (c *Client) handshakeConn(ctx context.Context, address string) (net.Conn, error) {
+	if c.dial == nil {
+		dialer := tls.Dialer{
+			NetDialer: &net.Dialer{Timeout: DialTimeout},
+			Config:    c.tls,
+		}
+
+		conn, err := dialer.DialContext(ctx, "tcp", address)
+		if err != nil {
+			return nil, fmt.Errorf("transport: connect to %s: %w", address, err)
+		}
+
+		return conn, nil
+	}
+
+	raw, err := c.dial(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("transport: connect to %s: %w", address, err)
+	}
+
+	conn := tls.Client(raw, c.tls)
+
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+
+		return nil, fmt.Errorf("transport: handshake with %s: %w", address, err)
+	}
+
+	return conn, nil
 }
 
 // HTTP returns the client the connect-go stubs are built on.

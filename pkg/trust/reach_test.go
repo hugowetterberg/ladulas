@@ -87,12 +87,27 @@ func TestDialableIsOneRule(t *testing.T) {
 		t.Error("a phone's offer, a client key and no server, is dialable")
 	}
 
-	if !trust.PendingDialable(&storepb.PendingPairing{Addresses: addressed}) {
+	if !trust.PendingDialable(&storepb.PendingPairing{Addresses: addressed}, 0) {
 		t.Error("a pending pairing with an address is not dialable")
 	}
 
-	if trust.PendingDialable(&storepb.PendingPairing{}) {
+	if trust.PendingDialable(&storepb.PendingPairing{}, 1) {
 		t.Error("a pending pairing with no address is dialable")
+	}
+
+	// A pairing born through a pairing server may have nothing but its
+	// tunnel, and settles over it — when this instance can raise one
+	// (decision AZ).
+	bornAcross := &storepb.PendingPairing{Tunnel: &ladulasv1.TunnelOffer{
+		Versions: []uint32{1}, ServerAddress: "tcdesk", ClientKey: []byte{1},
+	}}
+
+	if !trust.PendingDialable(bornAcross, 1) {
+		t.Error("a pending pairing with a raisable tunnel is not dialable")
+	}
+
+	if trust.PendingDialable(bornAcross, 0) {
+		t.Error("a pending pairing is dialable over a tunnel this instance cannot raise")
 	}
 
 	// The daemon's word is taken without an address list: once a path that is

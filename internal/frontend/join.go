@@ -27,7 +27,15 @@ import (
 // joinTimeout bounds waiting for the daemon's first word about the dial. The
 // dial is to another machine, over whichever network the address is on, so it
 // is a network timeout and not the two seconds a local socket gets.
-const joinTimeout = 30 * time.Second
+//
+// Joining through a pairing server is the longest path it has to cover: the
+// direct addresses for up to three seconds, then a raise and its Ping for up
+// to twenty, then the handshake and the PIN exchange over a relay (decision
+// AZ). Thirty seconds could expire inside that exchange. Running out is not
+// the damage it was — once PairFinish has been sent the daemon finishes the
+// join whether or not anybody is still listening — but it would tell the
+// person here that a join failed that went on to work.
+const joinTimeout = 45 * time.Second
 
 // join dials the machine displaying a code and reports when it has answered.
 func (f *Frontend) join(

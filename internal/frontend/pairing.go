@@ -31,9 +31,17 @@ import (
 // the command line or from a phone.
 
 // invitationTimeout bounds waiting for the daemon's first message, which is the
-// code itself. The listener is already up by then; this is a local socket
-// answering, and a daemon that has not in two seconds is one to report.
-const invitationTimeout = 2 * time.Second
+// code itself. The listener is already up by then, and this is a local socket
+// answering — but the code waits for two things the daemon runs side by side:
+// the pairing server when the tunnel is up, which it gives eight seconds
+// before it shows the code without it (decision AZ), and the local-network
+// announcement, whose name probe and a previous window's goodbye are bounded
+// at five between them (decision AW). The longer of the two, and the resolver
+// behind the advertised addresses after it, with four seconds to spare, is
+// twelve; past that is a daemon to report. It was two seconds in all until the
+// pairing server, and ten with the two run in sequence, which their sum could
+// overrun — a slow relay and a contested name, and the PIN never appeared.
+const invitationTimeout = 12 * time.Second
 
 // pairingControl is the bridge.Pairing a front end offers.
 type pairingControl struct {
@@ -170,6 +178,7 @@ func invitationFrom(progress *ladulasv1.PairingProgress) bridge.Invitation {
 		Intent:    trust.IntentFromWire(progress.GetIntent()),
 
 		Announcement: progress.GetAnnouncement(),
+		OffNetwork:   progress.GetOffNetwork(),
 	}
 
 	if expires := progress.GetExpiresAt(); expires != nil {

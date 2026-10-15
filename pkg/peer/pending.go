@@ -142,7 +142,7 @@ func (n *Node) AnswerPending(
 // nudgePeer takes one pairing to its peer straight away, out of band of the
 // loop's pacing.
 func (n *Node) nudgePeer(pending *storepb.PendingPairing, reason string) {
-	if !trust.PendingDialable(pending) {
+	if !n.pendingDialable(pending) {
 		return
 	}
 
@@ -164,6 +164,11 @@ func (n *Node) nudgePeer(pending *storepb.PendingPairing, reason string) {
 				"session", pending.GetSessionId(), "error", err.Error())
 
 			return
+		}
+
+		// A refusal the peer has just heard needs holding no longer.
+		if refusedHere(pending) {
+			n.releaseRefusal(pending.GetSessionId())
 		}
 
 		if err := n.applySettlement(pending.GetSessionId(), resp); err != nil {
@@ -212,7 +217,7 @@ func (n *Node) advance(
 	theirs := pending.GetTheirAnswer()
 
 	if refusal(ours) || refusal(theirs) {
-		n.dropPending(pending, refusalMessage(ours, theirs, reason))
+		n.dropPending(pending, refusalMessage(ours, theirs, reason), reason)
 
 		return ladulasv1.PairingRecordState_PAIRING_RECORD_STATE_GONE, nil, nil
 	}
@@ -295,7 +300,10 @@ func (n *Node) completePending(
 }
 
 // dropPending forgets an attempt and tells everything that was watching it.
-func (n *Node) dropPending(pending *storepb.PendingPairing, message string) {
+// The message is this side's account of how it ended; the reason is what the
+// person who ended it said, which is what a refusal made here carries to the
+// peer.
+func (n *Node) dropPending(pending *storepb.PendingPairing, message, reason string) {
 	if _, err := n.trust.RemovePendingPairing(pending.GetSessionId()); err != nil {
 		// Already gone is the ordinary case when both ends settle at once, and
 		// there is nothing to do about any of the others either.
@@ -305,9 +313,15 @@ func (n *Node) dropPending(pending *storepb.PendingPairing, message string) {
 
 	n.cancelPrompt(pending.GetSessionId())
 
-	// A declined or withdrawn pairing's client key stops reaching the tunnel
-	// listener with it (decision AX).
-	n.forgetPendingTunnel(pending)
+	// A pairing refused here is held until the peer has heard, with its client
+	// key still admitted so it can ask (refusal.go); one the peer ended itself
+	// has nothing left to tell it, and its client key stops reaching the
+	// tunnel listener (decision AX).
+	if refusedHere(pending) {
+		n.holdRefusal(pending, reason)
+	} else {
+		n.forgetPendingTunnel(pending)
+	}
 
 	n.engine.LogLifecycle(fmt.Sprintf("the pairing with %q, %s, ended: %s",
 		pending.GetName(), pending.GetFingerprint(), message))
@@ -351,8 +365,8 @@ func refusalMessage(ours, theirs ladulasv1.PairingAnswer, reason string) string 
 // Withdraw calls a pairing off. It is a manual operation and the only way a
 // pending pairing leaves the list without being answered (§7).
 //
-// The peer is told if it can be reached, and finds out by asking if it cannot —
-// see settlePairingReply for why that is enough, and for what it costs.
+// The peer is told if it can be reached. If it cannot, the refusal is held
+// until it asks or the convergence loop gets through to it (refusal.go).
 func (n *Node) Withdraw(
 	ctx context.Context, ref, reason string,
 ) (*storepb.PendingPairing, bool, error) {
@@ -369,7 +383,7 @@ func (n *Node) Withdraw(
 	pending.AnsweredAt = timestamppb.Now()
 
 	n.dropPending(pending, refusalMessage(pending.GetOurAnswer(),
-		ladulasv1.PairingAnswer_PAIRING_ANSWER_UNSPECIFIED, reason))
+		ladulasv1.PairingAnswer_PAIRING_ANSWER_UNSPECIFIED, reason), reason)
 
 	n.pairingMu.Unlock()
 
@@ -385,7 +399,7 @@ func (n *Node) Withdraw(
 func (n *Node) tellPeer(
 	ctx context.Context, pending *storepb.PendingPairing, reason string,
 ) bool {
-	if !trust.PendingDialable(pending) {
+	if !n.pendingDialable(pending) {
 		return false
 	}
 
@@ -400,6 +414,8 @@ func (n *Node) tellPeer(
 		return false
 	}
 
+	n.releaseRefusal(pending.GetSessionId())
+
 	return true
 }
 
@@ -408,7 +424,7 @@ func (n *Node) tellPeer(
 func (n *Node) callSettle(
 	ctx context.Context, pending *storepb.PendingPairing, reason string,
 ) (*ladulasv1.SettlePairingResponse, error) {
-	if !trust.PendingDialable(pending) {
+	if !n.pendingDialable(pending) {
 		return nil, ErrNoAddress
 	}
 
@@ -433,9 +449,34 @@ func (n *Node) callSettle(
 		Reason:    reason,
 	}
 
+	addresses := pending.GetAddresses()
+	tunnelled := trust.TunnelRaisable(pending.GetTunnel(), n.tunnelVersion())
+
+	// With a tunnel to fall back on, the addresses are probed first, so that a
+	// pairing born across networks — whose direct addresses are a café's view
+	// of somebody's home LAN — does not spend the whole settle timeout on
+	// connections that will never be answered before it tries the path that
+	// works (decision AZ). Without one they are tried as they always were.
+	if tunnelled && len(addresses) > 0 {
+		first := n.probeOf()(ctx, addresses)
+		if first == "" {
+			addresses = nil
+		} else {
+			ordered := []string{first}
+
+			for _, address := range addresses {
+				if address != first {
+					ordered = append(ordered, address)
+				}
+			}
+
+			addresses = ordered
+		}
+	}
+
 	var last error
 
-	for _, address := range pending.GetAddresses() {
+	for _, address := range addresses {
 		service := ladulasv1connect.NewPairingServiceClient(
 			client.HTTP(), client.URL(address))
 
@@ -451,14 +492,80 @@ func (n *Node) callSettle(
 		last = fmt.Errorf("settle the pairing with %s: %w", address, err)
 	}
 
-	// The loop is the direct path, and it is the only one: a pairing that is
-	// dialable by some other path and has no direct address to try reaches
-	// here having tried nothing, which is not a success.
+	if tunnelled {
+		resp, err := n.settleThroughTunnel(ctx, pending, key, msg)
+		if err == nil {
+			return resp, nil
+		}
+
+		last = err
+	}
+
+	// Nothing was tried: a pairing that is dialable by no path this instance
+	// can take reaches here having tried nothing, which is not a success.
 	if last == nil {
 		return nil, ErrNoAddress
 	}
 
 	return nil, last
+}
+
+// settleThroughTunnel is one SettlePairing through a client raised against the
+// pending peer's long-lived tunnel server, the one its offer named in the
+// exchange (decision AZ).
+//
+// The far end's gate admits a pending identity arriving with the client key it
+// offered, for SettlePairing on its own session and nothing else, and this
+// instance's offer in the exchange carried that key — so this is the path a
+// pairing joined through a pairing server settles on. The client is raised
+// for the one call and closed after it: a pending pairing settles a handful
+// of times and then becomes a trust record, whose link raises its own.
+func (n *Node) settleThroughTunnel(
+	ctx context.Context, pending *storepb.PendingPairing, key ssh.PublicKey,
+	msg *ladulasv1.SettlePairingRequest,
+) (*ladulasv1.SettlePairingResponse, error) {
+	tunnel := n.currentTunnel()
+	if tunnel == nil {
+		return nil, errors.New("settle the pairing through the tunnel: the tunnel is off here")
+	}
+
+	address := pending.GetTunnel().GetServerAddress()
+
+	if refused := n.checkOfferRegion(address); refused != "" {
+		return nil, fmt.Errorf("settle the pairing through the tunnel: %s", refused)
+	}
+
+	raw, err := tunnel.Raise(address)
+	if err != nil {
+		return nil, fmt.Errorf("settle the pairing through the tunnel: %w", err)
+	}
+
+	defer closeRaw(raw)
+
+	client, err := transport.NewTunnelClient(transport.ClientOptions{
+		Identity: n.identity,
+		Expect:   key,
+	}, raw)
+	if err != nil {
+		return nil, err
+	}
+
+	defer client.CloseIdle()
+
+	resp, err := ladulasv1connect.NewPairingServiceClient(
+		client.HTTP(), client.URL(transport.TunnelHost),
+	).SettlePairing(ctx, connect.NewRequest(msg))
+	if err != nil {
+		return nil, fmt.Errorf("settle the pairing through the tunnel: %w", err)
+	}
+
+	return resp.Msg, nil
+}
+
+// pendingDialable is trust.PendingDialable with this instance's tunnel
+// version.
+func (n *Node) pendingDialable(pending *storepb.PendingPairing) bool {
+	return trust.PendingDialable(pending, n.tunnelVersion())
 }
 
 // applySettlement takes what the peer said and moves the pairing on.
@@ -479,12 +586,19 @@ func (n *Node) applySettlement(
 	case ladulasv1.PairingRecordState_PAIRING_RECORD_STATE_PAIRED:
 		pending.TheirAnswer = ladulasv1.PairingAnswer_PAIRING_ANSWER_ACCEPTED
 	case ladulasv1.PairingRecordState_PAIRING_RECORD_STATE_GONE:
-		// The peer has no memory of this session. It was withdrawn, declined or
-		// revoked there while this side could not be reached; either way there is
-		// nothing left to converge on and nothing this side can do about it but
-		// stop asking.
-		n.dropPending(pending,
-			"the other side has no record of this pairing")
+		// The pairing is over at the other end. A peer still holding the
+		// refusal it made says which, and why (refusal.go); one that has
+		// forgotten — it restarted since, or is older than the hold — can only
+		// say it has no record. Either way there is nothing left to converge
+		// on and nothing this side can do about it but stop asking.
+		message := "the other side has no record of this pairing"
+
+		if answer := resp.GetAnswer(); refusal(answer) {
+			pending.TheirAnswer = answer
+			message = refusalMessage(pending.GetOurAnswer(), answer, resp.GetReason())
+		}
+
+		n.dropPending(pending, message, "")
 
 		return nil
 	case ladulasv1.PairingRecordState_PAIRING_RECORD_STATE_PENDING,
@@ -543,6 +657,9 @@ func (n *Node) convergeOnce(ctx context.Context) {
 	// waiting on somebody to be reachable (decision S).
 	n.deliverQueuedKeys(ctx)
 
+	// And a refusal made here that the peer has not heard (refusal.go).
+	n.deliverRefusals(ctx)
+
 	for _, pending := range n.trust.PendingPairings() {
 		if ctx.Err() != nil {
 			return
@@ -589,7 +706,7 @@ func (n *Node) settleWithin(
 // shouldSettle paces the reconciliation. A peer that cannot be dialled is never
 // dialled at all: it is a phone, and the phone is the side that dials.
 func (n *Node) shouldSettle(pending *storepb.PendingPairing) bool {
-	if !trust.PendingDialable(pending) {
+	if !n.pendingDialable(pending) {
 		return false
 	}
 

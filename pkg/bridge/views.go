@@ -480,6 +480,9 @@ type InvitationView struct {
 	// Announcement says whether a joining machine will find this one in its
 	// list, and if not why not (decision AW).
 	Announcement string `json:"announcement,omitempty"`
+	// OffNetwork says whether the full code pairs from another network,
+	// through the pairing server, and if not why not (decision AZ).
+	OffNetwork string `json:"offNetwork,omitempty"`
 }
 
 // PairingAttemptView is a failed attempt at a displayed code.
@@ -499,6 +502,7 @@ func invitationView(invitation Invitation) InvitationView {
 		Direction:    invitation.Intent.Describe(),
 		Ended:        invitation.Ended,
 		Announcement: invitation.Announcement,
+		OffNetwork:   invitation.OffNetwork,
 	}
 
 	for _, attempt := range invitation.Attempts {

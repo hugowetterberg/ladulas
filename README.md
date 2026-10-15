@@ -401,6 +401,23 @@ under "Inbound tunnels". The DERP region is picked once and kept, because a
 tunnel address embeds it; `--repick` picks again, and strands any pair that
 can reach this machine only through the tunnel.
 
+**With the tunnel on, the full code pairs across networks** (decision AZ).
+While a code is on screen and the tunnel's server is up, the machine runs a
+second, short-lived tailcat server for that code alone — fresh keys, any
+client admitted up to eight, nothing behind it but the PIN exchange — and
+the full code (the QR, the string to paste) carries its address. A joiner
+tries the code's direct addresses first and goes through the pairing server
+only when none answers; that needs the tunnel on at the joining machine too,
+and says "turn on the tunnel to pair across networks" otherwise. The two
+then settle through each other's long-lived tunnels. When the code carries
+no pairing server, the screen and `ladulas pair` say *off-network pairing
+unavailable:* and why. The pairing server closes a few seconds after the
+code is used, or with the screen, the five minutes, `ladulas tunnel off` or
+a seal; its address is never written down anywhere. Declining or
+withdrawing such a pairing while the other machine is asleep still reaches
+it when it wakes: the refusal is held, in memory, until the other side has
+heard it.
+
 ### Asking for permission before the login needs it
 
 ```
@@ -950,10 +967,11 @@ there in the product. Reproduce it by submitting inside the gap; do not
 expect the suite to catch it.
 
 **The rest of the tunnel.** The tunnel upgrade has both halves for desktops
-(decisions AX and AY). What is missing is the pairing server for off-LAN
-pairing, settling a pending pairing over the tunnel (which only the pairing
-server needs), phones on the tunnel, and keeping an old DERP region serving
-beside a new one through a re-pick, which is designed and not built.
+(decisions AX and AY), and a full code pairs across networks through a
+pairing server (decision AZ). What is missing is phones on the tunnel, and
+keeping an old DERP region serving beside a new one through a re-pick,
+which is designed and not built. (The pairing server and settling a pending
+pairing over the tunnel were on this list until they were built.)
 
 **The overlap has to end.** Pairing by PIN (decision AV) is built, and so
 is finding the displaying machine on the local network (decision AW); until

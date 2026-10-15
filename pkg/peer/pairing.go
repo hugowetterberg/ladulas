@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/hugowetterberg/ladulas/internal/cpace"
@@ -57,6 +58,13 @@ type pairingWindow struct {
 	// exhausted is closed when the attempts are spent and none is still in
 	// flight, which is somebody guessing rather than the clock running out.
 	exhausted chan struct{}
+	// spent is closed when the code can produce no more pairings — claimed,
+	// or out of attempts — and done when the window stops admitting anybody.
+	// They are the two moments a pairing server cares about, and they are
+	// different moments (decision AZ): spent refuses new exchanges at once,
+	// but the exchange that spent it may still be writing its answer.
+	spent chan struct{}
+	done  chan struct{}
 
 	mu sync.Mutex
 	// charged is the attempts charged and not refunded, in flight included.
@@ -119,6 +127,8 @@ func newPairingWindow(
 		arrived:   make(chan string, 1),
 		attempted: make(chan *ladulasv1.PairingAttempt, 4*trust.MaxAttempts),
 		exhausted: make(chan struct{}),
+		spent:     make(chan struct{}),
+		done:      make(chan struct{}),
 		exchanges: map[string]*pinExchange{},
 	}
 }
@@ -152,6 +162,10 @@ func (w *pairingWindow) close() {
 }
 
 func (w *pairingWindow) closeLocked() {
+	if !w.closed {
+		close(w.done)
+	}
+
 	w.closed = true
 
 	for _, exchange := range w.exchanges {
@@ -224,6 +238,8 @@ func (w *pairingWindow) claimLocked() bool {
 
 	w.settled = true
 
+	close(w.spent)
+
 	for _, exchange := range w.exchanges {
 		exchange.timer.Stop()
 	}
@@ -255,6 +271,7 @@ func (w *pairingWindow) failLocked(source, outcome string) {
 		w.tired = true
 
 		close(w.exhausted)
+		close(w.spent)
 	}
 }
 
@@ -738,17 +755,21 @@ func (s *peerService) SettlePairing(
 
 // settlePairingReply is the server half of the reconciliation.
 //
-// Three answers, and the third is the one worth explaining. A session this
-// instance has no memory of is reported as gone, and the asking side drops its
-// half — which is what makes withdrawal propagate without either side keeping a
-// tombstone until it has been delivered. The cost is that "withdrawn here",
-// "declined here" and "revoked here" all read as "gone" to a peer that was not
-// reachable when it happened, and that is accepted rather than worked around:
-// a phone advertises no address, so a tombstone could never be delivered to one
-// at all, and the mechanism that has to exist anyway — the side still holding a
-// pending entry asks — covers every case a tombstone would. The exact reason is
-// delivered when the peer can be reached at the moment of the decision, which
-// is most of the time and never load-bearing.
+// Four answers. A session still pending here is settled against. One that
+// completed here says so, so a peer that never heard the last word gets it. One
+// this side refused while the peer could not be told is answered with that
+// refusal and its reason, from the hold (refusal.go). And a session this
+// instance has no memory of at all is reported as gone, and the asking side
+// drops its half.
+//
+// The last used to be the whole of how a withdrawal propagated, with no
+// tombstone kept — accepted on the reasoning that a phone could never be
+// handed one and asking had to exist anyway. It never worked as well as that
+// reads: the gates refuse an identity with nothing pending before this is
+// reached, so the asker was turned away at the door rather than told. The hold
+// is what lets it in. "Gone" with no answer is now what a peer hears only from
+// an instance that has restarted or sealed since it refused, or that is older
+// than the hold.
 func (n *Node) settlePairingReply(
 	peer *transport.PeerIdentity, msg *ladulasv1.SettlePairingRequest,
 ) (*ladulasv1.SettlePairingResponse, error) {
@@ -777,6 +798,12 @@ func (n *Node) settlePairingReply(
 			Answer: ladulasv1.PairingAnswer_PAIRING_ANSWER_ACCEPTED,
 			Reason: "already paired here",
 		}, nil
+	}
+
+	// A pairing refused here while the peer could not be told: told now, in
+	// the words it was refused in (refusal.go).
+	if resp, held := n.answerHeldRefusal(peer.Fingerprint, session); held {
+		return resp, nil
 	}
 
 	return &ladulasv1.SettlePairingResponse{
@@ -845,37 +872,25 @@ func (n *Node) PairWith(
 		return nil, err
 	}
 
-	if address == "" {
-		if len(code.GetAddresses()) == 0 {
-			return nil, errors.New(
-				"peer: no address to dial, and the code carries none")
-		}
-
-		address = code.GetAddresses()[0]
-	}
-
-	client, err := transport.NewClient(transport.ClientOptions{
-		Identity: n.identity,
-		Expect:   expected,
-	})
+	reached, err := n.reachListener(ctx, address, code, expected)
 	if err != nil {
 		return nil, err
 	}
 
-	defer client.CloseIdle()
+	defer reached.close()
 
-	// The handshake first, on its own, because everything after it is bound to
-	// the key the far end actually presents. A code that carried the key has
-	// pinned it, and a handshake that fails the pin ends this before any
-	// guess has gone anywhere; a typed code learns the key here, and
-	// everything after is bound to what was learned.
-	peer, err := client.Handshake(ctx, address)
-	if err != nil {
-		return nil, fmt.Errorf("peer: reach %s: %w", address, err)
-	}
+	client, peer := reached.client, reached.peer
 
 	pairing := ladulasv1connect.NewPairingServiceClient(
-		client.HTTP(), client.URL(address))
+		client.HTTP(), client.URL(reached.address))
+
+	// What a refusal names, and what is written down as having worked: a
+	// direct address that completed the handshake, or nothing at all for a
+	// pairing server, whose address dies with the window (decision AZ).
+	where, dialled := reached.address, reached.address
+	if reached.raw != nil {
+		where, dialled = "the machine through its pairing server", ""
+	}
 
 	var answer *joinAnswer
 
@@ -886,7 +901,7 @@ func (n *Node) PairWith(
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("peer: pair with %s: %w", address, err)
+		return nil, fmt.Errorf("peer: pair with %s: %w", where, err)
 	}
 
 	if answer.session == "" {
@@ -909,7 +924,7 @@ func (n *Node) PairWith(
 		Fingerprint:       peer.Fingerprint,
 		Name:              answer.name,
 		IdentityPublicKey: peer.PublicKey.Marshal(),
-		Addresses:         peerAddresses(answer.addresses, address),
+		Addresses:         peerAddresses(answer.addresses, dialled),
 		MayApprove:        intent.PeerMayApprove(),
 		MayRequest:        intent.PeerMayRequest(),
 		WeDialled:         true,
@@ -927,6 +942,182 @@ func (n *Node) PairWith(
 	}
 
 	return pending, nil
+}
+
+// reachedListener is a listener a joiner has completed the pinned handshake
+// with, and how: the client to make the pairing calls on, the identity it
+// met, the address the calls go to, and the tunnel client under them when
+// they go through a pairing server.
+type reachedListener struct {
+	client  *transport.Client
+	peer    *transport.PeerIdentity
+	address string
+	raw     TunnelClient
+}
+
+func (r *reachedListener) close() {
+	r.client.CloseIdle()
+
+	closeRaw(r.raw)
+}
+
+// reachListener completes the handshake with the machine displaying a code,
+// before anything else is sent to it.
+//
+// A typed address is dialled and nothing else. A full code's direct addresses
+// are all tried at once, because each handshake is pinned to the key in the
+// code and so cannot reach anybody else; the first that completes wins. When
+// none does and the code carries a pairing server's address, the handshake
+// goes through the tunnel to it instead, pinned the same way (decision AZ).
+// Either way the PIN exchange starts only once the pin has held, so a wrong
+// address — in the code, or answering at it — never receives a guess.
+//
+// The address dialled is the caller's to report and never to record: a
+// pairing server's lives for one window, and what PairWith writes down are
+// the direct addresses the listener advertises and the long-lived offer it
+// sends (peerAddresses, pendingOffer).
+func (n *Node) reachListener(
+	ctx context.Context, address string, code *ladulasv1.PairingCode,
+	expected ssh.PublicKey,
+) (*reachedListener, error) {
+	candidates := []string{address}
+
+	if address == "" {
+		candidates = code.GetAddresses()
+
+		// Without the key to pin, every address but one would be a guess at a
+		// machine the user did not pick.
+		if expected == nil && len(candidates) > 1 {
+			candidates = candidates[:1]
+		}
+	}
+
+	tunnelled := address == "" && code.GetTunnelAddress() != "" && expected != nil
+
+	if len(candidates) == 0 && !tunnelled {
+		return nil, errors.New(
+			"peer: no address to dial, and the code carries none")
+	}
+
+	var direct error
+
+	if len(candidates) > 0 {
+		// With a pairing server to fall back on, the direct phase is held to
+		// directBeforeTunnel. Off the network the code was shown on, its
+		// addresses are somebody else's LAN and silently dropped, and each
+		// handshake would otherwise spend the whole DialTimeout before the
+		// path that works was tried — ten seconds of a join the desktop gives
+		// thirty in all, the tunnel's raise still to come.
+		directCtx, cancel := ctx, context.CancelFunc(func() {})
+		if tunnelled {
+			directCtx, cancel = context.WithTimeout(ctx, directBeforeTunnel)
+		}
+
+		reached, err := n.handshakeFirst(directCtx, candidates, expected)
+
+		cancel()
+
+		if err == nil {
+			return reached, nil
+		}
+
+		if !tunnelled {
+			return nil, err
+		}
+
+		direct = err
+	}
+
+	reached, err := n.reachPairingServer(ctx, code, expected)
+	if err != nil {
+		if direct != nil {
+			return nil, fmt.Errorf("%w; through the pairing server: %w", direct, err)
+		}
+
+		return nil, fmt.Errorf("peer: through the pairing server: %w", err)
+	}
+
+	return reached, nil
+}
+
+// directBeforeTunnel bounds the direct phase of a join whose code carries a
+// pairing server (reachListener). A handshake on the network the code was
+// shown on takes a fraction of it; one that has not completed by then is
+// almost always an address that is not on this network at all.
+const directBeforeTunnel = 3 * time.Second
+
+// pairFinishTimeout bounds PairFinish once it has been sent, under a context
+// the caller cannot cancel (pairByPIN).
+const pairFinishTimeout = 15 * time.Second
+
+// handshakeFirst handshakes with every candidate at once and keeps the first
+// that completes. One client per address, because a client remembers the
+// identity it met, and the losers' handshakes would otherwise write over the
+// winner's.
+func (n *Node) handshakeFirst(
+	ctx context.Context, candidates []string, expected ssh.PublicKey,
+) (*reachedListener, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type result struct {
+		reached *reachedListener
+		err     error
+	}
+
+	results := make(chan result, len(candidates))
+
+	for _, candidate := range candidates {
+		go func() {
+			client, err := transport.NewClient(transport.ClientOptions{
+				Identity: n.identity,
+				Expect:   expected,
+			})
+			if err != nil {
+				results <- result{err: err}
+
+				return
+			}
+
+			peer, err := client.Handshake(ctx, candidate)
+			if err != nil {
+				client.CloseIdle()
+
+				results <- result{err: fmt.Errorf("peer: reach %s: %w", candidate, err)}
+
+				return
+			}
+
+			results <- result{reached: &reachedListener{
+				client: client, peer: peer, address: candidate,
+			}}
+		}()
+	}
+
+	var first error
+
+	for received := 1; received <= len(candidates); received++ {
+		got := <-results
+		if got.err == nil {
+			// The rest are cancelled with ctx; what they reach anyway is
+			// closed as it arrives.
+			go func(remaining int) {
+				for range remaining {
+					if late := <-results; late.reached != nil {
+						late.reached.close()
+					}
+				}
+			}(len(candidates) - received)
+
+			return got.reached, nil
+		}
+
+		if first == nil {
+			first = got.err
+		}
+	}
+
+	return nil, first
 }
 
 // joinAnswer is what either proof brings back from the listener, once it has
@@ -972,7 +1163,18 @@ func (n *Node) pairByPIN(
 	// The commitment: this side's share and tag, sent together, before
 	// anything derived from the key has come back. Name and addresses ride
 	// along and are read by the listener only once the tag has verified.
-	finish, err := pairing.PairFinish(ctx, connect.NewRequest(&ladulasv1.PairFinishRequest{
+	//
+	// Once this is sent the caller no longer gets to cancel it. The listener
+	// writes its half of the pairing down as soon as the tag verifies, so a
+	// join abandoned here — the desktop's wait running out on a slow relay, a
+	// command line interrupted — would leave a pending pairing at the other
+	// end with nothing here to settle it against. The call runs to its own
+	// bound instead, and PairWith writes this side's half down with it.
+	finishCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx), pairFinishTimeout)
+	defer cancel()
+
+	finish, err := pairing.PairFinish(finishCtx, connect.NewRequest(&ladulasv1.PairFinishRequest{
 		SessionId:       start.Msg.GetSessionId(),
 		Share:           share,
 		Confirmation:    session.Confirmation(),
@@ -1095,12 +1297,11 @@ func (n *Node) pairByProof(
 // Only a direct address is recorded, dialled or advertised
 // (trust.DirectAddresses). The joining side writes down what it dialled because
 // a TCP connection to it worked, and that reasoning is about TCP: an address
-// for a path that is not a direct dial — a pairing reached through a relay, say,
-// whose address lives for the length of a pairing screen — would be written
+// for a path that is not a direct dial — a pairing server's, whose address
+// lives for the length of a pairing screen (decision AZ) — would be written
 // into the list the direct dialler works from, first, and fail there every time
-// for the life of the pairing. Every address a pairing dials today is a
-// host:port, because the dial is a TCP one, so this keeps out nothing that
-// could have worked.
+// for the life of the pairing. PairWith passes nothing as dialled for a
+// pairing joined that way, and the filter here would refuse it anyway.
 func peerAddresses(advertised []string, dialled string) []string {
 	var out []string
 

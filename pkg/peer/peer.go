@@ -232,6 +232,10 @@ type Node struct {
 	// the same reason: the tunnel gate reads it during a handshake.
 	tunnelState
 
+	// refusalState is the refusals made here that the peer has not heard yet
+	// (refusal.go), under its own mutex because both gates read it.
+	refusalState
+
 	// dialers are the warm clients for peers there is no link to, with the
 	// address each was last reached on. Its own mutex for the same reason.
 	dialMu  sync.Mutex
@@ -477,6 +481,9 @@ func (n *Node) Serve(ctx context.Context) error {
 	// usable while keeping one would be lying (decision AY).
 	defer n.closeTunnel()
 	defer n.closeDialers()
+	// And before either, the pairing server of a code on screen, which
+	// admits anybody (decision AZ).
+	defer n.closePairingServer()
 
 	// Links come up before the listener, because a headless box's whole reason
 	// for existing is to reach its approver, and it should not have to wait for
@@ -506,6 +513,10 @@ func (n *Node) Close() error {
 		// node has closed cannot take a PIN, and an entry for it in somebody's
 		// list would be a guess at nothing (decision AW).
 		n.withdrawAny()
+		// The pairing server of a code on screen goes first: it admits any
+		// client key, and seal closes it before the clients and the
+		// long-lived server (§3, decision AZ).
+		n.closePairingServer()
 		n.stopWatching()
 		n.stopLinks()
 		n.closeDialers()
@@ -571,6 +582,13 @@ func (n *Node) gate(peer *transport.PeerIdentity) error {
 
 	if pending, ok := n.trust.PendingPairing(peer.Fingerprint); ok &&
 		pending.GetFingerprint() == peer.Fingerprint {
+		return nil
+	}
+
+	// A pairing refused here that the peer has not heard about: let in to ask,
+	// which is the only way a peer that was unreachable at the decision can be
+	// told (refusal.go). It reaches nothing a pending identity could not.
+	if _, ok := n.heldRefusalOf(peer.Fingerprint); ok {
 		return nil
 	}
 

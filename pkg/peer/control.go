@@ -366,6 +366,24 @@ func (n *Node) BeginPairing(
 
 	defer n.closeWindow(window)
 
+	// Across networks for as long as the window is open, when the tunnel is up
+	// here: a pairing server of its own, whose address only the full code
+	// carries (decision AZ). It closes with the window, or a grace after the
+	// exchange that spends the code has answered, and not with this call —
+	// which goes on to follow the pairing, and may return before that answer
+	// has left.
+	//
+	// Started beside the announcement rather than after it. Each has a bound
+	// of its own — the pairing server's start, and the announcement's name
+	// probe behind a previous window's goodbye — and in sequence the code
+	// waited for their sum, which ran past what the desktop gives the first
+	// message: it gave up without ever showing the PIN.
+	reached := make(chan offNetwork, 1)
+
+	go func() {
+		reached <- n.openPairingServer(window)
+	}()
+
 	// On the local network for as long as the PIN is on this screen, and not a
 	// moment longer: a spent or abandoned window has nothing a list entry could
 	// lead anybody to (decision AW). The deferred withdraw covers every way out
@@ -375,10 +393,15 @@ func (n *Node) BeginPairing(
 	defer n.withdrawWindow(window)
 
 	addresses := n.Advertised()
+	reach := <-reached
 
-	full, err := trust.EncodeCode(trust.NewCode(
+	code := trust.NewCode(
 		window.pin, secret, n.identity.Name(), n.identity.PublicKey(),
-		addresses, window.expires))
+		addresses, window.expires)
+	code.TunnelAddress = reach.address
+	code.TunnelVersion = uint32(max(reach.version, 0))
+
+	full, err := trust.EncodeCode(code)
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
@@ -402,6 +425,7 @@ func (n *Node) BeginPairing(
 		ListenAddresses: addresses,
 		Intent:          trust.IntentToWire(intent),
 		Announcement:    announcement,
+		OffNetwork:      reach.sentence,
 	})
 	if err != nil {
 		return err
@@ -680,7 +704,7 @@ func (n *Node) WithdrawPairing(
 		SessionId:   pending.GetSessionId(),
 		Fingerprint: pending.GetFingerprint(),
 		PeerTold:    told,
-		Message:     withdrawalMessage(told, trust.PendingDialable(pending)),
+		Message:     withdrawalMessage(told, n.pendingDialable(pending)),
 	}), nil
 }
 

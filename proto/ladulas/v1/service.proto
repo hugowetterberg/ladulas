@@ -864,6 +864,19 @@ message PairingCode {
   // The six-digit PIN, as six ASCII digits. It is only ever a CPace password
   // (PairStart, PairFinish), and never goes into an HMAC on any code path.
   string pin = 7;
+  // The pairing server's tailcat address (tc…), for a joiner that cannot
+  // reach any of `addresses` (decision AZ). Present only while the displaying
+  // side runs a pairing server for this window, which it does only when its
+  // own long-lived tunnel server is up. It lives for the window and no
+  // longer, admits any client key up to a small cap, serves the PIN exchange
+  // and nothing else, and is never recorded by the joiner: what a pairing
+  // writes down is the long-lived offer the exchange carries, never the
+  // address that was dialled. Old decoders ignore it.
+  string tunnel_address = 8;
+  // The tunnel wire version `tunnel_address` speaks (TunnelOffer.versions).
+  // A joiner on another version cannot use the address, and falls back to
+  // the direct addresses alone.
+  uint32 tunnel_version = 9;
 }
 
 // PairRequest is the older joiner's proof. Overlap release only (decision AV).

@@ -141,6 +141,10 @@ type Invitation struct {
 	// Announcement is where the window is announced on the local network,
 	// or why it is not, as the instance's own sentence (decision AW).
 	Announcement string
+	// OffNetwork says whether the full code reaches this machine from
+	// another network, through its pairing server, or why it does not, as
+	// the instance's own sentence (decision AZ).
+	OffNetwork string
 }
 
 // PairingAttempt is one failed attempt at a displayed code.
