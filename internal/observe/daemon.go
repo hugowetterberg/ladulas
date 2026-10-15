@@ -8,6 +8,7 @@ import (
 	"github.com/hugowetterberg/ladulas/internal/app"
 	"github.com/hugowetterberg/ladulas/pkg/keystore"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // Daemon is everything ladulasd exports about itself. It is one type, built in
@@ -63,13 +64,19 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 				"could have listed it.",
 			labelOutcome),
 		tunnel: r.counter("", "tunnel_events_total",
-			"Tunnel upgrade events, by event (decision AX). server_started "+
-				"and server_failed are the long-lived tailcat server coming up "+
-				"or not; offer_received and offer_withdrawn are peers' offers "+
-				"changing a trust record; admitted and revoked are client keys "+
-				"on and off the allowlist; refused is a connection through the "+
-				"tunnel the gate turned away; region_refused is a peer's "+
-				"address whose DERP region failed the region rule.",
+			"Tunnel upgrade events, by event (decisions AX and AY). "+
+				"server_started and server_failed are the long-lived tailcat "+
+				"server coming up or not; offer_received and offer_withdrawn "+
+				"are peers' offers changing a trust record; admitted and "+
+				"revoked are client keys on and off the allowlist; refused is "+
+				"a connection through the tunnel the gate turned away; "+
+				"region_refused is a peer's address whose DERP region failed "+
+				"the region rule. raised and raise_failed are clients raised "+
+				"to peers' servers, or not; failed is a tunnel that broke "+
+				"while in use; switched is a link moving path make-before-break "+
+				"and fallback one moving after its path broke, neither of them "+
+				"a presence change; reoffered is the offer said again over a "+
+				"direct contact after a failure.",
 			labelEvent),
 		signature: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -99,7 +106,8 @@ func RegisterDaemon(reg prometheus.Registerer, instance *app.App) error {
 func (d *Daemon) tunnelEvent(event string) {
 	switch event {
 	case "server_started", "server_failed", "offer_received", "offer_withdrawn",
-		"admitted", "revoked", "refused", "region_refused":
+		"admitted", "revoked", "refused", "region_refused",
+		"raised", "raise_failed", "failed", "switched", "fallback", "reoffered":
 	default:
 		event = other
 	}
@@ -266,8 +274,12 @@ func newDaemonState(instance *app.App) *daemonState {
 				"pocket rather than a fault.",
 			[]string{labelState}, nil),
 		peers: prometheus.NewDesc(name("peers"),
-			"Paired peers, by whether a link to them is up.",
-			[]string{labelState}, nil),
+			"Paired peers, by whether a link to them is up and which path it "+
+				"is on (decision AY): direct is a pinned TLS connection to an "+
+				"address, tunnel_direct the tunnel over a punched UDP path, "+
+				"tunnel_relayed the tunnel through a DERP relay, and none a "+
+				"peer that is offline.",
+			[]string{labelState, labelPath}, nil),
 		pairings: prometheus.NewDesc(name("pending_pairings"),
 			"Pairings waiting for somebody to answer. They do not expire, and "+
 				"nothing else will ever remind anyone.", nil, nil),
@@ -414,22 +426,28 @@ func (s *daemonState) collectPeers(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	var online, offline int
+	// Every combination is emitted, zeroes included, for the reason the lock
+	// state is: a series that comes and goes cannot tell "none on the tunnel"
+	// from "nothing reported".
+	counts := map[[2]string]int{
+		{"online", "direct"}: 0, {"online", "tunnel_direct"}: 0,
+		{"online", "tunnel_relayed"}: 0, {"offline", "none"}: 0,
+	}
 
 	for _, peer := range node.PeerStatuses() {
-		if peer.GetOnline() {
-			online++
+		if !peer.GetOnline() {
+			counts[[2]string{"offline", "none"}]++
 
 			continue
 		}
 
-		offline++
+		counts[[2]string{"online", pathLabel(peer.GetPath())}]++
 	}
 
-	ch <- prometheus.MustNewConstMetric(s.peers, prometheus.GaugeValue,
-		float64(online), "online")
-	ch <- prometheus.MustNewConstMetric(s.peers, prometheus.GaugeValue,
-		float64(offline), "offline")
+	for labels, count := range counts {
+		ch <- prometheus.MustNewConstMetric(s.peers, prometheus.GaugeValue,
+			float64(count), labels[0], labels[1])
+	}
 
 	ch <- prometheus.MustNewConstMetric(s.pairings, prometheus.GaugeValue,
 		float64(len(node.PendingPairingStatuses())))
@@ -479,4 +497,20 @@ func boolValue(b bool) float64 {
 	}
 
 	return 0
+}
+
+// pathLabel is a peer's path word as the label's bounded vocabulary: the
+// tunnel's relay region is left out, because it is a value from a peer's
+// address and would make a time series per region.
+func pathLabel(path string) string {
+	switch {
+	case path == trust.PathTunnelDirect:
+		return "tunnel_direct"
+	case trust.IsTunnelPath(path):
+		return "tunnel_relayed"
+	default:
+		// An online peer with no word, from a path older than the words, is
+		// direct: it was the only path there was.
+		return "direct"
+	}
 }

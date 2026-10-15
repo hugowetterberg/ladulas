@@ -17,6 +17,7 @@ const (
 	labelOutcome   = "outcome"
 	labelProcedure = "procedure"
 	labelCode      = "code"
+	labelPath      = "path"
 )
 
 // other is the bucket a value falls into when this build has no name for it. A

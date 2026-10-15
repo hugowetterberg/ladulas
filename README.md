@@ -377,23 +377,29 @@ ladulas tunnel derp-map <url|default> [--repick]
 ```
 
 Two paired machines that both turn it on exchange tailcat keys over the
-pinned channel, so that one day either can reach the other through a NAT
-with no tailnet and no port forward (decision AX). Whatever crosses the
+pinned channel, so that either can reach the other through a NAT with no
+tailnet and no port forward (decisions AX and AY). Whatever crosses the
 tunnel is the same pinned TLS as a direct connection, and the direct
 addresses stay the fallback. It is **off until turned on**, because turning
 it on makes this machine's peer listener reachable from anywhere through a
 DERP relay — Tailscale's public fleet unless a self-hosted DERP map is set —
 for every client key a paired machine offered, and that relay's operator
 sees who pairs with whom and when. `ladulas tunnel` and the switch in the
-desktop's Settings both say that in so many words. `ladulas peers` shows
-what each peer offers in its TUNNEL column.
+desktop's Settings both say that in so many words.
 
-This release builds the listening half: the server, the offers, the
-allowlist and the tunnel listener's own gate. **Nothing dials over the
-tunnel yet**; every peer is still reached on its direct addresses. The DERP
-region is picked once and kept, because a tunnel address embeds it; `--repick`
-picks again, and strands any pair that can reach this machine only through
-the tunnel.
+Once both sides have it on, each raises a client to the other's tunnel in
+the background, and **which path carries traffic is decided per peer**: a
+tunnel that has punched a direct UDP path, then direct TCP, then a tunnel
+relayed through DERP. Nothing waits for a tunnel to come up — a call with no
+established path races the tunnel against the direct addresses — and moving
+between the two never drops the peer, so the agent's key list stays put. A
+tunnel that breaks in use falls back to the direct addresses and is not
+trusted again until it has held for three minutes. `ladulas peers` and
+`ladulas status` show each peer's path and its tunnel's state in the TUNNEL
+column, and `ladulas status` lists the peers whose tunnels reach this machine
+under "Inbound tunnels". The DERP region is picked once and kept, because a
+tunnel address embeds it; `--repick` picks again, and strands any pair that
+can reach this machine only through the tunnel.
 
 ### Asking for permission before the login needs it
 
@@ -943,14 +949,11 @@ online — which means the race is no longer *visible* in CI while still being
 there in the product. Reproduce it by submitting inside the gap; do not
 expect the suite to catch it.
 
-**Dialling over the tunnel.** The tunnel upgrade (decision AX) has its
-listening half: the long-lived tailcat server, the offers on every carrier,
-the allowlist and the tunnel listener's gate. Raising clients, the path
-order (tunnel with a punched path, then direct TCP, then a relayed tunnel),
-the make-before-break switch, the hysteresis and the `path` label are the
-next step; after them the pairing server for off-LAN pairing, then phones.
-Keeping an old DERP region serving beside a new one through a re-pick is
-designed and not built.
+**The rest of the tunnel.** The tunnel upgrade has both halves for desktops
+(decisions AX and AY). What is missing is the pairing server for off-LAN
+pairing, settling a pending pairing over the tunnel (which only the pairing
+server needs), phones on the tunnel, and keeping an old DERP region serving
+beside a new one through a re-pick, which is designed and not built.
 
 **The overlap has to end.** Pairing by PIN (decision AV) is built, and so
 is finding the displaying machine on the local network (decision AW); until

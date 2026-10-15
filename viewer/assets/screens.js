@@ -2124,7 +2124,10 @@ function pairingSheet(peer, state, go) {
       peer.dialable
         ? { label: "Last connected", value: peer.lastSeen }
         : null,
-      // The tunnel's word, from the one set the daemon defines (decision AX).
+      // Which path it is on while it is in contact — direct, or the tunnel
+      // punched or relayed (decision AY) — and the tunnel's word, from the one
+      // set the daemon defines (decisions AX and AY).
+      peer.path ? { label: "Path", value: peer.path } : null,
       peer.tunnel ? { label: "Tunnel", value: peer.tunnel } : null,
     ]),
     ui.note("The fingerprint is what the two machines compared when they "

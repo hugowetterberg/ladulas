@@ -26,9 +26,9 @@ import (
 // is everything that does not need tailcat itself: the offer that rides on the
 // carriers decision AQ already has, the record of what each peer offered, the
 // allowlist of client keys that is rebuilt from those records, the long-lived
-// server's lifecycle, and the gate in front of the tunnel listener. Dialling
-// over the tunnel is the next step; until it lands an offer is held, admitted
-// and described, and links still take the direct path.
+// server's lifecycle, and the gate in front of the tunnel listener. The other
+// half — raising a client to a peer's server, and choosing between it and the
+// direct path — is decision AY's, in raise.go and route.go.
 //
 // The tunnel never authenticates an instance. Every connection through it runs
 // the same TLS 1.3 handshake, pinned to the same identity key, as a direct
@@ -78,9 +78,39 @@ type Tunnel interface {
 	KnownRelays() string
 	// Region names the region the server runs in, for a status line.
 	Region() string
+	// Raise builds a client to a peer's server address, with this instance's
+	// client key (decision AY). It does not start it: the first Ping or Dial
+	// does, and the client is a whole network stack of its own until Close.
+	Raise(serverAddress string) (TunnelClient, error)
+	// ClientPath is how the server sees one client key now: ClientPathDirect
+	// for a punched UDP path, ClientPathRelayed — followed by a space and the
+	// region when it is known — for a DERP relay, and "" for a client that is
+	// not connected.
+	ClientPath(clientKey []byte) string
 	// Close closes the server and every client connection it holds.
 	Close() error
 }
+
+// TunnelClient is one raised client: a tailcat client to one peer's server
+// (decision AY). The deadlines are Unix nanoseconds, zero for none, because
+// gomobile binds no context and no time.Time (§21).
+type TunnelClient interface {
+	// Ping starts the client if it has not started and waits for the server to
+	// acknowledge it, which is the server admitting its key. A client that
+	// pings has a tunnel; whether the far end is the peer is the pinned TLS's
+	// to say, not this.
+	Ping(deadlineUnixNano int64) error
+	// Dial opens a TCP connection to the server's peer port.
+	Dial(deadlineUnixNano int64) (transport.TunnelConn, error)
+	// Close tears the client's stack down.
+	Close() error
+}
+
+// What Tunnel.ClientPath answers.
+const (
+	ClientPathDirect  = "direct"
+	ClientPathRelayed = "relayed"
+)
 
 // DefaultTunnelStale is how long a stored offer stays raisable without a beat
 // re-confirming it. Long, because a laptop that was closed for a week is still
@@ -125,6 +155,29 @@ type tunnelState struct {
 	tunnelContradicted map[string]time.Time
 	// observeTunnel is told about every tunnel event, for the metrics port.
 	observeTunnel func(event string)
+	// tunnelDwell is the hysteresis dwell and tunnelIdle the dialer's reap
+	// age (decision AY), zero for the defaults; probe is the direct probe the
+	// race runs, nil for the real one; and directClient builds the client a
+	// link or the dialer takes the direct path with, nil for
+	// transport.NewClient. Tests set them, so that the precedence between the
+	// two paths can be exercised without a network.
+	tunnelDwell  time.Duration
+	tunnelIdle   time.Duration
+	probe        probeFunc
+	directClient func(transport.ClientOptions) (*transport.Client, error)
+	// linked is told each time a link comes up — the transition that pushes
+	// grant activity and logs "linked" — nil outside tests. It is how a test
+	// holds a path change to the rule that it is not one of those.
+	linked func(fingerprint string)
+}
+
+// newDirectClient is the client for the direct path to a peer.
+func (n *Node) newDirectClient(opts transport.ClientOptions) (*transport.Client, error) {
+	if n.directClient != nil {
+		return n.directClient(opts)
+	}
+
+	return transport.NewClient(opts)
 }
 
 // TunnelStatus is the long-lived server as a status line reports it.
@@ -214,6 +267,39 @@ func (n *Node) SetTunnel(tunnel Tunnel) {
 
 	if tunnel != nil && serving {
 		go n.raiseServer(tunnel)
+	}
+
+	// Whether this instance can raise a client at all has just changed, and
+	// with it which peers are dialable and what every link's tunnel should be
+	// doing (decision AY). Reconcile hands each link its record again, which
+	// syncs its tunnel, and moves a tunnel-only peer between a link and an
+	// inbox.
+	//
+	// The dialer's raised clients are dropped here rather than left to sync on
+	// their next call: each is a whole tailcat stack with its DERP and
+	// WireGuard sessions, and `ladulas tunnel off` is somebody ending a public
+	// exposure (decision AX), who expects it to end now rather than at the
+	// next dial-back or five idle minutes later. A dialer that wants a tunnel
+	// again raises one against the new tunnel on its next call.
+	n.resetDialerTunnels()
+
+	if serving {
+		n.Reconcile()
+	}
+}
+
+// resetDialerTunnels drops every dialer's raised tunnel client.
+func (n *Node) resetDialerTunnels() {
+	n.dialMu.Lock()
+	held := make([]*dialer, 0, len(n.dialers))
+
+	for _, d := range n.dialers {
+		held = append(held, d)
+	}
+	n.dialMu.Unlock()
+
+	for _, d := range held {
+		d.tunnelPath().reset()
 	}
 }
 
@@ -575,14 +661,14 @@ func (n *Node) learnTunnel(fingerprint string, offer *ladulasv1.TunnelOffer) {
 		n.observedTunnel("offer_received")
 	}
 
-	// A peer whose only way in is its tunnel has just become, or stopped being,
-	// one this instance can dial (trust.Dialable), and Reconcile is what decides
-	// between a link and an inbox. Never today: the tunnel counts towards
-	// Dialable only once links can dial over it, and until then an offer must
-	// not move a collector off its inbox.
-	if trust.Dialable(record) != trust.Dialable(revised) {
-		n.Reconcile()
-	}
+	// The links work from the record they were built with, and Reconcile is
+	// what hands them a new one — which re-raises or drops a link's tunnel —
+	// and what moves a peer whose only way in is its tunnel between a link and
+	// an inbox when it has just become, or stopped being, one this instance
+	// can dial (trust.Dialable). In the background, because this runs on a
+	// link's own presence loop, and a withdrawal from a tunnel-only peer
+	// stops that very link, which waits for the loop to finish.
+	go n.Reconcile()
 }
 
 // normalizeOffer is what of an offer is written down: the three fields, with
@@ -718,9 +804,22 @@ func (n *Node) tunnelStaleFor(record *storepb.TrustRecord) bool {
 	return time.Since(seen) > n.tunnelStale
 }
 
-// describeTunnel is the tunnel's word for a peer's status (trust.DescribeTunnel).
-func (n *Node) describeTunnel(record *storepb.TrustRecord) string {
-	return trust.DescribeTunnel(record, n.tunnelVersion(), n.tunnelStaleFor(record))
+// describeTunnel is the tunnel's word for a peer's status (trust.DescribeTunnel):
+// this instance's side, the path the peer is on and the direct address in use
+// when it is direct, and what the raise is doing.
+func (n *Node) describeTunnel(
+	record *storepb.TrustRecord, path, address string, tunnel *tunnelPath,
+) string {
+	facts := &trust.TunnelFacts{
+		Ours:    n.tunnelVersion(),
+		Stale:   n.tunnelStaleFor(record),
+		Path:    path,
+		Address: address,
+	}
+
+	tunnel.facts(facts)
+
+	return trust.DescribeTunnel(record, facts)
 }
 
 // tunnelGate is the long-lived tunnel listener's own door (§8, §16).

@@ -56,6 +56,12 @@ func (s *stubTunnel) RelayRegion(string) (string, error) {
 func (s *stubTunnel) KnownRelays() string { return "" }
 func (s *stubTunnel) Region() string      { return "stub" }
 
+func (s *stubTunnel) Raise(string) (peer.TunnelClient, error) {
+	return nil, errors.New("the stub raises nothing")
+}
+
+func (s *stubTunnel) ClientPath([]byte) string { return "" }
+
 func (s *stubTunnel) Close() error {
 	s.once.Do(func() { close(s.closed) })
 

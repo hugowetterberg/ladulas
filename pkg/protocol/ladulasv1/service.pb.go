@@ -3759,8 +3759,14 @@ func (x *SettlePairingResponse) GetReason() string {
 }
 
 type PingRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SentAt        *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	SentAt *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`
+	// The caller's tunnel offer (decision AX). A Ping is how a caller re-offers
+	// over a direct contact after its tunnel failed, so that an allowlist entry
+	// the far end lost heals itself, and how a dial-back that holds no stream
+	// says anything about its tunnel at all (§8, decision AY). Absent says
+	// nothing, as on every other carrier.
+	Tunnel        *TunnelOffer `protobuf:"bytes,2,opt,name=tunnel,proto3" json:"tunnel,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3802,12 +3808,22 @@ func (x *PingRequest) GetSentAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *PingRequest) GetTunnel() *TunnelOffer {
+	if x != nil {
+		return x.Tunnel
+	}
+	return nil
+}
+
 type PingResponse struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	SentAt       *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`
 	InstanceName string                 `protobuf:"bytes,2,opt,name=instance_name,json=instanceName,proto3" json:"instance_name,omitempty"`
 	// Whether this peer currently has a human able to answer a prompt.
-	CanPrompt     bool `protobuf:"varint,3,opt,name=can_prompt,json=canPrompt,proto3" json:"can_prompt,omitempty"`
+	CanPrompt bool `protobuf:"varint,3,opt,name=can_prompt,json=canPrompt,proto3" json:"can_prompt,omitempty"`
+	// How this instance's tunnel server sees the caller's tunnel client
+	// (decision AY). The raise reads it from the Ping that proves the tunnel.
+	TunnelPath    *TunnelPathReport `protobuf:"bytes,4,opt,name=tunnel_path,json=tunnelPath,proto3" json:"tunnel_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3861,6 +3877,13 @@ func (x *PingResponse) GetCanPrompt() bool {
 		return x.CanPrompt
 	}
 	return false
+}
+
+func (x *PingResponse) GetTunnelPath() *TunnelPathReport {
+	if x != nil {
+		return x.TunnelPath
+	}
+	return nil
 }
 
 type WatchRequest struct {
@@ -3930,7 +3953,12 @@ type PresenceEvent struct {
 	ListenAddresses []string `protobuf:"bytes,4,rep,name=listen_addresses,json=listenAddresses,proto3" json:"listen_addresses,omitempty"`
 	// The approver's tunnel offer, on every beat, beside the addresses it does
 	// not replace (decision AX). A rotated key reaches a requester this way.
-	Tunnel        *TunnelOffer `protobuf:"bytes,5,opt,name=tunnel,proto3" json:"tunnel,omitempty"`
+	Tunnel *TunnelOffer `protobuf:"bytes,5,opt,name=tunnel,proto3" json:"tunnel,omitempty"`
+	// How the approver's tunnel server sees the requester's tunnel client, on
+	// every beat (decision AY), whichever path this stream is on. It is how a
+	// requester tells a punched tunnel from a relayed one: its own client has
+	// only an active probe to ask, and the listening side already knows.
+	TunnelPath    *TunnelPathReport `protobuf:"bytes,6,opt,name=tunnel_path,json=tunnelPath,proto3" json:"tunnel_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4000,6 +4028,82 @@ func (x *PresenceEvent) GetTunnel() *TunnelOffer {
 	return nil
 }
 
+func (x *PresenceEvent) GetTunnelPath() *TunnelPathReport {
+	if x != nil {
+		return x.TunnelPath
+	}
+	return nil
+}
+
+// TunnelPathReport is the listening side's view of one caller's tunnel client
+// (decision AY), from tailcat's Server.Status: whether that client is
+// connected at all, and whether a punched UDP path carries it or a DERP relay
+// does. It decides path precedence on the dialling side — a punched tunnel
+// beats direct TCP, and direct TCP beats a relayed tunnel — and is said by the
+// side that knows rather than probed for by the side that does not.
+type TunnelPathReport struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether the caller's client is connected to this instance's server.
+	Connected bool `protobuf:"varint,1,opt,name=connected,proto3" json:"connected,omitempty"`
+	// Whether a DERP relay carries it, rather than a punched UDP path.
+	Relayed bool `protobuf:"varint,2,opt,name=relayed,proto3" json:"relayed,omitempty"`
+	// The relay's region, when relayed.
+	Relay         string `protobuf:"bytes,3,opt,name=relay,proto3" json:"relay,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelPathReport) Reset() {
+	*x = TunnelPathReport{}
+	mi := &file_ladulas_v1_service_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelPathReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelPathReport) ProtoMessage() {}
+
+func (x *TunnelPathReport) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_service_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelPathReport.ProtoReflect.Descriptor instead.
+func (*TunnelPathReport) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *TunnelPathReport) GetConnected() bool {
+	if x != nil {
+		return x.Connected
+	}
+	return false
+}
+
+func (x *TunnelPathReport) GetRelayed() bool {
+	if x != nil {
+		return x.Relayed
+	}
+	return false
+}
+
+func (x *TunnelPathReport) GetRelay() string {
+	if x != nil {
+		return x.Relay
+	}
+	return ""
+}
+
 // TunnelOffer is one instance's half of the tunnel upgrade (§8, decision AX):
 // what a peer needs to raise a tailcat client to this instance, and to admit
 // this instance's client to its own server.
@@ -4040,7 +4144,7 @@ type TunnelOffer struct {
 
 func (x *TunnelOffer) Reset() {
 	*x = TunnelOffer{}
-	mi := &file_ladulas_v1_service_proto_msgTypes[59]
+	mi := &file_ladulas_v1_service_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4052,7 +4156,7 @@ func (x *TunnelOffer) String() string {
 func (*TunnelOffer) ProtoMessage() {}
 
 func (x *TunnelOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_service_proto_msgTypes[59]
+	mi := &file_ladulas_v1_service_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4065,7 +4169,7 @@ func (x *TunnelOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelOffer.ProtoReflect.Descriptor instead.
 func (*TunnelOffer) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{59}
+	return file_ladulas_v1_service_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *TunnelOffer) GetVersions() []uint32 {
@@ -4333,24 +4437,33 @@ const file_ladulas_v1_service_proto_rawDesc = "" +
 	"\x15SettlePairingResponse\x124\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1e.ladulas.v1.PairingRecordStateR\x05state\x121\n" +
 	"\x06answer\x18\x02 \x01(\x0e2\x19.ladulas.v1.PairingAnswerR\x06answer\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"B\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"s\n" +
 	"\vPingRequest\x123\n" +
-	"\asent_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\"\x87\x01\n" +
+	"\asent_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x12/\n" +
+	"\x06tunnel\x18\x02 \x01(\v2\x17.ladulas.v1.TunnelOfferR\x06tunnel\"\xc6\x01\n" +
 	"\fPingResponse\x123\n" +
 	"\asent_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06sentAt\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12\x1d\n" +
 	"\n" +
-	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\"j\n" +
+	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\x12=\n" +
+	"\vtunnel_path\x18\x04 \x01(\v2\x1c.ladulas.v1.TunnelPathReportR\n" +
+	"tunnelPath\"j\n" +
 	"\fWatchRequest\x12)\n" +
 	"\x10listen_addresses\x18\x01 \x03(\tR\x0flistenAddresses\x12/\n" +
-	"\x06tunnel\x18\x02 \x01(\v2\x17.ladulas.v1.TunnelOfferR\x06tunnel\"\xe9\x01\n" +
+	"\x06tunnel\x18\x02 \x01(\v2\x17.ladulas.v1.TunnelOfferR\x06tunnel\"\xa8\x02\n" +
 	"\rPresenceEvent\x128\n" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12#\n" +
 	"\rinstance_name\x18\x02 \x01(\tR\finstanceName\x12\x1d\n" +
 	"\n" +
 	"can_prompt\x18\x03 \x01(\bR\tcanPrompt\x12)\n" +
 	"\x10listen_addresses\x18\x04 \x03(\tR\x0flistenAddresses\x12/\n" +
-	"\x06tunnel\x18\x05 \x01(\v2\x17.ladulas.v1.TunnelOfferR\x06tunnel\"o\n" +
+	"\x06tunnel\x18\x05 \x01(\v2\x17.ladulas.v1.TunnelOfferR\x06tunnel\x12=\n" +
+	"\vtunnel_path\x18\x06 \x01(\v2\x1c.ladulas.v1.TunnelPathReportR\n" +
+	"tunnelPath\"`\n" +
+	"\x10TunnelPathReport\x12\x1c\n" +
+	"\tconnected\x18\x01 \x01(\bR\tconnected\x12\x18\n" +
+	"\arelayed\x18\x02 \x01(\bR\arelayed\x12\x14\n" +
+	"\x05relay\x18\x03 \x01(\tR\x05relay\"o\n" +
 	"\vTunnelOffer\x12\x1a\n" +
 	"\bversions\x18\x01 \x03(\rR\bversions\x12%\n" +
 	"\x0eserver_address\x18\x02 \x01(\tR\rserverAddress\x12\x1d\n" +
@@ -4431,7 +4544,7 @@ func file_ladulas_v1_service_proto_rawDescGZIP() []byte {
 }
 
 var file_ladulas_v1_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
+var file_ladulas_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
 var file_ladulas_v1_service_proto_goTypes = []any{
 	(ApprovalEventKind)(0),              // 0: ladulas.v1.ApprovalEventKind
 	(EventKind)(0),                      // 1: ladulas.v1.EventKind
@@ -4496,135 +4609,139 @@ var file_ladulas_v1_service_proto_goTypes = []any{
 	(*PingResponse)(nil),                // 60: ladulas.v1.PingResponse
 	(*WatchRequest)(nil),                // 61: ladulas.v1.WatchRequest
 	(*PresenceEvent)(nil),               // 62: ladulas.v1.PresenceEvent
-	(*TunnelOffer)(nil),                 // 63: ladulas.v1.TunnelOffer
-	(*timestamppb.Timestamp)(nil),       // 64: google.protobuf.Timestamp
-	(*SignedApproval)(nil),              // 65: ladulas.v1.SignedApproval
-	(*GitDiff)(nil),                     // 66: ladulas.v1.GitDiff
-	(*GrantUse)(nil),                    // 67: ladulas.v1.GrantUse
-	(*SignedDelegation)(nil),            // 68: ladulas.v1.SignedDelegation
-	(*durationpb.Duration)(nil),         // 69: google.protobuf.Duration
-	(*SignedEndorsement)(nil),           // 70: ladulas.v1.SignedEndorsement
-	(*SignedRetraction)(nil),            // 71: ladulas.v1.SignedRetraction
-	(*KeyRef)(nil),                      // 72: ladulas.v1.KeyRef
-	(*SyncEntry)(nil),                   // 73: ladulas.v1.SyncEntry
-	(*Publication)(nil),                 // 74: ladulas.v1.Publication
-	(SyncChangeKind)(0),                 // 75: ladulas.v1.SyncChangeKind
-	(*ProjectEntry)(nil),                // 76: ladulas.v1.ProjectEntry
-	(*DocumentVersion)(nil),             // 77: ladulas.v1.DocumentVersion
-	(*KindPolicy)(nil),                  // 78: ladulas.v1.KindPolicy
+	(*TunnelPathReport)(nil),            // 63: ladulas.v1.TunnelPathReport
+	(*TunnelOffer)(nil),                 // 64: ladulas.v1.TunnelOffer
+	(*timestamppb.Timestamp)(nil),       // 65: google.protobuf.Timestamp
+	(*SignedApproval)(nil),              // 66: ladulas.v1.SignedApproval
+	(*GitDiff)(nil),                     // 67: ladulas.v1.GitDiff
+	(*GrantUse)(nil),                    // 68: ladulas.v1.GrantUse
+	(*SignedDelegation)(nil),            // 69: ladulas.v1.SignedDelegation
+	(*durationpb.Duration)(nil),         // 70: google.protobuf.Duration
+	(*SignedEndorsement)(nil),           // 71: ladulas.v1.SignedEndorsement
+	(*SignedRetraction)(nil),            // 72: ladulas.v1.SignedRetraction
+	(*KeyRef)(nil),                      // 73: ladulas.v1.KeyRef
+	(*SyncEntry)(nil),                   // 74: ladulas.v1.SyncEntry
+	(*Publication)(nil),                 // 75: ladulas.v1.Publication
+	(SyncChangeKind)(0),                 // 76: ladulas.v1.SyncChangeKind
+	(*ProjectEntry)(nil),                // 77: ladulas.v1.ProjectEntry
+	(*DocumentVersion)(nil),             // 78: ladulas.v1.DocumentVersion
+	(*KindPolicy)(nil),                  // 79: ladulas.v1.KindPolicy
 }
 var file_ladulas_v1_service_proto_depIdxs = []int32{
 	0,  // 0: ladulas.v1.ApprovalEvent.kind:type_name -> ladulas.v1.ApprovalEventKind
-	64, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
-	65, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
-	66, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
-	67, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
-	68, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
-	67, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
-	69, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
-	63, // 8: ladulas.v1.FetchPendingRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
-	63, // 9: ladulas.v1.FetchPendingResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
+	65, // 1: ladulas.v1.ApprovalEvent.timestamp:type_name -> google.protobuf.Timestamp
+	66, // 2: ladulas.v1.ApprovalEvent.approval:type_name -> ladulas.v1.SignedApproval
+	67, // 3: ladulas.v1.FetchDiffResponse.diff:type_name -> ladulas.v1.GitDiff
+	68, // 4: ladulas.v1.ReportGrantUseRequest.uses:type_name -> ladulas.v1.GrantUse
+	69, // 5: ladulas.v1.ReconcileGrantsRequest.renewed_delegations:type_name -> ladulas.v1.SignedDelegation
+	68, // 6: ladulas.v1.ReconcileGrantsResponse.uses:type_name -> ladulas.v1.GrantUse
+	70, // 7: ladulas.v1.FetchPendingRequest.wait:type_name -> google.protobuf.Duration
+	64, // 8: ladulas.v1.FetchPendingRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
+	64, // 9: ladulas.v1.FetchPendingResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
 	16, // 10: ladulas.v1.FetchPendingResponse.pending:type_name -> ladulas.v1.PendingApproval
-	64, // 11: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
-	69, // 12: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
-	70, // 13: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	65, // 14: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
-	70, // 15: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	71, // 16: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
-	71, // 17: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
-	72, // 18: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
-	72, // 19: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
-	70, // 20: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
-	65, // 21: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
+	65, // 11: ladulas.v1.PendingApproval.waiting_since:type_name -> google.protobuf.Timestamp
+	70, // 12: ladulas.v1.PendingApproval.expires_in:type_name -> google.protobuf.Duration
+	71, // 13: ladulas.v1.PendingApproval.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	66, // 14: ladulas.v1.AnswerPendingRequest.approval:type_name -> ladulas.v1.SignedApproval
+	71, // 15: ladulas.v1.PublishEndorsementRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	72, // 16: ladulas.v1.PublishEndorsementResponse.retractions:type_name -> ladulas.v1.SignedRetraction
+	72, // 17: ladulas.v1.PublishRetractionRequest.retraction:type_name -> ladulas.v1.SignedRetraction
+	73, // 18: ladulas.v1.ListKeysResponse.keys:type_name -> ladulas.v1.KeyRef
+	73, // 19: ladulas.v1.AnnounceKeysRequest.keys:type_name -> ladulas.v1.KeyRef
+	71, // 20: ladulas.v1.RemoteSignRequest.endorsement:type_name -> ladulas.v1.SignedEndorsement
+	66, // 21: ladulas.v1.RemoteSignResponse.approval:type_name -> ladulas.v1.SignedApproval
 	33, // 22: ladulas.v1.CollectKeyOffersResponse.offers:type_name -> ladulas.v1.OfferedKey
-	73, // 23: ladulas.v1.SyncProjectRequest.have:type_name -> ladulas.v1.SyncEntry
-	74, // 24: ladulas.v1.SyncProjectEvent.project:type_name -> ladulas.v1.Publication
-	75, // 25: ladulas.v1.SyncProjectEvent.kind:type_name -> ladulas.v1.SyncChangeKind
-	76, // 26: ladulas.v1.SyncProjectEvent.file:type_name -> ladulas.v1.ProjectEntry
-	77, // 27: ladulas.v1.DocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
-	76, // 28: ladulas.v1.FetchProjectVersionResponse.file:type_name -> ladulas.v1.ProjectEntry
-	77, // 29: ladulas.v1.FetchProjectVersionResponse.version:type_name -> ladulas.v1.DocumentVersion
-	76, // 30: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	76, // 31: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
-	74, // 32: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
-	78, // 33: ladulas.v1.ListProjectsResponse.kinds:type_name -> ladulas.v1.KindPolicy
-	76, // 34: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
+	74, // 23: ladulas.v1.SyncProjectRequest.have:type_name -> ladulas.v1.SyncEntry
+	75, // 24: ladulas.v1.SyncProjectEvent.project:type_name -> ladulas.v1.Publication
+	76, // 25: ladulas.v1.SyncProjectEvent.kind:type_name -> ladulas.v1.SyncChangeKind
+	77, // 26: ladulas.v1.SyncProjectEvent.file:type_name -> ladulas.v1.ProjectEntry
+	78, // 27: ladulas.v1.DocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
+	77, // 28: ladulas.v1.FetchProjectVersionResponse.file:type_name -> ladulas.v1.ProjectEntry
+	78, // 29: ladulas.v1.FetchProjectVersionResponse.version:type_name -> ladulas.v1.DocumentVersion
+	77, // 30: ladulas.v1.ListDirectoryResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	77, // 31: ladulas.v1.SearchProjectFilesResponse.entries:type_name -> ladulas.v1.ProjectEntry
+	75, // 32: ladulas.v1.ListProjectsResponse.projects:type_name -> ladulas.v1.Publication
+	79, // 33: ladulas.v1.ListProjectsResponse.kinds:type_name -> ladulas.v1.KindPolicy
+	77, // 34: ladulas.v1.FetchProjectFileResponse.file:type_name -> ladulas.v1.ProjectEntry
 	1,  // 35: ladulas.v1.Event.kind:type_name -> ladulas.v1.EventKind
-	64, // 36: ladulas.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
-	64, // 37: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
-	63, // 38: ladulas.v1.PairRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
-	63, // 39: ladulas.v1.PairResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
-	63, // 40: ladulas.v1.PairFinishRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
-	63, // 41: ladulas.v1.PairFinishResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
+	65, // 36: ladulas.v1.Event.timestamp:type_name -> google.protobuf.Timestamp
+	65, // 37: ladulas.v1.PairingCode.expires_at:type_name -> google.protobuf.Timestamp
+	64, // 38: ladulas.v1.PairRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
+	64, // 39: ladulas.v1.PairResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
+	64, // 40: ladulas.v1.PairFinishRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
+	64, // 41: ladulas.v1.PairFinishResponse.tunnel:type_name -> ladulas.v1.TunnelOffer
 	2,  // 42: ladulas.v1.SettlePairingRequest.answer:type_name -> ladulas.v1.PairingAnswer
 	3,  // 43: ladulas.v1.SettlePairingResponse.state:type_name -> ladulas.v1.PairingRecordState
 	2,  // 44: ladulas.v1.SettlePairingResponse.answer:type_name -> ladulas.v1.PairingAnswer
-	64, // 45: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
-	64, // 46: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
-	63, // 47: ladulas.v1.WatchRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
-	64, // 48: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
-	63, // 49: ladulas.v1.PresenceEvent.tunnel:type_name -> ladulas.v1.TunnelOffer
-	4,  // 50: ladulas.v1.ApprovalService.RequestApproval:input_type -> ladulas.v1.RequestApprovalRequest
-	6,  // 51: ladulas.v1.ApprovalService.CancelApproval:input_type -> ladulas.v1.CancelApprovalRequest
-	8,  // 52: ladulas.v1.ApprovalService.FetchDiff:input_type -> ladulas.v1.FetchDiffRequest
-	14, // 53: ladulas.v1.InboxService.FetchPending:input_type -> ladulas.v1.FetchPendingRequest
-	17, // 54: ladulas.v1.InboxService.AnswerPending:input_type -> ladulas.v1.AnswerPendingRequest
-	10, // 55: ladulas.v1.InboxService.ReportGrantUse:input_type -> ladulas.v1.ReportGrantUseRequest
-	12, // 56: ladulas.v1.InboxService.ReconcileGrants:input_type -> ladulas.v1.ReconcileGrantsRequest
-	23, // 57: ladulas.v1.KeyService.ListKeys:input_type -> ladulas.v1.ListKeysRequest
-	27, // 58: ladulas.v1.KeyService.RemoteSign:input_type -> ladulas.v1.RemoteSignRequest
-	29, // 59: ladulas.v1.KeyService.OfferKey:input_type -> ladulas.v1.OfferKeyRequest
-	31, // 60: ladulas.v1.KeyService.CollectKeyOffers:input_type -> ladulas.v1.CollectKeyOffersRequest
-	25, // 61: ladulas.v1.KeyService.AnnounceKeys:input_type -> ladulas.v1.AnnounceKeysRequest
-	19, // 62: ladulas.v1.KeyService.PublishEndorsement:input_type -> ladulas.v1.PublishEndorsementRequest
-	21, // 63: ladulas.v1.KeyService.PublishRetraction:input_type -> ladulas.v1.PublishRetractionRequest
-	44, // 64: ladulas.v1.ProjectService.ListProjects:input_type -> ladulas.v1.ListProjectsRequest
-	40, // 65: ladulas.v1.ProjectService.ListDirectory:input_type -> ladulas.v1.ListDirectoryRequest
-	42, // 66: ladulas.v1.ProjectService.SearchProjectFiles:input_type -> ladulas.v1.SearchProjectFilesRequest
-	46, // 67: ladulas.v1.ProjectService.FetchProjectFile:input_type -> ladulas.v1.FetchProjectFileRequest
-	34, // 68: ladulas.v1.ProjectService.SyncProject:input_type -> ladulas.v1.SyncProjectRequest
-	36, // 69: ladulas.v1.ProjectService.DocumentVersions:input_type -> ladulas.v1.DocumentVersionsRequest
-	38, // 70: ladulas.v1.ProjectService.FetchProjectVersion:input_type -> ladulas.v1.FetchProjectVersionRequest
-	48, // 71: ladulas.v1.EventService.Events:input_type -> ladulas.v1.EventsRequest
-	51, // 72: ladulas.v1.PairingService.Pair:input_type -> ladulas.v1.PairRequest
-	53, // 73: ladulas.v1.PairingService.PairStart:input_type -> ladulas.v1.PairStartRequest
-	55, // 74: ladulas.v1.PairingService.PairFinish:input_type -> ladulas.v1.PairFinishRequest
-	57, // 75: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
-	59, // 76: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
-	61, // 77: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
-	5,  // 78: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
-	7,  // 79: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
-	9,  // 80: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
-	15, // 81: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
-	18, // 82: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
-	11, // 83: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
-	13, // 84: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
-	24, // 85: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
-	28, // 86: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
-	30, // 87: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
-	32, // 88: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
-	26, // 89: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
-	20, // 90: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
-	22, // 91: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
-	45, // 92: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
-	41, // 93: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
-	43, // 94: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
-	47, // 95: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
-	35, // 96: ladulas.v1.ProjectService.SyncProject:output_type -> ladulas.v1.SyncProjectEvent
-	37, // 97: ladulas.v1.ProjectService.DocumentVersions:output_type -> ladulas.v1.DocumentVersionsResponse
-	39, // 98: ladulas.v1.ProjectService.FetchProjectVersion:output_type -> ladulas.v1.FetchProjectVersionResponse
-	49, // 99: ladulas.v1.EventService.Events:output_type -> ladulas.v1.Event
-	52, // 100: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
-	54, // 101: ladulas.v1.PairingService.PairStart:output_type -> ladulas.v1.PairStartResponse
-	56, // 102: ladulas.v1.PairingService.PairFinish:output_type -> ladulas.v1.PairFinishResponse
-	58, // 103: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
-	60, // 104: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
-	62, // 105: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
-	78, // [78:106] is the sub-list for method output_type
-	50, // [50:78] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	65, // 45: ladulas.v1.PingRequest.sent_at:type_name -> google.protobuf.Timestamp
+	64, // 46: ladulas.v1.PingRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
+	65, // 47: ladulas.v1.PingResponse.sent_at:type_name -> google.protobuf.Timestamp
+	63, // 48: ladulas.v1.PingResponse.tunnel_path:type_name -> ladulas.v1.TunnelPathReport
+	64, // 49: ladulas.v1.WatchRequest.tunnel:type_name -> ladulas.v1.TunnelOffer
+	65, // 50: ladulas.v1.PresenceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	64, // 51: ladulas.v1.PresenceEvent.tunnel:type_name -> ladulas.v1.TunnelOffer
+	63, // 52: ladulas.v1.PresenceEvent.tunnel_path:type_name -> ladulas.v1.TunnelPathReport
+	4,  // 53: ladulas.v1.ApprovalService.RequestApproval:input_type -> ladulas.v1.RequestApprovalRequest
+	6,  // 54: ladulas.v1.ApprovalService.CancelApproval:input_type -> ladulas.v1.CancelApprovalRequest
+	8,  // 55: ladulas.v1.ApprovalService.FetchDiff:input_type -> ladulas.v1.FetchDiffRequest
+	14, // 56: ladulas.v1.InboxService.FetchPending:input_type -> ladulas.v1.FetchPendingRequest
+	17, // 57: ladulas.v1.InboxService.AnswerPending:input_type -> ladulas.v1.AnswerPendingRequest
+	10, // 58: ladulas.v1.InboxService.ReportGrantUse:input_type -> ladulas.v1.ReportGrantUseRequest
+	12, // 59: ladulas.v1.InboxService.ReconcileGrants:input_type -> ladulas.v1.ReconcileGrantsRequest
+	23, // 60: ladulas.v1.KeyService.ListKeys:input_type -> ladulas.v1.ListKeysRequest
+	27, // 61: ladulas.v1.KeyService.RemoteSign:input_type -> ladulas.v1.RemoteSignRequest
+	29, // 62: ladulas.v1.KeyService.OfferKey:input_type -> ladulas.v1.OfferKeyRequest
+	31, // 63: ladulas.v1.KeyService.CollectKeyOffers:input_type -> ladulas.v1.CollectKeyOffersRequest
+	25, // 64: ladulas.v1.KeyService.AnnounceKeys:input_type -> ladulas.v1.AnnounceKeysRequest
+	19, // 65: ladulas.v1.KeyService.PublishEndorsement:input_type -> ladulas.v1.PublishEndorsementRequest
+	21, // 66: ladulas.v1.KeyService.PublishRetraction:input_type -> ladulas.v1.PublishRetractionRequest
+	44, // 67: ladulas.v1.ProjectService.ListProjects:input_type -> ladulas.v1.ListProjectsRequest
+	40, // 68: ladulas.v1.ProjectService.ListDirectory:input_type -> ladulas.v1.ListDirectoryRequest
+	42, // 69: ladulas.v1.ProjectService.SearchProjectFiles:input_type -> ladulas.v1.SearchProjectFilesRequest
+	46, // 70: ladulas.v1.ProjectService.FetchProjectFile:input_type -> ladulas.v1.FetchProjectFileRequest
+	34, // 71: ladulas.v1.ProjectService.SyncProject:input_type -> ladulas.v1.SyncProjectRequest
+	36, // 72: ladulas.v1.ProjectService.DocumentVersions:input_type -> ladulas.v1.DocumentVersionsRequest
+	38, // 73: ladulas.v1.ProjectService.FetchProjectVersion:input_type -> ladulas.v1.FetchProjectVersionRequest
+	48, // 74: ladulas.v1.EventService.Events:input_type -> ladulas.v1.EventsRequest
+	51, // 75: ladulas.v1.PairingService.Pair:input_type -> ladulas.v1.PairRequest
+	53, // 76: ladulas.v1.PairingService.PairStart:input_type -> ladulas.v1.PairStartRequest
+	55, // 77: ladulas.v1.PairingService.PairFinish:input_type -> ladulas.v1.PairFinishRequest
+	57, // 78: ladulas.v1.PairingService.SettlePairing:input_type -> ladulas.v1.SettlePairingRequest
+	59, // 79: ladulas.v1.PresenceService.Ping:input_type -> ladulas.v1.PingRequest
+	61, // 80: ladulas.v1.PresenceService.Watch:input_type -> ladulas.v1.WatchRequest
+	5,  // 81: ladulas.v1.ApprovalService.RequestApproval:output_type -> ladulas.v1.ApprovalEvent
+	7,  // 82: ladulas.v1.ApprovalService.CancelApproval:output_type -> ladulas.v1.CancelApprovalResponse
+	9,  // 83: ladulas.v1.ApprovalService.FetchDiff:output_type -> ladulas.v1.FetchDiffResponse
+	15, // 84: ladulas.v1.InboxService.FetchPending:output_type -> ladulas.v1.FetchPendingResponse
+	18, // 85: ladulas.v1.InboxService.AnswerPending:output_type -> ladulas.v1.AnswerPendingResponse
+	11, // 86: ladulas.v1.InboxService.ReportGrantUse:output_type -> ladulas.v1.ReportGrantUseResponse
+	13, // 87: ladulas.v1.InboxService.ReconcileGrants:output_type -> ladulas.v1.ReconcileGrantsResponse
+	24, // 88: ladulas.v1.KeyService.ListKeys:output_type -> ladulas.v1.ListKeysResponse
+	28, // 89: ladulas.v1.KeyService.RemoteSign:output_type -> ladulas.v1.RemoteSignResponse
+	30, // 90: ladulas.v1.KeyService.OfferKey:output_type -> ladulas.v1.OfferKeyResponse
+	32, // 91: ladulas.v1.KeyService.CollectKeyOffers:output_type -> ladulas.v1.CollectKeyOffersResponse
+	26, // 92: ladulas.v1.KeyService.AnnounceKeys:output_type -> ladulas.v1.AnnounceKeysResponse
+	20, // 93: ladulas.v1.KeyService.PublishEndorsement:output_type -> ladulas.v1.PublishEndorsementResponse
+	22, // 94: ladulas.v1.KeyService.PublishRetraction:output_type -> ladulas.v1.PublishRetractionResponse
+	45, // 95: ladulas.v1.ProjectService.ListProjects:output_type -> ladulas.v1.ListProjectsResponse
+	41, // 96: ladulas.v1.ProjectService.ListDirectory:output_type -> ladulas.v1.ListDirectoryResponse
+	43, // 97: ladulas.v1.ProjectService.SearchProjectFiles:output_type -> ladulas.v1.SearchProjectFilesResponse
+	47, // 98: ladulas.v1.ProjectService.FetchProjectFile:output_type -> ladulas.v1.FetchProjectFileResponse
+	35, // 99: ladulas.v1.ProjectService.SyncProject:output_type -> ladulas.v1.SyncProjectEvent
+	37, // 100: ladulas.v1.ProjectService.DocumentVersions:output_type -> ladulas.v1.DocumentVersionsResponse
+	39, // 101: ladulas.v1.ProjectService.FetchProjectVersion:output_type -> ladulas.v1.FetchProjectVersionResponse
+	49, // 102: ladulas.v1.EventService.Events:output_type -> ladulas.v1.Event
+	52, // 103: ladulas.v1.PairingService.Pair:output_type -> ladulas.v1.PairResponse
+	54, // 104: ladulas.v1.PairingService.PairStart:output_type -> ladulas.v1.PairStartResponse
+	56, // 105: ladulas.v1.PairingService.PairFinish:output_type -> ladulas.v1.PairFinishResponse
+	58, // 106: ladulas.v1.PairingService.SettlePairing:output_type -> ladulas.v1.SettlePairingResponse
+	60, // 107: ladulas.v1.PresenceService.Ping:output_type -> ladulas.v1.PingResponse
+	62, // 108: ladulas.v1.PresenceService.Watch:output_type -> ladulas.v1.PresenceEvent
+	81, // [81:109] is the sub-list for method output_type
+	53, // [53:81] is the sub-list for method input_type
+	53, // [53:53] is the sub-list for extension type_name
+	53, // [53:53] is the sub-list for extension extendee
+	0,  // [0:53] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_service_proto_init() }
@@ -4640,7 +4757,7 @@ func file_ladulas_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_service_proto_rawDesc), len(file_ladulas_v1_service_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   60,
+			NumMessages:   61,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

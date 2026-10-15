@@ -16,7 +16,6 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
-	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // The channel's half of decision P.
@@ -257,7 +256,7 @@ func (n *Node) PushGrantActivity(approverFingerprint string) {
 	}
 
 	record, ok := n.trust.Peer(approverFingerprint)
-	if !ok || !trust.Dialable(record) {
+	if !ok || !n.dialable(record) {
 		return
 	}
 

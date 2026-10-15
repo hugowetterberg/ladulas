@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"connectrpc.com/connect"
@@ -437,8 +438,8 @@ func (n *Node) callHolder(
 		return ErrHolderUnreachable
 	}
 
-	addresses := holder.addresses()
-	if len(addresses) == 0 {
+	targets := holder.targets(ctx)
+	if len(targets) == 0 {
 		// A peer that advertises no address is a phone, which is never dialled
 		// and comes to collect instead. It is not a failure to reach — it is a
 		// machine that has to be waited for, and the list of unreached holders
@@ -446,24 +447,13 @@ func (n *Node) callHolder(
 		return ErrHolderUnreachable
 	}
 
-	var lastErr error
+	used, err := n.callOver(ctx, targets,
+		func(ctx context.Context, client *http.Client, baseURL string) error {
+			return call(ctx, ladulasv1connect.NewKeyServiceClient(client, baseURL))
+		})
+	holder.called(used)
 
-	for _, address := range addresses {
-		client := ladulasv1connect.NewKeyServiceClient(
-			holder.client.HTTP(), holder.client.URL(address))
-
-		if err := call(ctx, client); err != nil {
-			lastErr = err
-
-			continue
-		}
-
-		holder.succeeded(address)
-
-		return nil
-	}
-
-	return lastErr
+	return err
 }
 
 func (n *Node) holdersOf(keyFingerprint string) []string {

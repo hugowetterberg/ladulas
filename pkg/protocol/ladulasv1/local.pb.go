@@ -910,13 +910,18 @@ type PeerStatus struct {
 	Dialable bool `protobuf:"varint,13,opt,name=dialable,proto3" json:"dialable,omitempty"`
 	// Which kind of path the peer is in contact over, when online is true:
 	// "direct" for a pinned TLS connection to or from one of its addresses,
-	// which is the only kind there is. Empty when it is not in contact.
+	// "tunnel direct" for the tunnel over a punched UDP path, and "tunnel
+	// relayed <region>" for the tunnel through a DERP relay (decision AY).
+	// Empty when it is not in contact.
 	Path string `protobuf:"bytes,14,opt,name=path,proto3" json:"path,omitempty"`
 	// What this instance knows about a tunnel to the peer, in the words of the
-	// state set decision AX defines once (trust.DescribeTunnel): "tunnel off
-	// here", "peer offers no tunnel", "peer withdrew its tunnel", "version
-	// mismatch (ours …, theirs …)", "tunnel offer stale", or "tunnel offered".
-	// Empty from an older daemon.
+	// state set defined once in trust.DescribeTunnel (decisions AX and AY):
+	// "direct <address>", "tunnel direct", "tunnel relayed <region>", "fallback
+	// to direct, because <reason>", "tunnel in backoff until <time>", "tunnel
+	// off here", "peer offers no tunnel", "version mismatch (ours …, theirs …)",
+	// "peer withdrew its tunnel", "tunnel address stale, no direct path",
+	// "tunnel offer stale", "peer offers a client key only", or "tunnel
+	// offered". Empty from an older daemon.
 	Tunnel        string `protobuf:"bytes,15,opt,name=tunnel,proto3" json:"tunnel,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1115,9 +1120,15 @@ type StatusResponse struct {
 	// while sealed, because sealing drops them; counted here so that `status`
 	// and `doctor` can say a tool has put something in the agent without a
 	// second call.
-	LocalKeys     int32 `protobuf:"varint,17,opt,name=local_keys,json=localKeys,proto3" json:"local_keys,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	LocalKeys int32 `protobuf:"varint,17,opt,name=local_keys,json=localKeys,proto3" json:"local_keys,omitempty"`
+	// The tunnel clients connected to this instance's long-lived tunnel server,
+	// one per paired peer whose client is up, as the server sees them
+	// (decision AY). The listening side's half of `ladulas status`: the dialling
+	// side's path is on each peer, and this is what the other end of it looks
+	// like from here.
+	InboundTunnels []*InboundTunnel `protobuf:"bytes,18,rep,name=inbound_tunnels,json=inboundTunnels,proto3" json:"inbound_tunnels,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
@@ -1269,6 +1280,75 @@ func (x *StatusResponse) GetLocalKeys() int32 {
 	return 0
 }
 
+func (x *StatusResponse) GetInboundTunnels() []*InboundTunnel {
+	if x != nil {
+		return x.InboundTunnels
+	}
+	return nil
+}
+
+// InboundTunnel is one peer's tunnel client as this instance's server sees it.
+type InboundTunnel struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Fingerprint string                 `protobuf:"bytes,2,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	// "tunnel direct" for a punched UDP path, or "tunnel relayed <region>".
+	Path          string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InboundTunnel) Reset() {
+	*x = InboundTunnel{}
+	mi := &file_ladulas_v1_local_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InboundTunnel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InboundTunnel) ProtoMessage() {}
+
+func (x *InboundTunnel) ProtoReflect() protoreflect.Message {
+	mi := &file_ladulas_v1_local_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InboundTunnel.ProtoReflect.Descriptor instead.
+func (*InboundTunnel) Descriptor() ([]byte, []int) {
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *InboundTunnel) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *InboundTunnel) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+func (x *InboundTunnel) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 // InstanceLocations is where a running instance keeps things.
 type InstanceLocations struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -1285,7 +1365,7 @@ type InstanceLocations struct {
 
 func (x *InstanceLocations) Reset() {
 	*x = InstanceLocations{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[8]
+	mi := &file_ladulas_v1_local_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1297,7 +1377,7 @@ func (x *InstanceLocations) String() string {
 func (*InstanceLocations) ProtoMessage() {}
 
 func (x *InstanceLocations) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[8]
+	mi := &file_ladulas_v1_local_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1310,7 +1390,7 @@ func (x *InstanceLocations) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceLocations.ProtoReflect.Descriptor instead.
 func (*InstanceLocations) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{8}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *InstanceLocations) GetStore() string {
@@ -1386,7 +1466,7 @@ type BorrowedKeyStatus struct {
 
 func (x *BorrowedKeyStatus) Reset() {
 	*x = BorrowedKeyStatus{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[9]
+	mi := &file_ladulas_v1_local_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1398,7 +1478,7 @@ func (x *BorrowedKeyStatus) String() string {
 func (*BorrowedKeyStatus) ProtoMessage() {}
 
 func (x *BorrowedKeyStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[9]
+	mi := &file_ladulas_v1_local_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1411,7 +1491,7 @@ func (x *BorrowedKeyStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BorrowedKeyStatus.ProtoReflect.Descriptor instead.
 func (*BorrowedKeyStatus) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{9}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BorrowedKeyStatus) GetKey() *KeyRef {
@@ -1472,7 +1552,7 @@ type InitializeRequest struct {
 
 func (x *InitializeRequest) Reset() {
 	*x = InitializeRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[10]
+	mi := &file_ladulas_v1_local_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1484,7 +1564,7 @@ func (x *InitializeRequest) String() string {
 func (*InitializeRequest) ProtoMessage() {}
 
 func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[10]
+	mi := &file_ladulas_v1_local_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1497,7 +1577,7 @@ func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeRequest.ProtoReflect.Descriptor instead.
 func (*InitializeRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{10}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *InitializeRequest) GetInstanceName() string {
@@ -1532,7 +1612,7 @@ type InitializeResponse struct {
 
 func (x *InitializeResponse) Reset() {
 	*x = InitializeResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[11]
+	mi := &file_ladulas_v1_local_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1544,7 +1624,7 @@ func (x *InitializeResponse) String() string {
 func (*InitializeResponse) ProtoMessage() {}
 
 func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[11]
+	mi := &file_ladulas_v1_local_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1557,7 +1637,7 @@ func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeResponse.ProtoReflect.Descriptor instead.
 func (*InitializeResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{11}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *InitializeResponse) GetInstanceName() string {
@@ -1614,7 +1694,7 @@ type UnlockRequest struct {
 
 func (x *UnlockRequest) Reset() {
 	*x = UnlockRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[12]
+	mi := &file_ladulas_v1_local_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1626,7 +1706,7 @@ func (x *UnlockRequest) String() string {
 func (*UnlockRequest) ProtoMessage() {}
 
 func (x *UnlockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[12]
+	mi := &file_ladulas_v1_local_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1639,7 +1719,7 @@ func (x *UnlockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlockRequest.ProtoReflect.Descriptor instead.
 func (*UnlockRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{12}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *UnlockRequest) GetPassphrase() []byte {
@@ -1661,7 +1741,7 @@ type UnlockResponse struct {
 
 func (x *UnlockResponse) Reset() {
 	*x = UnlockResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[13]
+	mi := &file_ladulas_v1_local_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1673,7 +1753,7 @@ func (x *UnlockResponse) String() string {
 func (*UnlockResponse) ProtoMessage() {}
 
 func (x *UnlockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[13]
+	mi := &file_ladulas_v1_local_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1686,7 +1766,7 @@ func (x *UnlockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnlockResponse.ProtoReflect.Descriptor instead.
 func (*UnlockResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{13}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UnlockResponse) GetState() LockState {
@@ -1714,7 +1794,7 @@ type LockRequest struct {
 
 func (x *LockRequest) Reset() {
 	*x = LockRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[14]
+	mi := &file_ladulas_v1_local_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1726,7 +1806,7 @@ func (x *LockRequest) String() string {
 func (*LockRequest) ProtoMessage() {}
 
 func (x *LockRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[14]
+	mi := &file_ladulas_v1_local_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1739,7 +1819,7 @@ func (x *LockRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockRequest.ProtoReflect.Descriptor instead.
 func (*LockRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{14}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *LockRequest) GetSeal() bool {
@@ -1758,7 +1838,7 @@ type LockResponse struct {
 
 func (x *LockResponse) Reset() {
 	*x = LockResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[15]
+	mi := &file_ladulas_v1_local_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1770,7 +1850,7 @@ func (x *LockResponse) String() string {
 func (*LockResponse) ProtoMessage() {}
 
 func (x *LockResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[15]
+	mi := &file_ladulas_v1_local_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1783,7 +1863,7 @@ func (x *LockResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LockResponse.ProtoReflect.Descriptor instead.
 func (*LockResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{15}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *LockResponse) GetState() LockState {
@@ -1807,7 +1887,7 @@ type AwaitStateRequest struct {
 
 func (x *AwaitStateRequest) Reset() {
 	*x = AwaitStateRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[16]
+	mi := &file_ladulas_v1_local_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +1899,7 @@ func (x *AwaitStateRequest) String() string {
 func (*AwaitStateRequest) ProtoMessage() {}
 
 func (x *AwaitStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[16]
+	mi := &file_ladulas_v1_local_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +1912,7 @@ func (x *AwaitStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwaitStateRequest.ProtoReflect.Descriptor instead.
 func (*AwaitStateRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{16}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AwaitStateRequest) GetStates() []LockState {
@@ -1864,7 +1944,7 @@ type AwaitStateResponse struct {
 
 func (x *AwaitStateResponse) Reset() {
 	*x = AwaitStateResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[17]
+	mi := &file_ladulas_v1_local_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1876,7 +1956,7 @@ func (x *AwaitStateResponse) String() string {
 func (*AwaitStateResponse) ProtoMessage() {}
 
 func (x *AwaitStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[17]
+	mi := &file_ladulas_v1_local_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1889,7 +1969,7 @@ func (x *AwaitStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AwaitStateResponse.ProtoReflect.Descriptor instead.
 func (*AwaitStateResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{17}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AwaitStateResponse) GetState() LockState {
@@ -1928,7 +2008,7 @@ type KeyringStatusRequest struct {
 
 func (x *KeyringStatusRequest) Reset() {
 	*x = KeyringStatusRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[18]
+	mi := &file_ladulas_v1_local_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1940,7 +2020,7 @@ func (x *KeyringStatusRequest) String() string {
 func (*KeyringStatusRequest) ProtoMessage() {}
 
 func (x *KeyringStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[18]
+	mi := &file_ladulas_v1_local_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1953,7 +2033,7 @@ func (x *KeyringStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyringStatusRequest.ProtoReflect.Descriptor instead.
 func (*KeyringStatusRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{18}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{19}
 }
 
 type KeyringStatusResponse struct {
@@ -1970,7 +2050,7 @@ type KeyringStatusResponse struct {
 
 func (x *KeyringStatusResponse) Reset() {
 	*x = KeyringStatusResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[19]
+	mi := &file_ladulas_v1_local_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1982,7 +2062,7 @@ func (x *KeyringStatusResponse) String() string {
 func (*KeyringStatusResponse) ProtoMessage() {}
 
 func (x *KeyringStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[19]
+	mi := &file_ladulas_v1_local_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1995,7 +2075,7 @@ func (x *KeyringStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyringStatusResponse.ProtoReflect.Descriptor instead.
 func (*KeyringStatusResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{19}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *KeyringStatusResponse) GetEnrolled() bool {
@@ -2021,7 +2101,7 @@ type SetUnlockAtLoginRequest struct {
 
 func (x *SetUnlockAtLoginRequest) Reset() {
 	*x = SetUnlockAtLoginRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[20]
+	mi := &file_ladulas_v1_local_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2033,7 +2113,7 @@ func (x *SetUnlockAtLoginRequest) String() string {
 func (*SetUnlockAtLoginRequest) ProtoMessage() {}
 
 func (x *SetUnlockAtLoginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[20]
+	mi := &file_ladulas_v1_local_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2046,7 +2126,7 @@ func (x *SetUnlockAtLoginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetUnlockAtLoginRequest.ProtoReflect.Descriptor instead.
 func (*SetUnlockAtLoginRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{20}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetUnlockAtLoginRequest) GetEnrol() bool {
@@ -2065,7 +2145,7 @@ type SetUnlockAtLoginResponse struct {
 
 func (x *SetUnlockAtLoginResponse) Reset() {
 	*x = SetUnlockAtLoginResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[21]
+	mi := &file_ladulas_v1_local_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2077,7 +2157,7 @@ func (x *SetUnlockAtLoginResponse) String() string {
 func (*SetUnlockAtLoginResponse) ProtoMessage() {}
 
 func (x *SetUnlockAtLoginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[21]
+	mi := &file_ladulas_v1_local_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2090,7 +2170,7 @@ func (x *SetUnlockAtLoginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetUnlockAtLoginResponse.ProtoReflect.Descriptor instead.
 func (*SetUnlockAtLoginResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{21}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SetUnlockAtLoginResponse) GetEnrolled() bool {
@@ -2114,7 +2194,7 @@ type SkippedListenAddress struct {
 
 func (x *SkippedListenAddress) Reset() {
 	*x = SkippedListenAddress{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[22]
+	mi := &file_ladulas_v1_local_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2126,7 +2206,7 @@ func (x *SkippedListenAddress) String() string {
 func (*SkippedListenAddress) ProtoMessage() {}
 
 func (x *SkippedListenAddress) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[22]
+	mi := &file_ladulas_v1_local_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2139,7 +2219,7 @@ func (x *SkippedListenAddress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkippedListenAddress.ProtoReflect.Descriptor instead.
 func (*SkippedListenAddress) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{22}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SkippedListenAddress) GetAddress() string {
@@ -2195,7 +2275,7 @@ type PeerListenState struct {
 
 func (x *PeerListenState) Reset() {
 	*x = PeerListenState{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[23]
+	mi := &file_ladulas_v1_local_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2207,7 +2287,7 @@ func (x *PeerListenState) String() string {
 func (*PeerListenState) ProtoMessage() {}
 
 func (x *PeerListenState) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[23]
+	mi := &file_ladulas_v1_local_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2220,7 +2300,7 @@ func (x *PeerListenState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerListenState.ProtoReflect.Descriptor instead.
 func (*PeerListenState) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{23}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PeerListenState) GetSpec() string {
@@ -2301,7 +2381,7 @@ type TunnelRequest struct {
 
 func (x *TunnelRequest) Reset() {
 	*x = TunnelRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[24]
+	mi := &file_ladulas_v1_local_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2313,7 +2393,7 @@ func (x *TunnelRequest) String() string {
 func (*TunnelRequest) ProtoMessage() {}
 
 func (x *TunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[24]
+	mi := &file_ladulas_v1_local_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2326,7 +2406,7 @@ func (x *TunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelRequest.ProtoReflect.Descriptor instead.
 func (*TunnelRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{24}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{25}
 }
 
 type SetTunnelRequest struct {
@@ -2349,7 +2429,7 @@ type SetTunnelRequest struct {
 
 func (x *SetTunnelRequest) Reset() {
 	*x = SetTunnelRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[25]
+	mi := &file_ladulas_v1_local_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2361,7 +2441,7 @@ func (x *SetTunnelRequest) String() string {
 func (*SetTunnelRequest) ProtoMessage() {}
 
 func (x *SetTunnelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[25]
+	mi := &file_ladulas_v1_local_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2374,7 +2454,7 @@ func (x *SetTunnelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTunnelRequest.ProtoReflect.Descriptor instead.
 func (*SetTunnelRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{25}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SetTunnelRequest) GetEnabled() bool {
@@ -2434,7 +2514,7 @@ type TunnelState struct {
 
 func (x *TunnelState) Reset() {
 	*x = TunnelState{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[26]
+	mi := &file_ladulas_v1_local_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2446,7 +2526,7 @@ func (x *TunnelState) String() string {
 func (*TunnelState) ProtoMessage() {}
 
 func (x *TunnelState) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[26]
+	mi := &file_ladulas_v1_local_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2459,7 +2539,7 @@ func (x *TunnelState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelState.ProtoReflect.Descriptor instead.
 func (*TunnelState) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{26}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TunnelState) GetAvailable() bool {
@@ -2541,7 +2621,7 @@ type TunnelResponse struct {
 
 func (x *TunnelResponse) Reset() {
 	*x = TunnelResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[27]
+	mi := &file_ladulas_v1_local_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2553,7 +2633,7 @@ func (x *TunnelResponse) String() string {
 func (*TunnelResponse) ProtoMessage() {}
 
 func (x *TunnelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[27]
+	mi := &file_ladulas_v1_local_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2566,7 +2646,7 @@ func (x *TunnelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelResponse.ProtoReflect.Descriptor instead.
 func (*TunnelResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{27}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TunnelResponse) GetState() *TunnelState {
@@ -2584,7 +2664,7 @@ type PeerListenRequest struct {
 
 func (x *PeerListenRequest) Reset() {
 	*x = PeerListenRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[28]
+	mi := &file_ladulas_v1_local_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2596,7 +2676,7 @@ func (x *PeerListenRequest) String() string {
 func (*PeerListenRequest) ProtoMessage() {}
 
 func (x *PeerListenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[28]
+	mi := &file_ladulas_v1_local_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2609,7 +2689,7 @@ func (x *PeerListenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerListenRequest.ProtoReflect.Descriptor instead.
 func (*PeerListenRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{28}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{29}
 }
 
 type PeerListenResponse struct {
@@ -2621,7 +2701,7 @@ type PeerListenResponse struct {
 
 func (x *PeerListenResponse) Reset() {
 	*x = PeerListenResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[29]
+	mi := &file_ladulas_v1_local_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2633,7 +2713,7 @@ func (x *PeerListenResponse) String() string {
 func (*PeerListenResponse) ProtoMessage() {}
 
 func (x *PeerListenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[29]
+	mi := &file_ladulas_v1_local_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2646,7 +2726,7 @@ func (x *PeerListenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerListenResponse.ProtoReflect.Descriptor instead.
 func (*PeerListenResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{29}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *PeerListenResponse) GetState() *PeerListenState {
@@ -2672,7 +2752,7 @@ type SetPeerListenRequest struct {
 
 func (x *SetPeerListenRequest) Reset() {
 	*x = SetPeerListenRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[30]
+	mi := &file_ladulas_v1_local_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2684,7 +2764,7 @@ func (x *SetPeerListenRequest) String() string {
 func (*SetPeerListenRequest) ProtoMessage() {}
 
 func (x *SetPeerListenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[30]
+	mi := &file_ladulas_v1_local_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2697,7 +2777,7 @@ func (x *SetPeerListenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPeerListenRequest.ProtoReflect.Descriptor instead.
 func (*SetPeerListenRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{30}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SetPeerListenRequest) GetSpec() string {
@@ -2733,7 +2813,7 @@ type SetPeerListenResponse struct {
 
 func (x *SetPeerListenResponse) Reset() {
 	*x = SetPeerListenResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[31]
+	mi := &file_ladulas_v1_local_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2745,7 +2825,7 @@ func (x *SetPeerListenResponse) String() string {
 func (*SetPeerListenResponse) ProtoMessage() {}
 
 func (x *SetPeerListenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[31]
+	mi := &file_ladulas_v1_local_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2758,7 +2838,7 @@ func (x *SetPeerListenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPeerListenResponse.ProtoReflect.Descriptor instead.
 func (*SetPeerListenResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{31}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SetPeerListenResponse) GetState() *PeerListenState {
@@ -2788,7 +2868,7 @@ type KeyTransferInfo struct {
 
 func (x *KeyTransferInfo) Reset() {
 	*x = KeyTransferInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[32]
+	mi := &file_ladulas_v1_local_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2800,7 +2880,7 @@ func (x *KeyTransferInfo) String() string {
 func (*KeyTransferInfo) ProtoMessage() {}
 
 func (x *KeyTransferInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[32]
+	mi := &file_ladulas_v1_local_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2813,7 +2893,7 @@ func (x *KeyTransferInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyTransferInfo.ProtoReflect.Descriptor instead.
 func (*KeyTransferInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{32}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *KeyTransferInfo) GetPeerFingerprint() string {
@@ -2873,7 +2953,7 @@ type KeyInfo struct {
 
 func (x *KeyInfo) Reset() {
 	*x = KeyInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[33]
+	mi := &file_ladulas_v1_local_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2885,7 +2965,7 @@ func (x *KeyInfo) String() string {
 func (*KeyInfo) ProtoMessage() {}
 
 func (x *KeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[33]
+	mi := &file_ladulas_v1_local_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2898,7 +2978,7 @@ func (x *KeyInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyInfo.ProtoReflect.Descriptor instead.
 func (*KeyInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{33}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *KeyInfo) GetLabel() string {
@@ -2993,7 +3073,7 @@ type ListStoredKeysRequest struct {
 
 func (x *ListStoredKeysRequest) Reset() {
 	*x = ListStoredKeysRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[34]
+	mi := &file_ladulas_v1_local_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3005,7 +3085,7 @@ func (x *ListStoredKeysRequest) String() string {
 func (*ListStoredKeysRequest) ProtoMessage() {}
 
 func (x *ListStoredKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[34]
+	mi := &file_ladulas_v1_local_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3018,7 +3098,7 @@ func (x *ListStoredKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStoredKeysRequest.ProtoReflect.Descriptor instead.
 func (*ListStoredKeysRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{34}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{35}
 }
 
 type ListStoredKeysResponse struct {
@@ -3030,7 +3110,7 @@ type ListStoredKeysResponse struct {
 
 func (x *ListStoredKeysResponse) Reset() {
 	*x = ListStoredKeysResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[35]
+	mi := &file_ladulas_v1_local_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3042,7 +3122,7 @@ func (x *ListStoredKeysResponse) String() string {
 func (*ListStoredKeysResponse) ProtoMessage() {}
 
 func (x *ListStoredKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[35]
+	mi := &file_ladulas_v1_local_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3055,7 +3135,7 @@ func (x *ListStoredKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListStoredKeysResponse.ProtoReflect.Descriptor instead.
 func (*ListStoredKeysResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{35}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ListStoredKeysResponse) GetKeys() []*KeyInfo {
@@ -3075,7 +3155,7 @@ type GenerateKeyRequest struct {
 
 func (x *GenerateKeyRequest) Reset() {
 	*x = GenerateKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[36]
+	mi := &file_ladulas_v1_local_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3087,7 +3167,7 @@ func (x *GenerateKeyRequest) String() string {
 func (*GenerateKeyRequest) ProtoMessage() {}
 
 func (x *GenerateKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[36]
+	mi := &file_ladulas_v1_local_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3100,7 +3180,7 @@ func (x *GenerateKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateKeyRequest.ProtoReflect.Descriptor instead.
 func (*GenerateKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{36}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GenerateKeyRequest) GetLabel() string {
@@ -3126,7 +3206,7 @@ type GenerateKeyResponse struct {
 
 func (x *GenerateKeyResponse) Reset() {
 	*x = GenerateKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[37]
+	mi := &file_ladulas_v1_local_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3138,7 +3218,7 @@ func (x *GenerateKeyResponse) String() string {
 func (*GenerateKeyResponse) ProtoMessage() {}
 
 func (x *GenerateKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[37]
+	mi := &file_ladulas_v1_local_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3151,7 +3231,7 @@ func (x *GenerateKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateKeyResponse.ProtoReflect.Descriptor instead.
 func (*GenerateKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{37}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GenerateKeyResponse) GetKey() *KeyInfo {
@@ -3175,7 +3255,7 @@ type ImportKeyRequest struct {
 
 func (x *ImportKeyRequest) Reset() {
 	*x = ImportKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[38]
+	mi := &file_ladulas_v1_local_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3187,7 +3267,7 @@ func (x *ImportKeyRequest) String() string {
 func (*ImportKeyRequest) ProtoMessage() {}
 
 func (x *ImportKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[38]
+	mi := &file_ladulas_v1_local_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3200,7 +3280,7 @@ func (x *ImportKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportKeyRequest.ProtoReflect.Descriptor instead.
 func (*ImportKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{38}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ImportKeyRequest) GetPrivateKey() []byte {
@@ -3237,7 +3317,7 @@ type ImportKeyResponse struct {
 
 func (x *ImportKeyResponse) Reset() {
 	*x = ImportKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[39]
+	mi := &file_ladulas_v1_local_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3249,7 +3329,7 @@ func (x *ImportKeyResponse) String() string {
 func (*ImportKeyResponse) ProtoMessage() {}
 
 func (x *ImportKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[39]
+	mi := &file_ladulas_v1_local_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3262,7 +3342,7 @@ func (x *ImportKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportKeyResponse.ProtoReflect.Descriptor instead.
 func (*ImportKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{39}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ImportKeyResponse) GetKey() *KeyInfo {
@@ -3289,7 +3369,7 @@ type RemoveKeyRequest struct {
 
 func (x *RemoveKeyRequest) Reset() {
 	*x = RemoveKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[40]
+	mi := &file_ladulas_v1_local_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3301,7 +3381,7 @@ func (x *RemoveKeyRequest) String() string {
 func (*RemoveKeyRequest) ProtoMessage() {}
 
 func (x *RemoveKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[40]
+	mi := &file_ladulas_v1_local_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3314,7 +3394,7 @@ func (x *RemoveKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveKeyRequest.ProtoReflect.Descriptor instead.
 func (*RemoveKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{40}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RemoveKeyRequest) GetKey() string {
@@ -3333,7 +3413,7 @@ type RemoveKeyResponse struct {
 
 func (x *RemoveKeyResponse) Reset() {
 	*x = RemoveKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[41]
+	mi := &file_ladulas_v1_local_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3345,7 +3425,7 @@ func (x *RemoveKeyResponse) String() string {
 func (*RemoveKeyResponse) ProtoMessage() {}
 
 func (x *RemoveKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[41]
+	mi := &file_ladulas_v1_local_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3358,7 +3438,7 @@ func (x *RemoveKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveKeyResponse.ProtoReflect.Descriptor instead.
 func (*RemoveKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{41}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RemoveKeyResponse) GetFingerprint() string {
@@ -3378,7 +3458,7 @@ type SetKeyEnabledRequest struct {
 
 func (x *SetKeyEnabledRequest) Reset() {
 	*x = SetKeyEnabledRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[42]
+	mi := &file_ladulas_v1_local_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3390,7 +3470,7 @@ func (x *SetKeyEnabledRequest) String() string {
 func (*SetKeyEnabledRequest) ProtoMessage() {}
 
 func (x *SetKeyEnabledRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[42]
+	mi := &file_ladulas_v1_local_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3403,7 +3483,7 @@ func (x *SetKeyEnabledRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetKeyEnabledRequest.ProtoReflect.Descriptor instead.
 func (*SetKeyEnabledRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{42}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SetKeyEnabledRequest) GetKey() string {
@@ -3429,7 +3509,7 @@ type SetKeyEnabledResponse struct {
 
 func (x *SetKeyEnabledResponse) Reset() {
 	*x = SetKeyEnabledResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[43]
+	mi := &file_ladulas_v1_local_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3441,7 +3521,7 @@ func (x *SetKeyEnabledResponse) String() string {
 func (*SetKeyEnabledResponse) ProtoMessage() {}
 
 func (x *SetKeyEnabledResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[43]
+	mi := &file_ladulas_v1_local_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3454,7 +3534,7 @@ func (x *SetKeyEnabledResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetKeyEnabledResponse.ProtoReflect.Descriptor instead.
 func (*SetKeyEnabledResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{43}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *SetKeyEnabledResponse) GetKey() *KeyInfo {
@@ -3474,7 +3554,7 @@ type SetKeyAgentUseRequest struct {
 
 func (x *SetKeyAgentUseRequest) Reset() {
 	*x = SetKeyAgentUseRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[44]
+	mi := &file_ladulas_v1_local_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3486,7 +3566,7 @@ func (x *SetKeyAgentUseRequest) String() string {
 func (*SetKeyAgentUseRequest) ProtoMessage() {}
 
 func (x *SetKeyAgentUseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[44]
+	mi := &file_ladulas_v1_local_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3499,7 +3579,7 @@ func (x *SetKeyAgentUseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetKeyAgentUseRequest.ProtoReflect.Descriptor instead.
 func (*SetKeyAgentUseRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{44}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *SetKeyAgentUseRequest) GetKey() string {
@@ -3525,7 +3605,7 @@ type SetKeyAgentUseResponse struct {
 
 func (x *SetKeyAgentUseResponse) Reset() {
 	*x = SetKeyAgentUseResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[45]
+	mi := &file_ladulas_v1_local_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3537,7 +3617,7 @@ func (x *SetKeyAgentUseResponse) String() string {
 func (*SetKeyAgentUseResponse) ProtoMessage() {}
 
 func (x *SetKeyAgentUseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[45]
+	mi := &file_ladulas_v1_local_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3550,7 +3630,7 @@ func (x *SetKeyAgentUseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetKeyAgentUseResponse.ProtoReflect.Descriptor instead.
 func (*SetKeyAgentUseResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{45}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *SetKeyAgentUseResponse) GetKey() *KeyInfo {
@@ -3576,7 +3656,7 @@ type SendKeyRequest struct {
 
 func (x *SendKeyRequest) Reset() {
 	*x = SendKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[46]
+	mi := &file_ladulas_v1_local_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3588,7 +3668,7 @@ func (x *SendKeyRequest) String() string {
 func (*SendKeyRequest) ProtoMessage() {}
 
 func (x *SendKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[46]
+	mi := &file_ladulas_v1_local_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3601,7 +3681,7 @@ func (x *SendKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendKeyRequest.ProtoReflect.Descriptor instead.
 func (*SendKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{46}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *SendKeyRequest) GetKey() string {
@@ -3639,7 +3719,7 @@ type SendKeyResponse struct {
 
 func (x *SendKeyResponse) Reset() {
 	*x = SendKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[47]
+	mi := &file_ladulas_v1_local_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3651,7 +3731,7 @@ func (x *SendKeyResponse) String() string {
 func (*SendKeyResponse) ProtoMessage() {}
 
 func (x *SendKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[47]
+	mi := &file_ladulas_v1_local_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3664,7 +3744,7 @@ func (x *SendKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendKeyResponse.ProtoReflect.Descriptor instead.
 func (*SendKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{47}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *SendKeyResponse) GetFingerprint() string {
@@ -3708,7 +3788,7 @@ type KeyOfferInfo struct {
 
 func (x *KeyOfferInfo) Reset() {
 	*x = KeyOfferInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[48]
+	mi := &file_ladulas_v1_local_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3720,7 +3800,7 @@ func (x *KeyOfferInfo) String() string {
 func (*KeyOfferInfo) ProtoMessage() {}
 
 func (x *KeyOfferInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[48]
+	mi := &file_ladulas_v1_local_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3733,7 +3813,7 @@ func (x *KeyOfferInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyOfferInfo.ProtoReflect.Descriptor instead.
 func (*KeyOfferInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{48}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *KeyOfferInfo) GetId() string {
@@ -3836,7 +3916,7 @@ type LocalKeyInfo struct {
 
 func (x *LocalKeyInfo) Reset() {
 	*x = LocalKeyInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[49]
+	mi := &file_ladulas_v1_local_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3848,7 +3928,7 @@ func (x *LocalKeyInfo) String() string {
 func (*LocalKeyInfo) ProtoMessage() {}
 
 func (x *LocalKeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[49]
+	mi := &file_ladulas_v1_local_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3861,7 +3941,7 @@ func (x *LocalKeyInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalKeyInfo.ProtoReflect.Descriptor instead.
 func (*LocalKeyInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{49}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *LocalKeyInfo) GetLabel() string {
@@ -3942,7 +4022,7 @@ type ListLocalKeysRequest struct {
 
 func (x *ListLocalKeysRequest) Reset() {
 	*x = ListLocalKeysRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[50]
+	mi := &file_ladulas_v1_local_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3954,7 +4034,7 @@ func (x *ListLocalKeysRequest) String() string {
 func (*ListLocalKeysRequest) ProtoMessage() {}
 
 func (x *ListLocalKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[50]
+	mi := &file_ladulas_v1_local_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3967,7 +4047,7 @@ func (x *ListLocalKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLocalKeysRequest.ProtoReflect.Descriptor instead.
 func (*ListLocalKeysRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{50}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{51}
 }
 
 type ListLocalKeysResponse struct {
@@ -3979,7 +4059,7 @@ type ListLocalKeysResponse struct {
 
 func (x *ListLocalKeysResponse) Reset() {
 	*x = ListLocalKeysResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[51]
+	mi := &file_ladulas_v1_local_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3991,7 +4071,7 @@ func (x *ListLocalKeysResponse) String() string {
 func (*ListLocalKeysResponse) ProtoMessage() {}
 
 func (x *ListLocalKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[51]
+	mi := &file_ladulas_v1_local_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4004,7 +4084,7 @@ func (x *ListLocalKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLocalKeysResponse.ProtoReflect.Descriptor instead.
 func (*ListLocalKeysResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{51}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ListLocalKeysResponse) GetKeys() []*LocalKeyInfo {
@@ -4024,7 +4104,7 @@ type ForgetLocalKeyRequest struct {
 
 func (x *ForgetLocalKeyRequest) Reset() {
 	*x = ForgetLocalKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[52]
+	mi := &file_ladulas_v1_local_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4036,7 +4116,7 @@ func (x *ForgetLocalKeyRequest) String() string {
 func (*ForgetLocalKeyRequest) ProtoMessage() {}
 
 func (x *ForgetLocalKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[52]
+	mi := &file_ladulas_v1_local_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4049,7 +4129,7 @@ func (x *ForgetLocalKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetLocalKeyRequest.ProtoReflect.Descriptor instead.
 func (*ForgetLocalKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{52}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ForgetLocalKeyRequest) GetKey() string {
@@ -4068,7 +4148,7 @@ type ForgetLocalKeyResponse struct {
 
 func (x *ForgetLocalKeyResponse) Reset() {
 	*x = ForgetLocalKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[53]
+	mi := &file_ladulas_v1_local_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4080,7 +4160,7 @@ func (x *ForgetLocalKeyResponse) String() string {
 func (*ForgetLocalKeyResponse) ProtoMessage() {}
 
 func (x *ForgetLocalKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[53]
+	mi := &file_ladulas_v1_local_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4093,7 +4173,7 @@ func (x *ForgetLocalKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetLocalKeyResponse.ProtoReflect.Descriptor instead.
 func (*ForgetLocalKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{53}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ForgetLocalKeyResponse) GetKey() *LocalKeyInfo {
@@ -4119,7 +4199,7 @@ type PromoteLocalKeyRequest struct {
 
 func (x *PromoteLocalKeyRequest) Reset() {
 	*x = PromoteLocalKeyRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[54]
+	mi := &file_ladulas_v1_local_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4131,7 +4211,7 @@ func (x *PromoteLocalKeyRequest) String() string {
 func (*PromoteLocalKeyRequest) ProtoMessage() {}
 
 func (x *PromoteLocalKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[54]
+	mi := &file_ladulas_v1_local_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4144,7 +4224,7 @@ func (x *PromoteLocalKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteLocalKeyRequest.ProtoReflect.Descriptor instead.
 func (*PromoteLocalKeyRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{54}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *PromoteLocalKeyRequest) GetKey() string {
@@ -4180,7 +4260,7 @@ type PromoteLocalKeyResponse struct {
 
 func (x *PromoteLocalKeyResponse) Reset() {
 	*x = PromoteLocalKeyResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[55]
+	mi := &file_ladulas_v1_local_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4192,7 +4272,7 @@ func (x *PromoteLocalKeyResponse) String() string {
 func (*PromoteLocalKeyResponse) ProtoMessage() {}
 
 func (x *PromoteLocalKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[55]
+	mi := &file_ladulas_v1_local_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4205,7 +4285,7 @@ func (x *PromoteLocalKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteLocalKeyResponse.ProtoReflect.Descriptor instead.
 func (*PromoteLocalKeyResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{55}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PromoteLocalKeyResponse) GetKey() *KeyInfo {
@@ -4230,7 +4310,7 @@ type ListKeyOffersRequest struct {
 
 func (x *ListKeyOffersRequest) Reset() {
 	*x = ListKeyOffersRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[56]
+	mi := &file_ladulas_v1_local_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4242,7 +4322,7 @@ func (x *ListKeyOffersRequest) String() string {
 func (*ListKeyOffersRequest) ProtoMessage() {}
 
 func (x *ListKeyOffersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[56]
+	mi := &file_ladulas_v1_local_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4255,7 +4335,7 @@ func (x *ListKeyOffersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKeyOffersRequest.ProtoReflect.Descriptor instead.
 func (*ListKeyOffersRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{56}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{57}
 }
 
 type ListKeyOffersResponse struct {
@@ -4267,7 +4347,7 @@ type ListKeyOffersResponse struct {
 
 func (x *ListKeyOffersResponse) Reset() {
 	*x = ListKeyOffersResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[57]
+	mi := &file_ladulas_v1_local_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4279,7 +4359,7 @@ func (x *ListKeyOffersResponse) String() string {
 func (*ListKeyOffersResponse) ProtoMessage() {}
 
 func (x *ListKeyOffersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[57]
+	mi := &file_ladulas_v1_local_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4292,7 +4372,7 @@ func (x *ListKeyOffersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListKeyOffersResponse.ProtoReflect.Descriptor instead.
 func (*ListKeyOffersResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{57}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListKeyOffersResponse) GetOffers() []*KeyOfferInfo {
@@ -4315,7 +4395,7 @@ type AnswerKeyOfferRequest struct {
 
 func (x *AnswerKeyOfferRequest) Reset() {
 	*x = AnswerKeyOfferRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[58]
+	mi := &file_ladulas_v1_local_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4327,7 +4407,7 @@ func (x *AnswerKeyOfferRequest) String() string {
 func (*AnswerKeyOfferRequest) ProtoMessage() {}
 
 func (x *AnswerKeyOfferRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[58]
+	mi := &file_ladulas_v1_local_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4340,7 +4420,7 @@ func (x *AnswerKeyOfferRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerKeyOfferRequest.ProtoReflect.Descriptor instead.
 func (*AnswerKeyOfferRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{58}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *AnswerKeyOfferRequest) GetId() string {
@@ -4374,7 +4454,7 @@ type AnswerKeyOfferResponse struct {
 
 func (x *AnswerKeyOfferResponse) Reset() {
 	*x = AnswerKeyOfferResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[59]
+	mi := &file_ladulas_v1_local_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4386,7 +4466,7 @@ func (x *AnswerKeyOfferResponse) String() string {
 func (*AnswerKeyOfferResponse) ProtoMessage() {}
 
 func (x *AnswerKeyOfferResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[59]
+	mi := &file_ladulas_v1_local_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4399,7 +4479,7 @@ func (x *AnswerKeyOfferResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerKeyOfferResponse.ProtoReflect.Descriptor instead.
 func (*AnswerKeyOfferResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{59}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *AnswerKeyOfferResponse) GetKey() *KeyInfo {
@@ -4417,7 +4497,7 @@ type ListGrantsRequest struct {
 
 func (x *ListGrantsRequest) Reset() {
 	*x = ListGrantsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[60]
+	mi := &file_ladulas_v1_local_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4429,7 +4509,7 @@ func (x *ListGrantsRequest) String() string {
 func (*ListGrantsRequest) ProtoMessage() {}
 
 func (x *ListGrantsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[60]
+	mi := &file_ladulas_v1_local_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4442,7 +4522,7 @@ func (x *ListGrantsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGrantsRequest.ProtoReflect.Descriptor instead.
 func (*ListGrantsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{60}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{61}
 }
 
 type ListGrantsResponse struct {
@@ -4454,7 +4534,7 @@ type ListGrantsResponse struct {
 
 func (x *ListGrantsResponse) Reset() {
 	*x = ListGrantsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[61]
+	mi := &file_ladulas_v1_local_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4466,7 +4546,7 @@ func (x *ListGrantsResponse) String() string {
 func (*ListGrantsResponse) ProtoMessage() {}
 
 func (x *ListGrantsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[61]
+	mi := &file_ladulas_v1_local_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4479,7 +4559,7 @@ func (x *ListGrantsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGrantsResponse.ProtoReflect.Descriptor instead.
 func (*ListGrantsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{61}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListGrantsResponse) GetGrants() []*Grant {
@@ -4503,7 +4583,7 @@ type ExtendGrantRequest struct {
 
 func (x *ExtendGrantRequest) Reset() {
 	*x = ExtendGrantRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[62]
+	mi := &file_ladulas_v1_local_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4515,7 +4595,7 @@ func (x *ExtendGrantRequest) String() string {
 func (*ExtendGrantRequest) ProtoMessage() {}
 
 func (x *ExtendGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[62]
+	mi := &file_ladulas_v1_local_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4528,7 +4608,7 @@ func (x *ExtendGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendGrantRequest.ProtoReflect.Descriptor instead.
 func (*ExtendGrantRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{62}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ExtendGrantRequest) GetGrantId() string {
@@ -4554,7 +4634,7 @@ type ExtendGrantResponse struct {
 
 func (x *ExtendGrantResponse) Reset() {
 	*x = ExtendGrantResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[63]
+	mi := &file_ladulas_v1_local_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4566,7 +4646,7 @@ func (x *ExtendGrantResponse) String() string {
 func (*ExtendGrantResponse) ProtoMessage() {}
 
 func (x *ExtendGrantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[63]
+	mi := &file_ladulas_v1_local_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4579,7 +4659,7 @@ func (x *ExtendGrantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExtendGrantResponse.ProtoReflect.Descriptor instead.
 func (*ExtendGrantResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{63}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ExtendGrantResponse) GetGrant() *Grant {
@@ -4624,7 +4704,7 @@ type RequestGrantRequest struct {
 
 func (x *RequestGrantRequest) Reset() {
 	*x = RequestGrantRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[64]
+	mi := &file_ladulas_v1_local_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4636,7 +4716,7 @@ func (x *RequestGrantRequest) String() string {
 func (*RequestGrantRequest) ProtoMessage() {}
 
 func (x *RequestGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[64]
+	mi := &file_ladulas_v1_local_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4649,7 +4729,7 @@ func (x *RequestGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestGrantRequest.ProtoReflect.Descriptor instead.
 func (*RequestGrantRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{64}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *RequestGrantRequest) GetPublicKey() []byte {
@@ -4700,7 +4780,7 @@ type RequestGrantResponse struct {
 
 func (x *RequestGrantResponse) Reset() {
 	*x = RequestGrantResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[65]
+	mi := &file_ladulas_v1_local_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4712,7 +4792,7 @@ func (x *RequestGrantResponse) String() string {
 func (*RequestGrantResponse) ProtoMessage() {}
 
 func (x *RequestGrantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[65]
+	mi := &file_ladulas_v1_local_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4725,7 +4805,7 @@ func (x *RequestGrantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestGrantResponse.ProtoReflect.Descriptor instead.
 func (*RequestGrantResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{65}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *RequestGrantResponse) GetGrant() *Grant {
@@ -4757,7 +4837,7 @@ type ListDelegationsRequest struct {
 
 func (x *ListDelegationsRequest) Reset() {
 	*x = ListDelegationsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[66]
+	mi := &file_ladulas_v1_local_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4769,7 +4849,7 @@ func (x *ListDelegationsRequest) String() string {
 func (*ListDelegationsRequest) ProtoMessage() {}
 
 func (x *ListDelegationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[66]
+	mi := &file_ladulas_v1_local_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4782,7 +4862,7 @@ func (x *ListDelegationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDelegationsRequest.ProtoReflect.Descriptor instead.
 func (*ListDelegationsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{66}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{67}
 }
 
 type ListDelegationsResponse struct {
@@ -4794,7 +4874,7 @@ type ListDelegationsResponse struct {
 
 func (x *ListDelegationsResponse) Reset() {
 	*x = ListDelegationsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[67]
+	mi := &file_ladulas_v1_local_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4806,7 +4886,7 @@ func (x *ListDelegationsResponse) String() string {
 func (*ListDelegationsResponse) ProtoMessage() {}
 
 func (x *ListDelegationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[67]
+	mi := &file_ladulas_v1_local_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4819,7 +4899,7 @@ func (x *ListDelegationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDelegationsResponse.ProtoReflect.Descriptor instead.
 func (*ListDelegationsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{67}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ListDelegationsResponse) GetDelegations() []*HeldDelegationInfo {
@@ -4852,7 +4932,7 @@ type HeldDelegationInfo struct {
 
 func (x *HeldDelegationInfo) Reset() {
 	*x = HeldDelegationInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[68]
+	mi := &file_ladulas_v1_local_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4864,7 +4944,7 @@ func (x *HeldDelegationInfo) String() string {
 func (*HeldDelegationInfo) ProtoMessage() {}
 
 func (x *HeldDelegationInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[68]
+	mi := &file_ladulas_v1_local_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4877,7 +4957,7 @@ func (x *HeldDelegationInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeldDelegationInfo.ProtoReflect.Descriptor instead.
 func (*HeldDelegationInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{68}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *HeldDelegationInfo) GetDelegation() *Delegation {
@@ -4916,7 +4996,7 @@ type ListEndorsementsRequest struct {
 
 func (x *ListEndorsementsRequest) Reset() {
 	*x = ListEndorsementsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[69]
+	mi := &file_ladulas_v1_local_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4928,7 +5008,7 @@ func (x *ListEndorsementsRequest) String() string {
 func (*ListEndorsementsRequest) ProtoMessage() {}
 
 func (x *ListEndorsementsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[69]
+	mi := &file_ladulas_v1_local_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4941,7 +5021,7 @@ func (x *ListEndorsementsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEndorsementsRequest.ProtoReflect.Descriptor instead.
 func (*ListEndorsementsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{69}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{70}
 }
 
 type ListEndorsementsResponse struct {
@@ -4954,7 +5034,7 @@ type ListEndorsementsResponse struct {
 
 func (x *ListEndorsementsResponse) Reset() {
 	*x = ListEndorsementsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[70]
+	mi := &file_ladulas_v1_local_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4966,7 +5046,7 @@ func (x *ListEndorsementsResponse) String() string {
 func (*ListEndorsementsResponse) ProtoMessage() {}
 
 func (x *ListEndorsementsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[70]
+	mi := &file_ladulas_v1_local_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4979,7 +5059,7 @@ func (x *ListEndorsementsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEndorsementsResponse.ProtoReflect.Descriptor instead.
 func (*ListEndorsementsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{70}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListEndorsementsResponse) GetEndorsements() []*HeldEndorsementInfo {
@@ -5022,7 +5102,7 @@ type HeldEndorsementInfo struct {
 
 func (x *HeldEndorsementInfo) Reset() {
 	*x = HeldEndorsementInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[71]
+	mi := &file_ladulas_v1_local_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5034,7 +5114,7 @@ func (x *HeldEndorsementInfo) String() string {
 func (*HeldEndorsementInfo) ProtoMessage() {}
 
 func (x *HeldEndorsementInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[71]
+	mi := &file_ladulas_v1_local_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5047,7 +5127,7 @@ func (x *HeldEndorsementInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeldEndorsementInfo.ProtoReflect.Descriptor instead.
 func (*HeldEndorsementInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{71}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *HeldEndorsementInfo) GetEndorsement() *Endorsement {
@@ -5109,7 +5189,7 @@ type RetractionInfo struct {
 
 func (x *RetractionInfo) Reset() {
 	*x = RetractionInfo{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[72]
+	mi := &file_ladulas_v1_local_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5121,7 +5201,7 @@ func (x *RetractionInfo) String() string {
 func (*RetractionInfo) ProtoMessage() {}
 
 func (x *RetractionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[72]
+	mi := &file_ladulas_v1_local_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5134,7 +5214,7 @@ func (x *RetractionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetractionInfo.ProtoReflect.Descriptor instead.
 func (*RetractionInfo) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{72}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *RetractionInfo) GetRetraction() *Retraction {
@@ -5165,7 +5245,7 @@ type RetractEndorsementRequest struct {
 
 func (x *RetractEndorsementRequest) Reset() {
 	*x = RetractEndorsementRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[73]
+	mi := &file_ladulas_v1_local_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5177,7 +5257,7 @@ func (x *RetractEndorsementRequest) String() string {
 func (*RetractEndorsementRequest) ProtoMessage() {}
 
 func (x *RetractEndorsementRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[73]
+	mi := &file_ladulas_v1_local_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5190,7 +5270,7 @@ func (x *RetractEndorsementRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetractEndorsementRequest.ProtoReflect.Descriptor instead.
 func (*RetractEndorsementRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{73}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *RetractEndorsementRequest) GetEndorsementId() string {
@@ -5230,7 +5310,7 @@ type RetractEndorsementResponse struct {
 
 func (x *RetractEndorsementResponse) Reset() {
 	*x = RetractEndorsementResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[74]
+	mi := &file_ladulas_v1_local_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5242,7 +5322,7 @@ func (x *RetractEndorsementResponse) String() string {
 func (*RetractEndorsementResponse) ProtoMessage() {}
 
 func (x *RetractEndorsementResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[74]
+	mi := &file_ladulas_v1_local_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5255,7 +5335,7 @@ func (x *RetractEndorsementResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetractEndorsementResponse.ProtoReflect.Descriptor instead.
 func (*RetractEndorsementResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{74}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *RetractEndorsementResponse) GetTold() []string {
@@ -5288,7 +5368,7 @@ type RevokeGrantRequest struct {
 
 func (x *RevokeGrantRequest) Reset() {
 	*x = RevokeGrantRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[75]
+	mi := &file_ladulas_v1_local_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5300,7 +5380,7 @@ func (x *RevokeGrantRequest) String() string {
 func (*RevokeGrantRequest) ProtoMessage() {}
 
 func (x *RevokeGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[75]
+	mi := &file_ladulas_v1_local_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5313,7 +5393,7 @@ func (x *RevokeGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeGrantRequest.ProtoReflect.Descriptor instead.
 func (*RevokeGrantRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{75}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RevokeGrantRequest) GetGrantId() string {
@@ -5339,7 +5419,7 @@ type RevokeGrantResponse struct {
 
 func (x *RevokeGrantResponse) Reset() {
 	*x = RevokeGrantResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[76]
+	mi := &file_ladulas_v1_local_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5351,7 +5431,7 @@ func (x *RevokeGrantResponse) String() string {
 func (*RevokeGrantResponse) ProtoMessage() {}
 
 func (x *RevokeGrantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[76]
+	mi := &file_ladulas_v1_local_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5364,7 +5444,7 @@ func (x *RevokeGrantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeGrantResponse.ProtoReflect.Descriptor instead.
 func (*RevokeGrantResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{76}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *RevokeGrantResponse) GetGrantId() string {
@@ -5400,7 +5480,7 @@ type BeginPairingRequest struct {
 
 func (x *BeginPairingRequest) Reset() {
 	*x = BeginPairingRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[77]
+	mi := &file_ladulas_v1_local_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5412,7 +5492,7 @@ func (x *BeginPairingRequest) String() string {
 func (*BeginPairingRequest) ProtoMessage() {}
 
 func (x *BeginPairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[77]
+	mi := &file_ladulas_v1_local_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5425,7 +5505,7 @@ func (x *BeginPairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BeginPairingRequest.ProtoReflect.Descriptor instead.
 func (*BeginPairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{77}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *BeginPairingRequest) GetIntent() PairingIntent {
@@ -5454,7 +5534,7 @@ type PairWithPeerRequest struct {
 
 func (x *PairWithPeerRequest) Reset() {
 	*x = PairWithPeerRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[78]
+	mi := &file_ladulas_v1_local_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5466,7 +5546,7 @@ func (x *PairWithPeerRequest) String() string {
 func (*PairWithPeerRequest) ProtoMessage() {}
 
 func (x *PairWithPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[78]
+	mi := &file_ladulas_v1_local_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5479,7 +5559,7 @@ func (x *PairWithPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PairWithPeerRequest.ProtoReflect.Descriptor instead.
 func (*PairWithPeerRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{78}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *PairWithPeerRequest) GetAddress() string {
@@ -5511,7 +5591,7 @@ type BrowsePairingsRequest struct {
 
 func (x *BrowsePairingsRequest) Reset() {
 	*x = BrowsePairingsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[79]
+	mi := &file_ladulas_v1_local_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5523,7 +5603,7 @@ func (x *BrowsePairingsRequest) String() string {
 func (*BrowsePairingsRequest) ProtoMessage() {}
 
 func (x *BrowsePairingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[79]
+	mi := &file_ladulas_v1_local_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5536,7 +5616,7 @@ func (x *BrowsePairingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowsePairingsRequest.ProtoReflect.Descriptor instead.
 func (*BrowsePairingsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{79}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{80}
 }
 
 // NearbyPairing is one machine showing a pairing PIN, as heard on the local
@@ -5565,7 +5645,7 @@ type NearbyPairing struct {
 
 func (x *NearbyPairing) Reset() {
 	*x = NearbyPairing{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[80]
+	mi := &file_ladulas_v1_local_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5577,7 +5657,7 @@ func (x *NearbyPairing) String() string {
 func (*NearbyPairing) ProtoMessage() {}
 
 func (x *NearbyPairing) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[80]
+	mi := &file_ladulas_v1_local_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5590,7 +5670,7 @@ func (x *NearbyPairing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NearbyPairing.ProtoReflect.Descriptor instead.
 func (*NearbyPairing) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{80}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *NearbyPairing) GetId() string {
@@ -5644,7 +5724,7 @@ type NearbyPairings struct {
 
 func (x *NearbyPairings) Reset() {
 	*x = NearbyPairings{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[81]
+	mi := &file_ladulas_v1_local_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5656,7 +5736,7 @@ func (x *NearbyPairings) String() string {
 func (*NearbyPairings) ProtoMessage() {}
 
 func (x *NearbyPairings) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[81]
+	mi := &file_ladulas_v1_local_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5669,7 +5749,7 @@ func (x *NearbyPairings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NearbyPairings.ProtoReflect.Descriptor instead.
 func (*NearbyPairings) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{81}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *NearbyPairings) GetPairings() []*NearbyPairing {
@@ -5717,7 +5797,7 @@ type PairingProgress struct {
 
 func (x *PairingProgress) Reset() {
 	*x = PairingProgress{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[82]
+	mi := &file_ladulas_v1_local_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5729,7 +5809,7 @@ func (x *PairingProgress) String() string {
 func (*PairingProgress) ProtoMessage() {}
 
 func (x *PairingProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[82]
+	mi := &file_ladulas_v1_local_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5742,7 +5822,7 @@ func (x *PairingProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PairingProgress.ProtoReflect.Descriptor instead.
 func (*PairingProgress) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{82}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *PairingProgress) GetKind() PairingProgressKind {
@@ -5847,7 +5927,7 @@ type AnswerPairingRequest struct {
 
 func (x *AnswerPairingRequest) Reset() {
 	*x = AnswerPairingRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[83]
+	mi := &file_ladulas_v1_local_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5859,7 +5939,7 @@ func (x *AnswerPairingRequest) String() string {
 func (*AnswerPairingRequest) ProtoMessage() {}
 
 func (x *AnswerPairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[83]
+	mi := &file_ladulas_v1_local_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5872,7 +5952,7 @@ func (x *AnswerPairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerPairingRequest.ProtoReflect.Descriptor instead.
 func (*AnswerPairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{83}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *AnswerPairingRequest) GetRequestId() string {
@@ -5904,7 +5984,7 @@ type AnswerPairingResponse struct {
 
 func (x *AnswerPairingResponse) Reset() {
 	*x = AnswerPairingResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[84]
+	mi := &file_ladulas_v1_local_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5916,7 +5996,7 @@ func (x *AnswerPairingResponse) String() string {
 func (*AnswerPairingResponse) ProtoMessage() {}
 
 func (x *AnswerPairingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[84]
+	mi := &file_ladulas_v1_local_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5929,7 +6009,7 @@ func (x *AnswerPairingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerPairingResponse.ProtoReflect.Descriptor instead.
 func (*AnswerPairingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{84}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{85}
 }
 
 // PendingPairingStatus is one pairing under way, as the management surface
@@ -5967,7 +6047,7 @@ type PendingPairingStatus struct {
 
 func (x *PendingPairingStatus) Reset() {
 	*x = PendingPairingStatus{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[85]
+	mi := &file_ladulas_v1_local_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5979,7 +6059,7 @@ func (x *PendingPairingStatus) String() string {
 func (*PendingPairingStatus) ProtoMessage() {}
 
 func (x *PendingPairingStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[85]
+	mi := &file_ladulas_v1_local_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5992,7 +6072,7 @@ func (x *PendingPairingStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingPairingStatus.ProtoReflect.Descriptor instead.
 func (*PendingPairingStatus) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{85}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *PendingPairingStatus) GetSessionId() string {
@@ -6115,7 +6195,7 @@ type ListPendingPairingsRequest struct {
 
 func (x *ListPendingPairingsRequest) Reset() {
 	*x = ListPendingPairingsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[86]
+	mi := &file_ladulas_v1_local_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6127,7 +6207,7 @@ func (x *ListPendingPairingsRequest) String() string {
 func (*ListPendingPairingsRequest) ProtoMessage() {}
 
 func (x *ListPendingPairingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[86]
+	mi := &file_ladulas_v1_local_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6140,7 +6220,7 @@ func (x *ListPendingPairingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingPairingsRequest.ProtoReflect.Descriptor instead.
 func (*ListPendingPairingsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{86}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{87}
 }
 
 type ListPendingPairingsResponse struct {
@@ -6152,7 +6232,7 @@ type ListPendingPairingsResponse struct {
 
 func (x *ListPendingPairingsResponse) Reset() {
 	*x = ListPendingPairingsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[87]
+	mi := &file_ladulas_v1_local_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6164,7 +6244,7 @@ func (x *ListPendingPairingsResponse) String() string {
 func (*ListPendingPairingsResponse) ProtoMessage() {}
 
 func (x *ListPendingPairingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[87]
+	mi := &file_ladulas_v1_local_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6177,7 +6257,7 @@ func (x *ListPendingPairingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPendingPairingsResponse.ProtoReflect.Descriptor instead.
 func (*ListPendingPairingsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{87}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ListPendingPairingsResponse) GetPairings() []*PendingPairingStatus {
@@ -6199,7 +6279,7 @@ type AnswerPendingPairingRequest struct {
 
 func (x *AnswerPendingPairingRequest) Reset() {
 	*x = AnswerPendingPairingRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[88]
+	mi := &file_ladulas_v1_local_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6211,7 +6291,7 @@ func (x *AnswerPendingPairingRequest) String() string {
 func (*AnswerPendingPairingRequest) ProtoMessage() {}
 
 func (x *AnswerPendingPairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[88]
+	mi := &file_ladulas_v1_local_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6224,7 +6304,7 @@ func (x *AnswerPendingPairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerPendingPairingRequest.ProtoReflect.Descriptor instead.
 func (*AnswerPendingPairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{88}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *AnswerPendingPairingRequest) GetPairing() string {
@@ -6262,7 +6342,7 @@ type AnswerPendingPairingResponse struct {
 
 func (x *AnswerPendingPairingResponse) Reset() {
 	*x = AnswerPendingPairingResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[89]
+	mi := &file_ladulas_v1_local_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6274,7 +6354,7 @@ func (x *AnswerPendingPairingResponse) String() string {
 func (*AnswerPendingPairingResponse) ProtoMessage() {}
 
 func (x *AnswerPendingPairingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[89]
+	mi := &file_ladulas_v1_local_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6287,7 +6367,7 @@ func (x *AnswerPendingPairingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerPendingPairingResponse.ProtoReflect.Descriptor instead.
 func (*AnswerPendingPairingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{89}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *AnswerPendingPairingResponse) GetState() PairingRecordState {
@@ -6329,7 +6409,7 @@ type WithdrawPairingRequest struct {
 
 func (x *WithdrawPairingRequest) Reset() {
 	*x = WithdrawPairingRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[90]
+	mi := &file_ladulas_v1_local_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6341,7 +6421,7 @@ func (x *WithdrawPairingRequest) String() string {
 func (*WithdrawPairingRequest) ProtoMessage() {}
 
 func (x *WithdrawPairingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[90]
+	mi := &file_ladulas_v1_local_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6354,7 +6434,7 @@ func (x *WithdrawPairingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawPairingRequest.ProtoReflect.Descriptor instead.
 func (*WithdrawPairingRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{90}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *WithdrawPairingRequest) GetPairing() string {
@@ -6385,7 +6465,7 @@ type WithdrawPairingResponse struct {
 
 func (x *WithdrawPairingResponse) Reset() {
 	*x = WithdrawPairingResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[91]
+	mi := &file_ladulas_v1_local_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6397,7 +6477,7 @@ func (x *WithdrawPairingResponse) String() string {
 func (*WithdrawPairingResponse) ProtoMessage() {}
 
 func (x *WithdrawPairingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[91]
+	mi := &file_ladulas_v1_local_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6410,7 +6490,7 @@ func (x *WithdrawPairingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawPairingResponse.ProtoReflect.Descriptor instead.
 func (*WithdrawPairingResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{91}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *WithdrawPairingResponse) GetSessionId() string {
@@ -6462,7 +6542,7 @@ type SetPeerDirectionsRequest struct {
 
 func (x *SetPeerDirectionsRequest) Reset() {
 	*x = SetPeerDirectionsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[92]
+	mi := &file_ladulas_v1_local_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6474,7 +6554,7 @@ func (x *SetPeerDirectionsRequest) String() string {
 func (*SetPeerDirectionsRequest) ProtoMessage() {}
 
 func (x *SetPeerDirectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[92]
+	mi := &file_ladulas_v1_local_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6487,7 +6567,7 @@ func (x *SetPeerDirectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPeerDirectionsRequest.ProtoReflect.Descriptor instead.
 func (*SetPeerDirectionsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{92}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *SetPeerDirectionsRequest) GetPeer() string {
@@ -6534,7 +6614,7 @@ type SetPeerDirectionsResponse struct {
 
 func (x *SetPeerDirectionsResponse) Reset() {
 	*x = SetPeerDirectionsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[93]
+	mi := &file_ladulas_v1_local_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6546,7 +6626,7 @@ func (x *SetPeerDirectionsResponse) String() string {
 func (*SetPeerDirectionsResponse) ProtoMessage() {}
 
 func (x *SetPeerDirectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[93]
+	mi := &file_ladulas_v1_local_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6559,7 +6639,7 @@ func (x *SetPeerDirectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPeerDirectionsResponse.ProtoReflect.Descriptor instead.
 func (*SetPeerDirectionsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{93}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *SetPeerDirectionsResponse) GetPeer() *PeerStatus {
@@ -6580,7 +6660,7 @@ type RenamePeerRequest struct {
 
 func (x *RenamePeerRequest) Reset() {
 	*x = RenamePeerRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[94]
+	mi := &file_ladulas_v1_local_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6592,7 +6672,7 @@ func (x *RenamePeerRequest) String() string {
 func (*RenamePeerRequest) ProtoMessage() {}
 
 func (x *RenamePeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[94]
+	mi := &file_ladulas_v1_local_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6605,7 +6685,7 @@ func (x *RenamePeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenamePeerRequest.ProtoReflect.Descriptor instead.
 func (*RenamePeerRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{94}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *RenamePeerRequest) GetPeer() string {
@@ -6631,7 +6711,7 @@ type RenamePeerResponse struct {
 
 func (x *RenamePeerResponse) Reset() {
 	*x = RenamePeerResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[95]
+	mi := &file_ladulas_v1_local_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6643,7 +6723,7 @@ func (x *RenamePeerResponse) String() string {
 func (*RenamePeerResponse) ProtoMessage() {}
 
 func (x *RenamePeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[95]
+	mi := &file_ladulas_v1_local_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6656,7 +6736,7 @@ func (x *RenamePeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenamePeerResponse.ProtoReflect.Descriptor instead.
 func (*RenamePeerResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{95}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *RenamePeerResponse) GetPeer() *PeerStatus {
@@ -6675,7 +6755,7 @@ type RevokePeerRequest struct {
 
 func (x *RevokePeerRequest) Reset() {
 	*x = RevokePeerRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[96]
+	mi := &file_ladulas_v1_local_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6687,7 +6767,7 @@ func (x *RevokePeerRequest) String() string {
 func (*RevokePeerRequest) ProtoMessage() {}
 
 func (x *RevokePeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[96]
+	mi := &file_ladulas_v1_local_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6700,7 +6780,7 @@ func (x *RevokePeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokePeerRequest.ProtoReflect.Descriptor instead.
 func (*RevokePeerRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{96}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *RevokePeerRequest) GetPeer() string {
@@ -6719,7 +6799,7 @@ type RevokePeerResponse struct {
 
 func (x *RevokePeerResponse) Reset() {
 	*x = RevokePeerResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[97]
+	mi := &file_ladulas_v1_local_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6731,7 +6811,7 @@ func (x *RevokePeerResponse) String() string {
 func (*RevokePeerResponse) ProtoMessage() {}
 
 func (x *RevokePeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[97]
+	mi := &file_ladulas_v1_local_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6744,7 +6824,7 @@ func (x *RevokePeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokePeerResponse.ProtoReflect.Descriptor instead.
 func (*RevokePeerResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{97}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *RevokePeerResponse) GetFingerprint() string {
@@ -6780,7 +6860,7 @@ type CachedProject struct {
 
 func (x *CachedProject) Reset() {
 	*x = CachedProject{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[98]
+	mi := &file_ladulas_v1_local_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6792,7 +6872,7 @@ func (x *CachedProject) String() string {
 func (*CachedProject) ProtoMessage() {}
 
 func (x *CachedProject) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[98]
+	mi := &file_ladulas_v1_local_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6805,7 +6885,7 @@ func (x *CachedProject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CachedProject.ProtoReflect.Descriptor instead.
 func (*CachedProject) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{98}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *CachedProject) GetKey() string {
@@ -6881,7 +6961,7 @@ type CachedFile struct {
 
 func (x *CachedFile) Reset() {
 	*x = CachedFile{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[99]
+	mi := &file_ladulas_v1_local_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6893,7 +6973,7 @@ func (x *CachedFile) String() string {
 func (*CachedFile) ProtoMessage() {}
 
 func (x *CachedFile) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[99]
+	mi := &file_ladulas_v1_local_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6906,7 +6986,7 @@ func (x *CachedFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CachedFile.ProtoReflect.Descriptor instead.
 func (*CachedFile) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{99}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *CachedFile) GetPath() string {
@@ -6984,7 +7064,7 @@ type TrackedProject struct {
 
 func (x *TrackedProject) Reset() {
 	*x = TrackedProject{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[100]
+	mi := &file_ladulas_v1_local_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6996,7 +7076,7 @@ func (x *TrackedProject) String() string {
 func (*TrackedProject) ProtoMessage() {}
 
 func (x *TrackedProject) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[100]
+	mi := &file_ladulas_v1_local_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7009,7 +7089,7 @@ func (x *TrackedProject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackedProject.ProtoReflect.Descriptor instead.
 func (*TrackedProject) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{100}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *TrackedProject) GetProjectId() string {
@@ -7053,7 +7133,7 @@ type TrackedDocument struct {
 
 func (x *TrackedDocument) Reset() {
 	*x = TrackedDocument{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[101]
+	mi := &file_ladulas_v1_local_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7065,7 +7145,7 @@ func (x *TrackedDocument) String() string {
 func (*TrackedDocument) ProtoMessage() {}
 
 func (x *TrackedDocument) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[101]
+	mi := &file_ladulas_v1_local_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7078,7 +7158,7 @@ func (x *TrackedDocument) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackedDocument.ProtoReflect.Descriptor instead.
 func (*TrackedDocument) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{101}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *TrackedDocument) GetPath() string {
@@ -7118,7 +7198,7 @@ type DocumentSnapshot struct {
 
 func (x *DocumentSnapshot) Reset() {
 	*x = DocumentSnapshot{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[102]
+	mi := &file_ladulas_v1_local_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7130,7 +7210,7 @@ func (x *DocumentSnapshot) String() string {
 func (*DocumentSnapshot) ProtoMessage() {}
 
 func (x *DocumentSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[102]
+	mi := &file_ladulas_v1_local_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7143,7 +7223,7 @@ func (x *DocumentSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DocumentSnapshot.ProtoReflect.Descriptor instead.
 func (*DocumentSnapshot) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{102}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *DocumentSnapshot) GetDigest() []byte {
@@ -7190,7 +7270,7 @@ type PublishProjectRequest struct {
 
 func (x *PublishProjectRequest) Reset() {
 	*x = PublishProjectRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[103]
+	mi := &file_ladulas_v1_local_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7202,7 +7282,7 @@ func (x *PublishProjectRequest) String() string {
 func (*PublishProjectRequest) ProtoMessage() {}
 
 func (x *PublishProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[103]
+	mi := &file_ladulas_v1_local_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7215,7 +7295,7 @@ func (x *PublishProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishProjectRequest.ProtoReflect.Descriptor instead.
 func (*PublishProjectRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{103}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *PublishProjectRequest) GetPath() string {
@@ -7241,7 +7321,7 @@ type PublishProjectResponse struct {
 
 func (x *PublishProjectResponse) Reset() {
 	*x = PublishProjectResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[104]
+	mi := &file_ladulas_v1_local_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7253,7 +7333,7 @@ func (x *PublishProjectResponse) String() string {
 func (*PublishProjectResponse) ProtoMessage() {}
 
 func (x *PublishProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[104]
+	mi := &file_ladulas_v1_local_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7266,7 +7346,7 @@ func (x *PublishProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishProjectResponse.ProtoReflect.Descriptor instead.
 func (*PublishProjectResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{104}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *PublishProjectResponse) GetPublication() *Publication {
@@ -7284,7 +7364,7 @@ type ListPublicationsRequest struct {
 
 func (x *ListPublicationsRequest) Reset() {
 	*x = ListPublicationsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[105]
+	mi := &file_ladulas_v1_local_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7296,7 +7376,7 @@ func (x *ListPublicationsRequest) String() string {
 func (*ListPublicationsRequest) ProtoMessage() {}
 
 func (x *ListPublicationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[105]
+	mi := &file_ladulas_v1_local_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7309,7 +7389,7 @@ func (x *ListPublicationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPublicationsRequest.ProtoReflect.Descriptor instead.
 func (*ListPublicationsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{105}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{106}
 }
 
 type ListPublicationsResponse struct {
@@ -7327,7 +7407,7 @@ type ListPublicationsResponse struct {
 
 func (x *ListPublicationsResponse) Reset() {
 	*x = ListPublicationsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[106]
+	mi := &file_ladulas_v1_local_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7339,7 +7419,7 @@ func (x *ListPublicationsResponse) String() string {
 func (*ListPublicationsResponse) ProtoMessage() {}
 
 func (x *ListPublicationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[106]
+	mi := &file_ladulas_v1_local_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7352,7 +7432,7 @@ func (x *ListPublicationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPublicationsResponse.ProtoReflect.Descriptor instead.
 func (*ListPublicationsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{106}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *ListPublicationsResponse) GetPublished() []*Publication {
@@ -7385,7 +7465,7 @@ type SetAutoPublishRequest struct {
 
 func (x *SetAutoPublishRequest) Reset() {
 	*x = SetAutoPublishRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[107]
+	mi := &file_ladulas_v1_local_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7397,7 +7477,7 @@ func (x *SetAutoPublishRequest) String() string {
 func (*SetAutoPublishRequest) ProtoMessage() {}
 
 func (x *SetAutoPublishRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[107]
+	mi := &file_ladulas_v1_local_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7410,7 +7490,7 @@ func (x *SetAutoPublishRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutoPublishRequest.ProtoReflect.Descriptor instead.
 func (*SetAutoPublishRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{107}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *SetAutoPublishRequest) GetEnabled() bool {
@@ -7429,7 +7509,7 @@ type SetAutoPublishResponse struct {
 
 func (x *SetAutoPublishResponse) Reset() {
 	*x = SetAutoPublishResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[108]
+	mi := &file_ladulas_v1_local_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7441,7 +7521,7 @@ func (x *SetAutoPublishResponse) String() string {
 func (*SetAutoPublishResponse) ProtoMessage() {}
 
 func (x *SetAutoPublishResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[108]
+	mi := &file_ladulas_v1_local_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7454,7 +7534,7 @@ func (x *SetAutoPublishResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAutoPublishResponse.ProtoReflect.Descriptor instead.
 func (*SetAutoPublishResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{108}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *SetAutoPublishResponse) GetEnabled() bool {
@@ -7476,7 +7556,7 @@ type UnpublishProjectRequest struct {
 
 func (x *UnpublishProjectRequest) Reset() {
 	*x = UnpublishProjectRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[109]
+	mi := &file_ladulas_v1_local_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7488,7 +7568,7 @@ func (x *UnpublishProjectRequest) String() string {
 func (*UnpublishProjectRequest) ProtoMessage() {}
 
 func (x *UnpublishProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[109]
+	mi := &file_ladulas_v1_local_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7501,7 +7581,7 @@ func (x *UnpublishProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnpublishProjectRequest.ProtoReflect.Descriptor instead.
 func (*UnpublishProjectRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{109}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *UnpublishProjectRequest) GetProject() string {
@@ -7526,7 +7606,7 @@ type UnpublishProjectResponse struct {
 
 func (x *UnpublishProjectResponse) Reset() {
 	*x = UnpublishProjectResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[110]
+	mi := &file_ladulas_v1_local_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7538,7 +7618,7 @@ func (x *UnpublishProjectResponse) String() string {
 func (*UnpublishProjectResponse) ProtoMessage() {}
 
 func (x *UnpublishProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[110]
+	mi := &file_ladulas_v1_local_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7551,7 +7631,7 @@ func (x *UnpublishProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnpublishProjectResponse.ProtoReflect.Descriptor instead.
 func (*UnpublishProjectResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{110}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *UnpublishProjectResponse) GetProjectId() string {
@@ -7589,7 +7669,7 @@ type WatchApprovalsRequest struct {
 
 func (x *WatchApprovalsRequest) Reset() {
 	*x = WatchApprovalsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[111]
+	mi := &file_ladulas_v1_local_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7601,7 +7681,7 @@ func (x *WatchApprovalsRequest) String() string {
 func (*WatchApprovalsRequest) ProtoMessage() {}
 
 func (x *WatchApprovalsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[111]
+	mi := &file_ladulas_v1_local_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7614,7 +7694,7 @@ func (x *WatchApprovalsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchApprovalsRequest.ProtoReflect.Descriptor instead.
 func (*WatchApprovalsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{111}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *WatchApprovalsRequest) GetApproverId() string {
@@ -7659,7 +7739,7 @@ type ApprovalPrompt struct {
 
 func (x *ApprovalPrompt) Reset() {
 	*x = ApprovalPrompt{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[112]
+	mi := &file_ladulas_v1_local_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7671,7 +7751,7 @@ func (x *ApprovalPrompt) String() string {
 func (*ApprovalPrompt) ProtoMessage() {}
 
 func (x *ApprovalPrompt) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[112]
+	mi := &file_ladulas_v1_local_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7684,7 +7764,7 @@ func (x *ApprovalPrompt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalPrompt.ProtoReflect.Descriptor instead.
 func (*ApprovalPrompt) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{112}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ApprovalPrompt) GetKind() ApprovalPromptKind {
@@ -7758,7 +7838,7 @@ type GrantOffer struct {
 
 func (x *GrantOffer) Reset() {
 	*x = GrantOffer{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[113]
+	mi := &file_ladulas_v1_local_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7770,7 +7850,7 @@ func (x *GrantOffer) String() string {
 func (*GrantOffer) ProtoMessage() {}
 
 func (x *GrantOffer) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[113]
+	mi := &file_ladulas_v1_local_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7783,7 +7863,7 @@ func (x *GrantOffer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GrantOffer.ProtoReflect.Descriptor instead.
 func (*GrantOffer) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{113}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *GrantOffer) GetTtls() []*durationpb.Duration {
@@ -7842,7 +7922,7 @@ type AnswerApprovalRequest struct {
 
 func (x *AnswerApprovalRequest) Reset() {
 	*x = AnswerApprovalRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[114]
+	mi := &file_ladulas_v1_local_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7854,7 +7934,7 @@ func (x *AnswerApprovalRequest) String() string {
 func (*AnswerApprovalRequest) ProtoMessage() {}
 
 func (x *AnswerApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[114]
+	mi := &file_ladulas_v1_local_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7867,7 +7947,7 @@ func (x *AnswerApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerApprovalRequest.ProtoReflect.Descriptor instead.
 func (*AnswerApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{114}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *AnswerApprovalRequest) GetRequestId() string {
@@ -7927,7 +8007,7 @@ type AnswerApprovalResponse struct {
 
 func (x *AnswerApprovalResponse) Reset() {
 	*x = AnswerApprovalResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[115]
+	mi := &file_ladulas_v1_local_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7939,7 +8019,7 @@ func (x *AnswerApprovalResponse) String() string {
 func (*AnswerApprovalResponse) ProtoMessage() {}
 
 func (x *AnswerApprovalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[115]
+	mi := &file_ladulas_v1_local_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7952,7 +8032,7 @@ func (x *AnswerApprovalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerApprovalResponse.ProtoReflect.Descriptor instead.
 func (*AnswerApprovalResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{115}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{116}
 }
 
 type FetchRequestDiffRequest struct {
@@ -7966,7 +8046,7 @@ type FetchRequestDiffRequest struct {
 
 func (x *FetchRequestDiffRequest) Reset() {
 	*x = FetchRequestDiffRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[116]
+	mi := &file_ladulas_v1_local_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7978,7 +8058,7 @@ func (x *FetchRequestDiffRequest) String() string {
 func (*FetchRequestDiffRequest) ProtoMessage() {}
 
 func (x *FetchRequestDiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[116]
+	mi := &file_ladulas_v1_local_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7991,7 +8071,7 @@ func (x *FetchRequestDiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchRequestDiffRequest.ProtoReflect.Descriptor instead.
 func (*FetchRequestDiffRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{116}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *FetchRequestDiffRequest) GetRequestId() string {
@@ -8017,7 +8097,7 @@ type FetchRequestDiffResponse struct {
 
 func (x *FetchRequestDiffResponse) Reset() {
 	*x = FetchRequestDiffResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[117]
+	mi := &file_ladulas_v1_local_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8029,7 +8109,7 @@ func (x *FetchRequestDiffResponse) String() string {
 func (*FetchRequestDiffResponse) ProtoMessage() {}
 
 func (x *FetchRequestDiffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[117]
+	mi := &file_ladulas_v1_local_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8042,7 +8122,7 @@ func (x *FetchRequestDiffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchRequestDiffResponse.ProtoReflect.Descriptor instead.
 func (*FetchRequestDiffResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{117}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *FetchRequestDiffResponse) GetDiff() *GitDiff {
@@ -8082,7 +8162,7 @@ type PeerProject struct {
 
 func (x *PeerProject) Reset() {
 	*x = PeerProject{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[118]
+	mi := &file_ladulas_v1_local_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8094,7 +8174,7 @@ func (x *PeerProject) String() string {
 func (*PeerProject) ProtoMessage() {}
 
 func (x *PeerProject) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[118]
+	mi := &file_ladulas_v1_local_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8107,7 +8187,7 @@ func (x *PeerProject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerProject.ProtoReflect.Descriptor instead.
 func (*PeerProject) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{118}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *PeerProject) GetFingerprint() string {
@@ -8202,7 +8282,7 @@ type PeerListing struct {
 
 func (x *PeerListing) Reset() {
 	*x = PeerListing{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[119]
+	mi := &file_ladulas_v1_local_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8214,7 +8294,7 @@ func (x *PeerListing) String() string {
 func (*PeerListing) ProtoMessage() {}
 
 func (x *PeerListing) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[119]
+	mi := &file_ladulas_v1_local_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8227,7 +8307,7 @@ func (x *PeerListing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerListing.ProtoReflect.Descriptor instead.
 func (*PeerListing) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{119}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *PeerListing) GetPath() string {
@@ -8313,7 +8393,7 @@ type PeerPage struct {
 
 func (x *PeerPage) Reset() {
 	*x = PeerPage{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[120]
+	mi := &file_ladulas_v1_local_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8325,7 +8405,7 @@ func (x *PeerPage) String() string {
 func (*PeerPage) ProtoMessage() {}
 
 func (x *PeerPage) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[120]
+	mi := &file_ladulas_v1_local_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8338,7 +8418,7 @@ func (x *PeerPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerPage.ProtoReflect.Descriptor instead.
 func (*PeerPage) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{120}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *PeerPage) GetPath() string {
@@ -8410,7 +8490,7 @@ type ListPeerProjectsRequest struct {
 
 func (x *ListPeerProjectsRequest) Reset() {
 	*x = ListPeerProjectsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[121]
+	mi := &file_ladulas_v1_local_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8422,7 +8502,7 @@ func (x *ListPeerProjectsRequest) String() string {
 func (*ListPeerProjectsRequest) ProtoMessage() {}
 
 func (x *ListPeerProjectsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[121]
+	mi := &file_ladulas_v1_local_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8435,7 +8515,7 @@ func (x *ListPeerProjectsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeerProjectsRequest.ProtoReflect.Descriptor instead.
 func (*ListPeerProjectsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{121}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *ListPeerProjectsRequest) GetFingerprint() string {
@@ -8461,7 +8541,7 @@ type ListPeerProjectsResponse struct {
 
 func (x *ListPeerProjectsResponse) Reset() {
 	*x = ListPeerProjectsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[122]
+	mi := &file_ladulas_v1_local_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8473,7 +8553,7 @@ func (x *ListPeerProjectsResponse) String() string {
 func (*ListPeerProjectsResponse) ProtoMessage() {}
 
 func (x *ListPeerProjectsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[122]
+	mi := &file_ladulas_v1_local_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8486,7 +8566,7 @@ func (x *ListPeerProjectsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeerProjectsResponse.ProtoReflect.Descriptor instead.
 func (*ListPeerProjectsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{122}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *ListPeerProjectsResponse) GetProjects() []*PeerProject {
@@ -8509,7 +8589,7 @@ type OpenPeerProjectRequest struct {
 
 func (x *OpenPeerProjectRequest) Reset() {
 	*x = OpenPeerProjectRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[123]
+	mi := &file_ladulas_v1_local_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8521,7 +8601,7 @@ func (x *OpenPeerProjectRequest) String() string {
 func (*OpenPeerProjectRequest) ProtoMessage() {}
 
 func (x *OpenPeerProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[123]
+	mi := &file_ladulas_v1_local_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8534,7 +8614,7 @@ func (x *OpenPeerProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenPeerProjectRequest.ProtoReflect.Descriptor instead.
 func (*OpenPeerProjectRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{123}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *OpenPeerProjectRequest) GetFingerprint() string {
@@ -8569,7 +8649,7 @@ type OpenPeerProjectResponse struct {
 
 func (x *OpenPeerProjectResponse) Reset() {
 	*x = OpenPeerProjectResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[124]
+	mi := &file_ladulas_v1_local_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8581,7 +8661,7 @@ func (x *OpenPeerProjectResponse) String() string {
 func (*OpenPeerProjectResponse) ProtoMessage() {}
 
 func (x *OpenPeerProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[124]
+	mi := &file_ladulas_v1_local_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8594,7 +8674,7 @@ func (x *OpenPeerProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenPeerProjectResponse.ProtoReflect.Descriptor instead.
 func (*OpenPeerProjectResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{124}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *OpenPeerProjectResponse) GetProject() *PeerProject {
@@ -8630,7 +8710,7 @@ type ListPeerDirectoryRequest struct {
 
 func (x *ListPeerDirectoryRequest) Reset() {
 	*x = ListPeerDirectoryRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[125]
+	mi := &file_ladulas_v1_local_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8642,7 +8722,7 @@ func (x *ListPeerDirectoryRequest) String() string {
 func (*ListPeerDirectoryRequest) ProtoMessage() {}
 
 func (x *ListPeerDirectoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[125]
+	mi := &file_ladulas_v1_local_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8655,7 +8735,7 @@ func (x *ListPeerDirectoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeerDirectoryRequest.ProtoReflect.Descriptor instead.
 func (*ListPeerDirectoryRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{125}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *ListPeerDirectoryRequest) GetFingerprint() string {
@@ -8716,7 +8796,7 @@ type ListPeerDirectoryResponse struct {
 
 func (x *ListPeerDirectoryResponse) Reset() {
 	*x = ListPeerDirectoryResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[126]
+	mi := &file_ladulas_v1_local_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8728,7 +8808,7 @@ func (x *ListPeerDirectoryResponse) String() string {
 func (*ListPeerDirectoryResponse) ProtoMessage() {}
 
 func (x *ListPeerDirectoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[126]
+	mi := &file_ladulas_v1_local_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8741,7 +8821,7 @@ func (x *ListPeerDirectoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPeerDirectoryResponse.ProtoReflect.Descriptor instead.
 func (*ListPeerDirectoryResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{126}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *ListPeerDirectoryResponse) GetListing() *PeerListing {
@@ -8764,7 +8844,7 @@ type SearchPeerProjectRequest struct {
 
 func (x *SearchPeerProjectRequest) Reset() {
 	*x = SearchPeerProjectRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[127]
+	mi := &file_ladulas_v1_local_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8776,7 +8856,7 @@ func (x *SearchPeerProjectRequest) String() string {
 func (*SearchPeerProjectRequest) ProtoMessage() {}
 
 func (x *SearchPeerProjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[127]
+	mi := &file_ladulas_v1_local_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8789,7 +8869,7 @@ func (x *SearchPeerProjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchPeerProjectRequest.ProtoReflect.Descriptor instead.
 func (*SearchPeerProjectRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{127}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *SearchPeerProjectRequest) GetFingerprint() string {
@@ -8836,7 +8916,7 @@ type SearchPeerProjectResponse struct {
 
 func (x *SearchPeerProjectResponse) Reset() {
 	*x = SearchPeerProjectResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[128]
+	mi := &file_ladulas_v1_local_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8848,7 +8928,7 @@ func (x *SearchPeerProjectResponse) String() string {
 func (*SearchPeerProjectResponse) ProtoMessage() {}
 
 func (x *SearchPeerProjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[128]
+	mi := &file_ladulas_v1_local_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8861,7 +8941,7 @@ func (x *SearchPeerProjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchPeerProjectResponse.ProtoReflect.Descriptor instead.
 func (*SearchPeerProjectResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{128}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *SearchPeerProjectResponse) GetListing() *PeerListing {
@@ -8887,7 +8967,7 @@ type ReadPeerPageRequest struct {
 
 func (x *ReadPeerPageRequest) Reset() {
 	*x = ReadPeerPageRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[129]
+	mi := &file_ladulas_v1_local_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8899,7 +8979,7 @@ func (x *ReadPeerPageRequest) String() string {
 func (*ReadPeerPageRequest) ProtoMessage() {}
 
 func (x *ReadPeerPageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[129]
+	mi := &file_ladulas_v1_local_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8912,7 +8992,7 @@ func (x *ReadPeerPageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPeerPageRequest.ProtoReflect.Descriptor instead.
 func (*ReadPeerPageRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{129}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ReadPeerPageRequest) GetFingerprint() string {
@@ -8966,7 +9046,7 @@ type ReadPeerPageResponse struct {
 
 func (x *ReadPeerPageResponse) Reset() {
 	*x = ReadPeerPageResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[130]
+	mi := &file_ladulas_v1_local_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8978,7 +9058,7 @@ func (x *ReadPeerPageResponse) String() string {
 func (*ReadPeerPageResponse) ProtoMessage() {}
 
 func (x *ReadPeerPageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[130]
+	mi := &file_ladulas_v1_local_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8991,7 +9071,7 @@ func (x *ReadPeerPageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadPeerPageResponse.ProtoReflect.Descriptor instead.
 func (*ReadPeerPageResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{130}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ReadPeerPageResponse) GetPage() *PeerPage {
@@ -9035,7 +9115,7 @@ type PeerDocumentVersionsRequest struct {
 
 func (x *PeerDocumentVersionsRequest) Reset() {
 	*x = PeerDocumentVersionsRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[131]
+	mi := &file_ladulas_v1_local_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9047,7 +9127,7 @@ func (x *PeerDocumentVersionsRequest) String() string {
 func (*PeerDocumentVersionsRequest) ProtoMessage() {}
 
 func (x *PeerDocumentVersionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[131]
+	mi := &file_ladulas_v1_local_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9060,7 +9140,7 @@ func (x *PeerDocumentVersionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerDocumentVersionsRequest.ProtoReflect.Descriptor instead.
 func (*PeerDocumentVersionsRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{131}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *PeerDocumentVersionsRequest) GetFingerprint() string {
@@ -9108,7 +9188,7 @@ type PeerDocumentVersionsResponse struct {
 
 func (x *PeerDocumentVersionsResponse) Reset() {
 	*x = PeerDocumentVersionsResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[132]
+	mi := &file_ladulas_v1_local_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9120,7 +9200,7 @@ func (x *PeerDocumentVersionsResponse) String() string {
 func (*PeerDocumentVersionsResponse) ProtoMessage() {}
 
 func (x *PeerDocumentVersionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[132]
+	mi := &file_ladulas_v1_local_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9133,7 +9213,7 @@ func (x *PeerDocumentVersionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerDocumentVersionsResponse.ProtoReflect.Descriptor instead.
 func (*PeerDocumentVersionsResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{132}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *PeerDocumentVersionsResponse) GetVersions() []*DocumentVersion {
@@ -9186,7 +9266,7 @@ type ReloadRequest struct {
 
 func (x *ReloadRequest) Reset() {
 	*x = ReloadRequest{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[133]
+	mi := &file_ladulas_v1_local_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9198,7 +9278,7 @@ func (x *ReloadRequest) String() string {
 func (*ReloadRequest) ProtoMessage() {}
 
 func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[133]
+	mi := &file_ladulas_v1_local_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9211,7 +9291,7 @@ func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
 func (*ReloadRequest) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{133}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{134}
 }
 
 type ReloadResponse struct {
@@ -9222,7 +9302,7 @@ type ReloadResponse struct {
 
 func (x *ReloadResponse) Reset() {
 	*x = ReloadResponse{}
-	mi := &file_ladulas_v1_local_proto_msgTypes[134]
+	mi := &file_ladulas_v1_local_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9234,7 +9314,7 @@ func (x *ReloadResponse) String() string {
 func (*ReloadResponse) ProtoMessage() {}
 
 func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ladulas_v1_local_proto_msgTypes[134]
+	mi := &file_ladulas_v1_local_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9247,7 +9327,7 @@ func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadResponse.ProtoReflect.Descriptor instead.
 func (*ReloadResponse) Descriptor() ([]byte, []int) {
-	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{134}
+	return file_ladulas_v1_local_proto_rawDescGZIP(), []int{135}
 }
 
 var File_ladulas_v1_local_proto protoreflect.FileDescriptor
@@ -9306,7 +9386,7 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"lastSeenAt\x12\x1a\n" +
 	"\bdialable\x18\r \x01(\bR\bdialable\x12\x12\n" +
 	"\x04path\x18\x0e \x01(\tR\x04path\x12\x16\n" +
-	"\x06tunnel\x18\x0f \x01(\tR\x06tunnel\"\xdd\x05\n" +
+	"\x06tunnel\x18\x0f \x01(\tR\x06tunnel\"\xa1\x06\n" +
 	"\x0eStatusResponse\x12#\n" +
 	"\rinstance_name\x18\x01 \x01(\tR\finstanceName\x12 \n" +
 	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12)\n" +
@@ -9329,7 +9409,12 @@ const file_ladulas_v1_local_proto_rawDesc = "" +
 	"key_offers\x18\x0f \x01(\x05R\tkeyOffers\x12;\n" +
 	"\tlocations\x18\x10 \x01(\v2\x1d.ladulas.v1.InstanceLocationsR\tlocations\x12\x1d\n" +
 	"\n" +
-	"local_keys\x18\x11 \x01(\x05R\tlocalKeys\"\xcb\x01\n" +
+	"local_keys\x18\x11 \x01(\x05R\tlocalKeys\x12B\n" +
+	"\x0finbound_tunnels\x18\x12 \x03(\v2\x19.ladulas.v1.InboundTunnelR\x0einboundTunnels\"Y\n" +
+	"\rInboundTunnel\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
+	"\vfingerprint\x18\x02 \x01(\tR\vfingerprint\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\"\xcb\x01\n" +
 	"\x11InstanceLocations\x12\x14\n" +
 	"\x05store\x18\x01 \x01(\tR\x05store\x12\x16\n" +
 	"\x06policy\x18\x02 \x01(\tR\x06policy\x12\x1b\n" +
@@ -10024,7 +10109,7 @@ func file_ladulas_v1_local_proto_rawDescGZIP() []byte {
 }
 
 var file_ladulas_v1_local_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_ladulas_v1_local_proto_msgTypes = make([]protoimpl.MessageInfo, 135)
+var file_ladulas_v1_local_proto_msgTypes = make([]protoimpl.MessageInfo, 136)
 var file_ladulas_v1_local_proto_goTypes = []any{
 	(LockState)(0),                       // 0: ladulas.v1.LockState
 	(ListenSource)(0),                    // 1: ladulas.v1.ListenSource
@@ -10041,398 +10126,400 @@ var file_ladulas_v1_local_proto_goTypes = []any{
 	(*StatusRequest)(nil),                // 12: ladulas.v1.StatusRequest
 	(*PeerStatus)(nil),                   // 13: ladulas.v1.PeerStatus
 	(*StatusResponse)(nil),               // 14: ladulas.v1.StatusResponse
-	(*InstanceLocations)(nil),            // 15: ladulas.v1.InstanceLocations
-	(*BorrowedKeyStatus)(nil),            // 16: ladulas.v1.BorrowedKeyStatus
-	(*InitializeRequest)(nil),            // 17: ladulas.v1.InitializeRequest
-	(*InitializeResponse)(nil),           // 18: ladulas.v1.InitializeResponse
-	(*UnlockRequest)(nil),                // 19: ladulas.v1.UnlockRequest
-	(*UnlockResponse)(nil),               // 20: ladulas.v1.UnlockResponse
-	(*LockRequest)(nil),                  // 21: ladulas.v1.LockRequest
-	(*LockResponse)(nil),                 // 22: ladulas.v1.LockResponse
-	(*AwaitStateRequest)(nil),            // 23: ladulas.v1.AwaitStateRequest
-	(*AwaitStateResponse)(nil),           // 24: ladulas.v1.AwaitStateResponse
-	(*KeyringStatusRequest)(nil),         // 25: ladulas.v1.KeyringStatusRequest
-	(*KeyringStatusResponse)(nil),        // 26: ladulas.v1.KeyringStatusResponse
-	(*SetUnlockAtLoginRequest)(nil),      // 27: ladulas.v1.SetUnlockAtLoginRequest
-	(*SetUnlockAtLoginResponse)(nil),     // 28: ladulas.v1.SetUnlockAtLoginResponse
-	(*SkippedListenAddress)(nil),         // 29: ladulas.v1.SkippedListenAddress
-	(*PeerListenState)(nil),              // 30: ladulas.v1.PeerListenState
-	(*TunnelRequest)(nil),                // 31: ladulas.v1.TunnelRequest
-	(*SetTunnelRequest)(nil),             // 32: ladulas.v1.SetTunnelRequest
-	(*TunnelState)(nil),                  // 33: ladulas.v1.TunnelState
-	(*TunnelResponse)(nil),               // 34: ladulas.v1.TunnelResponse
-	(*PeerListenRequest)(nil),            // 35: ladulas.v1.PeerListenRequest
-	(*PeerListenResponse)(nil),           // 36: ladulas.v1.PeerListenResponse
-	(*SetPeerListenRequest)(nil),         // 37: ladulas.v1.SetPeerListenRequest
-	(*SetPeerListenResponse)(nil),        // 38: ladulas.v1.SetPeerListenResponse
-	(*KeyTransferInfo)(nil),              // 39: ladulas.v1.KeyTransferInfo
-	(*KeyInfo)(nil),                      // 40: ladulas.v1.KeyInfo
-	(*ListStoredKeysRequest)(nil),        // 41: ladulas.v1.ListStoredKeysRequest
-	(*ListStoredKeysResponse)(nil),       // 42: ladulas.v1.ListStoredKeysResponse
-	(*GenerateKeyRequest)(nil),           // 43: ladulas.v1.GenerateKeyRequest
-	(*GenerateKeyResponse)(nil),          // 44: ladulas.v1.GenerateKeyResponse
-	(*ImportKeyRequest)(nil),             // 45: ladulas.v1.ImportKeyRequest
-	(*ImportKeyResponse)(nil),            // 46: ladulas.v1.ImportKeyResponse
-	(*RemoveKeyRequest)(nil),             // 47: ladulas.v1.RemoveKeyRequest
-	(*RemoveKeyResponse)(nil),            // 48: ladulas.v1.RemoveKeyResponse
-	(*SetKeyEnabledRequest)(nil),         // 49: ladulas.v1.SetKeyEnabledRequest
-	(*SetKeyEnabledResponse)(nil),        // 50: ladulas.v1.SetKeyEnabledResponse
-	(*SetKeyAgentUseRequest)(nil),        // 51: ladulas.v1.SetKeyAgentUseRequest
-	(*SetKeyAgentUseResponse)(nil),       // 52: ladulas.v1.SetKeyAgentUseResponse
-	(*SendKeyRequest)(nil),               // 53: ladulas.v1.SendKeyRequest
-	(*SendKeyResponse)(nil),              // 54: ladulas.v1.SendKeyResponse
-	(*KeyOfferInfo)(nil),                 // 55: ladulas.v1.KeyOfferInfo
-	(*LocalKeyInfo)(nil),                 // 56: ladulas.v1.LocalKeyInfo
-	(*ListLocalKeysRequest)(nil),         // 57: ladulas.v1.ListLocalKeysRequest
-	(*ListLocalKeysResponse)(nil),        // 58: ladulas.v1.ListLocalKeysResponse
-	(*ForgetLocalKeyRequest)(nil),        // 59: ladulas.v1.ForgetLocalKeyRequest
-	(*ForgetLocalKeyResponse)(nil),       // 60: ladulas.v1.ForgetLocalKeyResponse
-	(*PromoteLocalKeyRequest)(nil),       // 61: ladulas.v1.PromoteLocalKeyRequest
-	(*PromoteLocalKeyResponse)(nil),      // 62: ladulas.v1.PromoteLocalKeyResponse
-	(*ListKeyOffersRequest)(nil),         // 63: ladulas.v1.ListKeyOffersRequest
-	(*ListKeyOffersResponse)(nil),        // 64: ladulas.v1.ListKeyOffersResponse
-	(*AnswerKeyOfferRequest)(nil),        // 65: ladulas.v1.AnswerKeyOfferRequest
-	(*AnswerKeyOfferResponse)(nil),       // 66: ladulas.v1.AnswerKeyOfferResponse
-	(*ListGrantsRequest)(nil),            // 67: ladulas.v1.ListGrantsRequest
-	(*ListGrantsResponse)(nil),           // 68: ladulas.v1.ListGrantsResponse
-	(*ExtendGrantRequest)(nil),           // 69: ladulas.v1.ExtendGrantRequest
-	(*ExtendGrantResponse)(nil),          // 70: ladulas.v1.ExtendGrantResponse
-	(*RequestGrantRequest)(nil),          // 71: ladulas.v1.RequestGrantRequest
-	(*RequestGrantResponse)(nil),         // 72: ladulas.v1.RequestGrantResponse
-	(*ListDelegationsRequest)(nil),       // 73: ladulas.v1.ListDelegationsRequest
-	(*ListDelegationsResponse)(nil),      // 74: ladulas.v1.ListDelegationsResponse
-	(*HeldDelegationInfo)(nil),           // 75: ladulas.v1.HeldDelegationInfo
-	(*ListEndorsementsRequest)(nil),      // 76: ladulas.v1.ListEndorsementsRequest
-	(*ListEndorsementsResponse)(nil),     // 77: ladulas.v1.ListEndorsementsResponse
-	(*HeldEndorsementInfo)(nil),          // 78: ladulas.v1.HeldEndorsementInfo
-	(*RetractionInfo)(nil),               // 79: ladulas.v1.RetractionInfo
-	(*RetractEndorsementRequest)(nil),    // 80: ladulas.v1.RetractEndorsementRequest
-	(*RetractEndorsementResponse)(nil),   // 81: ladulas.v1.RetractEndorsementResponse
-	(*RevokeGrantRequest)(nil),           // 82: ladulas.v1.RevokeGrantRequest
-	(*RevokeGrantResponse)(nil),          // 83: ladulas.v1.RevokeGrantResponse
-	(*BeginPairingRequest)(nil),          // 84: ladulas.v1.BeginPairingRequest
-	(*PairWithPeerRequest)(nil),          // 85: ladulas.v1.PairWithPeerRequest
-	(*BrowsePairingsRequest)(nil),        // 86: ladulas.v1.BrowsePairingsRequest
-	(*NearbyPairing)(nil),                // 87: ladulas.v1.NearbyPairing
-	(*NearbyPairings)(nil),               // 88: ladulas.v1.NearbyPairings
-	(*PairingProgress)(nil),              // 89: ladulas.v1.PairingProgress
-	(*AnswerPairingRequest)(nil),         // 90: ladulas.v1.AnswerPairingRequest
-	(*AnswerPairingResponse)(nil),        // 91: ladulas.v1.AnswerPairingResponse
-	(*PendingPairingStatus)(nil),         // 92: ladulas.v1.PendingPairingStatus
-	(*ListPendingPairingsRequest)(nil),   // 93: ladulas.v1.ListPendingPairingsRequest
-	(*ListPendingPairingsResponse)(nil),  // 94: ladulas.v1.ListPendingPairingsResponse
-	(*AnswerPendingPairingRequest)(nil),  // 95: ladulas.v1.AnswerPendingPairingRequest
-	(*AnswerPendingPairingResponse)(nil), // 96: ladulas.v1.AnswerPendingPairingResponse
-	(*WithdrawPairingRequest)(nil),       // 97: ladulas.v1.WithdrawPairingRequest
-	(*WithdrawPairingResponse)(nil),      // 98: ladulas.v1.WithdrawPairingResponse
-	(*SetPeerDirectionsRequest)(nil),     // 99: ladulas.v1.SetPeerDirectionsRequest
-	(*SetPeerDirectionsResponse)(nil),    // 100: ladulas.v1.SetPeerDirectionsResponse
-	(*RenamePeerRequest)(nil),            // 101: ladulas.v1.RenamePeerRequest
-	(*RenamePeerResponse)(nil),           // 102: ladulas.v1.RenamePeerResponse
-	(*RevokePeerRequest)(nil),            // 103: ladulas.v1.RevokePeerRequest
-	(*RevokePeerResponse)(nil),           // 104: ladulas.v1.RevokePeerResponse
-	(*CachedProject)(nil),                // 105: ladulas.v1.CachedProject
-	(*CachedFile)(nil),                   // 106: ladulas.v1.CachedFile
-	(*TrackedProject)(nil),               // 107: ladulas.v1.TrackedProject
-	(*TrackedDocument)(nil),              // 108: ladulas.v1.TrackedDocument
-	(*DocumentSnapshot)(nil),             // 109: ladulas.v1.DocumentSnapshot
-	(*PublishProjectRequest)(nil),        // 110: ladulas.v1.PublishProjectRequest
-	(*PublishProjectResponse)(nil),       // 111: ladulas.v1.PublishProjectResponse
-	(*ListPublicationsRequest)(nil),      // 112: ladulas.v1.ListPublicationsRequest
-	(*ListPublicationsResponse)(nil),     // 113: ladulas.v1.ListPublicationsResponse
-	(*SetAutoPublishRequest)(nil),        // 114: ladulas.v1.SetAutoPublishRequest
-	(*SetAutoPublishResponse)(nil),       // 115: ladulas.v1.SetAutoPublishResponse
-	(*UnpublishProjectRequest)(nil),      // 116: ladulas.v1.UnpublishProjectRequest
-	(*UnpublishProjectResponse)(nil),     // 117: ladulas.v1.UnpublishProjectResponse
-	(*WatchApprovalsRequest)(nil),        // 118: ladulas.v1.WatchApprovalsRequest
-	(*ApprovalPrompt)(nil),               // 119: ladulas.v1.ApprovalPrompt
-	(*GrantOffer)(nil),                   // 120: ladulas.v1.GrantOffer
-	(*AnswerApprovalRequest)(nil),        // 121: ladulas.v1.AnswerApprovalRequest
-	(*AnswerApprovalResponse)(nil),       // 122: ladulas.v1.AnswerApprovalResponse
-	(*FetchRequestDiffRequest)(nil),      // 123: ladulas.v1.FetchRequestDiffRequest
-	(*FetchRequestDiffResponse)(nil),     // 124: ladulas.v1.FetchRequestDiffResponse
-	(*PeerProject)(nil),                  // 125: ladulas.v1.PeerProject
-	(*PeerListing)(nil),                  // 126: ladulas.v1.PeerListing
-	(*PeerPage)(nil),                     // 127: ladulas.v1.PeerPage
-	(*ListPeerProjectsRequest)(nil),      // 128: ladulas.v1.ListPeerProjectsRequest
-	(*ListPeerProjectsResponse)(nil),     // 129: ladulas.v1.ListPeerProjectsResponse
-	(*OpenPeerProjectRequest)(nil),       // 130: ladulas.v1.OpenPeerProjectRequest
-	(*OpenPeerProjectResponse)(nil),      // 131: ladulas.v1.OpenPeerProjectResponse
-	(*ListPeerDirectoryRequest)(nil),     // 132: ladulas.v1.ListPeerDirectoryRequest
-	(*ListPeerDirectoryResponse)(nil),    // 133: ladulas.v1.ListPeerDirectoryResponse
-	(*SearchPeerProjectRequest)(nil),     // 134: ladulas.v1.SearchPeerProjectRequest
-	(*SearchPeerProjectResponse)(nil),    // 135: ladulas.v1.SearchPeerProjectResponse
-	(*ReadPeerPageRequest)(nil),          // 136: ladulas.v1.ReadPeerPageRequest
-	(*ReadPeerPageResponse)(nil),         // 137: ladulas.v1.ReadPeerPageResponse
-	(*PeerDocumentVersionsRequest)(nil),  // 138: ladulas.v1.PeerDocumentVersionsRequest
-	(*PeerDocumentVersionsResponse)(nil), // 139: ladulas.v1.PeerDocumentVersionsResponse
-	(*ReloadRequest)(nil),                // 140: ladulas.v1.ReloadRequest
-	(*ReloadResponse)(nil),               // 141: ladulas.v1.ReloadResponse
-	(*GitContext)(nil),                   // 142: ladulas.v1.GitContext
-	(*durationpb.Duration)(nil),          // 143: google.protobuf.Duration
-	(DecisionSource)(0),                  // 144: ladulas.v1.DecisionSource
-	(*SignedApproval)(nil),               // 145: ladulas.v1.SignedApproval
-	(*KeyRef)(nil),                       // 146: ladulas.v1.KeyRef
-	(*timestamppb.Timestamp)(nil),        // 147: google.protobuf.Timestamp
-	(*ClientProcess)(nil),                // 148: ladulas.v1.ClientProcess
-	(*Grant)(nil),                        // 149: ladulas.v1.Grant
-	(Decision)(0),                        // 150: ladulas.v1.Decision
-	(*Delegation)(nil),                   // 151: ladulas.v1.Delegation
-	(*Endorsement)(nil),                  // 152: ladulas.v1.Endorsement
-	(*Retraction)(nil),                   // 153: ladulas.v1.Retraction
-	(*ApprovalRequest)(nil),              // 154: ladulas.v1.ApprovalRequest
-	(*PairingAttempt)(nil),               // 155: ladulas.v1.PairingAttempt
-	(PairingAnswer)(0),                   // 156: ladulas.v1.PairingAnswer
-	(PairingRecordState)(0),              // 157: ladulas.v1.PairingRecordState
-	(*Publication)(nil),                  // 158: ladulas.v1.Publication
-	(*ApprovalResponse)(nil),             // 159: ladulas.v1.ApprovalResponse
-	(*PresentedProject)(nil),             // 160: ladulas.v1.PresentedProject
-	(*GitDiff)(nil),                      // 161: ladulas.v1.GitDiff
-	(*ProjectEntry)(nil),                 // 162: ladulas.v1.ProjectEntry
-	(*DocumentVersion)(nil),              // 163: ladulas.v1.DocumentVersion
+	(*InboundTunnel)(nil),                // 15: ladulas.v1.InboundTunnel
+	(*InstanceLocations)(nil),            // 16: ladulas.v1.InstanceLocations
+	(*BorrowedKeyStatus)(nil),            // 17: ladulas.v1.BorrowedKeyStatus
+	(*InitializeRequest)(nil),            // 18: ladulas.v1.InitializeRequest
+	(*InitializeResponse)(nil),           // 19: ladulas.v1.InitializeResponse
+	(*UnlockRequest)(nil),                // 20: ladulas.v1.UnlockRequest
+	(*UnlockResponse)(nil),               // 21: ladulas.v1.UnlockResponse
+	(*LockRequest)(nil),                  // 22: ladulas.v1.LockRequest
+	(*LockResponse)(nil),                 // 23: ladulas.v1.LockResponse
+	(*AwaitStateRequest)(nil),            // 24: ladulas.v1.AwaitStateRequest
+	(*AwaitStateResponse)(nil),           // 25: ladulas.v1.AwaitStateResponse
+	(*KeyringStatusRequest)(nil),         // 26: ladulas.v1.KeyringStatusRequest
+	(*KeyringStatusResponse)(nil),        // 27: ladulas.v1.KeyringStatusResponse
+	(*SetUnlockAtLoginRequest)(nil),      // 28: ladulas.v1.SetUnlockAtLoginRequest
+	(*SetUnlockAtLoginResponse)(nil),     // 29: ladulas.v1.SetUnlockAtLoginResponse
+	(*SkippedListenAddress)(nil),         // 30: ladulas.v1.SkippedListenAddress
+	(*PeerListenState)(nil),              // 31: ladulas.v1.PeerListenState
+	(*TunnelRequest)(nil),                // 32: ladulas.v1.TunnelRequest
+	(*SetTunnelRequest)(nil),             // 33: ladulas.v1.SetTunnelRequest
+	(*TunnelState)(nil),                  // 34: ladulas.v1.TunnelState
+	(*TunnelResponse)(nil),               // 35: ladulas.v1.TunnelResponse
+	(*PeerListenRequest)(nil),            // 36: ladulas.v1.PeerListenRequest
+	(*PeerListenResponse)(nil),           // 37: ladulas.v1.PeerListenResponse
+	(*SetPeerListenRequest)(nil),         // 38: ladulas.v1.SetPeerListenRequest
+	(*SetPeerListenResponse)(nil),        // 39: ladulas.v1.SetPeerListenResponse
+	(*KeyTransferInfo)(nil),              // 40: ladulas.v1.KeyTransferInfo
+	(*KeyInfo)(nil),                      // 41: ladulas.v1.KeyInfo
+	(*ListStoredKeysRequest)(nil),        // 42: ladulas.v1.ListStoredKeysRequest
+	(*ListStoredKeysResponse)(nil),       // 43: ladulas.v1.ListStoredKeysResponse
+	(*GenerateKeyRequest)(nil),           // 44: ladulas.v1.GenerateKeyRequest
+	(*GenerateKeyResponse)(nil),          // 45: ladulas.v1.GenerateKeyResponse
+	(*ImportKeyRequest)(nil),             // 46: ladulas.v1.ImportKeyRequest
+	(*ImportKeyResponse)(nil),            // 47: ladulas.v1.ImportKeyResponse
+	(*RemoveKeyRequest)(nil),             // 48: ladulas.v1.RemoveKeyRequest
+	(*RemoveKeyResponse)(nil),            // 49: ladulas.v1.RemoveKeyResponse
+	(*SetKeyEnabledRequest)(nil),         // 50: ladulas.v1.SetKeyEnabledRequest
+	(*SetKeyEnabledResponse)(nil),        // 51: ladulas.v1.SetKeyEnabledResponse
+	(*SetKeyAgentUseRequest)(nil),        // 52: ladulas.v1.SetKeyAgentUseRequest
+	(*SetKeyAgentUseResponse)(nil),       // 53: ladulas.v1.SetKeyAgentUseResponse
+	(*SendKeyRequest)(nil),               // 54: ladulas.v1.SendKeyRequest
+	(*SendKeyResponse)(nil),              // 55: ladulas.v1.SendKeyResponse
+	(*KeyOfferInfo)(nil),                 // 56: ladulas.v1.KeyOfferInfo
+	(*LocalKeyInfo)(nil),                 // 57: ladulas.v1.LocalKeyInfo
+	(*ListLocalKeysRequest)(nil),         // 58: ladulas.v1.ListLocalKeysRequest
+	(*ListLocalKeysResponse)(nil),        // 59: ladulas.v1.ListLocalKeysResponse
+	(*ForgetLocalKeyRequest)(nil),        // 60: ladulas.v1.ForgetLocalKeyRequest
+	(*ForgetLocalKeyResponse)(nil),       // 61: ladulas.v1.ForgetLocalKeyResponse
+	(*PromoteLocalKeyRequest)(nil),       // 62: ladulas.v1.PromoteLocalKeyRequest
+	(*PromoteLocalKeyResponse)(nil),      // 63: ladulas.v1.PromoteLocalKeyResponse
+	(*ListKeyOffersRequest)(nil),         // 64: ladulas.v1.ListKeyOffersRequest
+	(*ListKeyOffersResponse)(nil),        // 65: ladulas.v1.ListKeyOffersResponse
+	(*AnswerKeyOfferRequest)(nil),        // 66: ladulas.v1.AnswerKeyOfferRequest
+	(*AnswerKeyOfferResponse)(nil),       // 67: ladulas.v1.AnswerKeyOfferResponse
+	(*ListGrantsRequest)(nil),            // 68: ladulas.v1.ListGrantsRequest
+	(*ListGrantsResponse)(nil),           // 69: ladulas.v1.ListGrantsResponse
+	(*ExtendGrantRequest)(nil),           // 70: ladulas.v1.ExtendGrantRequest
+	(*ExtendGrantResponse)(nil),          // 71: ladulas.v1.ExtendGrantResponse
+	(*RequestGrantRequest)(nil),          // 72: ladulas.v1.RequestGrantRequest
+	(*RequestGrantResponse)(nil),         // 73: ladulas.v1.RequestGrantResponse
+	(*ListDelegationsRequest)(nil),       // 74: ladulas.v1.ListDelegationsRequest
+	(*ListDelegationsResponse)(nil),      // 75: ladulas.v1.ListDelegationsResponse
+	(*HeldDelegationInfo)(nil),           // 76: ladulas.v1.HeldDelegationInfo
+	(*ListEndorsementsRequest)(nil),      // 77: ladulas.v1.ListEndorsementsRequest
+	(*ListEndorsementsResponse)(nil),     // 78: ladulas.v1.ListEndorsementsResponse
+	(*HeldEndorsementInfo)(nil),          // 79: ladulas.v1.HeldEndorsementInfo
+	(*RetractionInfo)(nil),               // 80: ladulas.v1.RetractionInfo
+	(*RetractEndorsementRequest)(nil),    // 81: ladulas.v1.RetractEndorsementRequest
+	(*RetractEndorsementResponse)(nil),   // 82: ladulas.v1.RetractEndorsementResponse
+	(*RevokeGrantRequest)(nil),           // 83: ladulas.v1.RevokeGrantRequest
+	(*RevokeGrantResponse)(nil),          // 84: ladulas.v1.RevokeGrantResponse
+	(*BeginPairingRequest)(nil),          // 85: ladulas.v1.BeginPairingRequest
+	(*PairWithPeerRequest)(nil),          // 86: ladulas.v1.PairWithPeerRequest
+	(*BrowsePairingsRequest)(nil),        // 87: ladulas.v1.BrowsePairingsRequest
+	(*NearbyPairing)(nil),                // 88: ladulas.v1.NearbyPairing
+	(*NearbyPairings)(nil),               // 89: ladulas.v1.NearbyPairings
+	(*PairingProgress)(nil),              // 90: ladulas.v1.PairingProgress
+	(*AnswerPairingRequest)(nil),         // 91: ladulas.v1.AnswerPairingRequest
+	(*AnswerPairingResponse)(nil),        // 92: ladulas.v1.AnswerPairingResponse
+	(*PendingPairingStatus)(nil),         // 93: ladulas.v1.PendingPairingStatus
+	(*ListPendingPairingsRequest)(nil),   // 94: ladulas.v1.ListPendingPairingsRequest
+	(*ListPendingPairingsResponse)(nil),  // 95: ladulas.v1.ListPendingPairingsResponse
+	(*AnswerPendingPairingRequest)(nil),  // 96: ladulas.v1.AnswerPendingPairingRequest
+	(*AnswerPendingPairingResponse)(nil), // 97: ladulas.v1.AnswerPendingPairingResponse
+	(*WithdrawPairingRequest)(nil),       // 98: ladulas.v1.WithdrawPairingRequest
+	(*WithdrawPairingResponse)(nil),      // 99: ladulas.v1.WithdrawPairingResponse
+	(*SetPeerDirectionsRequest)(nil),     // 100: ladulas.v1.SetPeerDirectionsRequest
+	(*SetPeerDirectionsResponse)(nil),    // 101: ladulas.v1.SetPeerDirectionsResponse
+	(*RenamePeerRequest)(nil),            // 102: ladulas.v1.RenamePeerRequest
+	(*RenamePeerResponse)(nil),           // 103: ladulas.v1.RenamePeerResponse
+	(*RevokePeerRequest)(nil),            // 104: ladulas.v1.RevokePeerRequest
+	(*RevokePeerResponse)(nil),           // 105: ladulas.v1.RevokePeerResponse
+	(*CachedProject)(nil),                // 106: ladulas.v1.CachedProject
+	(*CachedFile)(nil),                   // 107: ladulas.v1.CachedFile
+	(*TrackedProject)(nil),               // 108: ladulas.v1.TrackedProject
+	(*TrackedDocument)(nil),              // 109: ladulas.v1.TrackedDocument
+	(*DocumentSnapshot)(nil),             // 110: ladulas.v1.DocumentSnapshot
+	(*PublishProjectRequest)(nil),        // 111: ladulas.v1.PublishProjectRequest
+	(*PublishProjectResponse)(nil),       // 112: ladulas.v1.PublishProjectResponse
+	(*ListPublicationsRequest)(nil),      // 113: ladulas.v1.ListPublicationsRequest
+	(*ListPublicationsResponse)(nil),     // 114: ladulas.v1.ListPublicationsResponse
+	(*SetAutoPublishRequest)(nil),        // 115: ladulas.v1.SetAutoPublishRequest
+	(*SetAutoPublishResponse)(nil),       // 116: ladulas.v1.SetAutoPublishResponse
+	(*UnpublishProjectRequest)(nil),      // 117: ladulas.v1.UnpublishProjectRequest
+	(*UnpublishProjectResponse)(nil),     // 118: ladulas.v1.UnpublishProjectResponse
+	(*WatchApprovalsRequest)(nil),        // 119: ladulas.v1.WatchApprovalsRequest
+	(*ApprovalPrompt)(nil),               // 120: ladulas.v1.ApprovalPrompt
+	(*GrantOffer)(nil),                   // 121: ladulas.v1.GrantOffer
+	(*AnswerApprovalRequest)(nil),        // 122: ladulas.v1.AnswerApprovalRequest
+	(*AnswerApprovalResponse)(nil),       // 123: ladulas.v1.AnswerApprovalResponse
+	(*FetchRequestDiffRequest)(nil),      // 124: ladulas.v1.FetchRequestDiffRequest
+	(*FetchRequestDiffResponse)(nil),     // 125: ladulas.v1.FetchRequestDiffResponse
+	(*PeerProject)(nil),                  // 126: ladulas.v1.PeerProject
+	(*PeerListing)(nil),                  // 127: ladulas.v1.PeerListing
+	(*PeerPage)(nil),                     // 128: ladulas.v1.PeerPage
+	(*ListPeerProjectsRequest)(nil),      // 129: ladulas.v1.ListPeerProjectsRequest
+	(*ListPeerProjectsResponse)(nil),     // 130: ladulas.v1.ListPeerProjectsResponse
+	(*OpenPeerProjectRequest)(nil),       // 131: ladulas.v1.OpenPeerProjectRequest
+	(*OpenPeerProjectResponse)(nil),      // 132: ladulas.v1.OpenPeerProjectResponse
+	(*ListPeerDirectoryRequest)(nil),     // 133: ladulas.v1.ListPeerDirectoryRequest
+	(*ListPeerDirectoryResponse)(nil),    // 134: ladulas.v1.ListPeerDirectoryResponse
+	(*SearchPeerProjectRequest)(nil),     // 135: ladulas.v1.SearchPeerProjectRequest
+	(*SearchPeerProjectResponse)(nil),    // 136: ladulas.v1.SearchPeerProjectResponse
+	(*ReadPeerPageRequest)(nil),          // 137: ladulas.v1.ReadPeerPageRequest
+	(*ReadPeerPageResponse)(nil),         // 138: ladulas.v1.ReadPeerPageResponse
+	(*PeerDocumentVersionsRequest)(nil),  // 139: ladulas.v1.PeerDocumentVersionsRequest
+	(*PeerDocumentVersionsResponse)(nil), // 140: ladulas.v1.PeerDocumentVersionsResponse
+	(*ReloadRequest)(nil),                // 141: ladulas.v1.ReloadRequest
+	(*ReloadResponse)(nil),               // 142: ladulas.v1.ReloadResponse
+	(*GitContext)(nil),                   // 143: ladulas.v1.GitContext
+	(*durationpb.Duration)(nil),          // 144: google.protobuf.Duration
+	(DecisionSource)(0),                  // 145: ladulas.v1.DecisionSource
+	(*SignedApproval)(nil),               // 146: ladulas.v1.SignedApproval
+	(*KeyRef)(nil),                       // 147: ladulas.v1.KeyRef
+	(*timestamppb.Timestamp)(nil),        // 148: google.protobuf.Timestamp
+	(*ClientProcess)(nil),                // 149: ladulas.v1.ClientProcess
+	(*Grant)(nil),                        // 150: ladulas.v1.Grant
+	(Decision)(0),                        // 151: ladulas.v1.Decision
+	(*Delegation)(nil),                   // 152: ladulas.v1.Delegation
+	(*Endorsement)(nil),                  // 153: ladulas.v1.Endorsement
+	(*Retraction)(nil),                   // 154: ladulas.v1.Retraction
+	(*ApprovalRequest)(nil),              // 155: ladulas.v1.ApprovalRequest
+	(*PairingAttempt)(nil),               // 156: ladulas.v1.PairingAttempt
+	(PairingAnswer)(0),                   // 157: ladulas.v1.PairingAnswer
+	(PairingRecordState)(0),              // 158: ladulas.v1.PairingRecordState
+	(*Publication)(nil),                  // 159: ladulas.v1.Publication
+	(*ApprovalResponse)(nil),             // 160: ladulas.v1.ApprovalResponse
+	(*PresentedProject)(nil),             // 161: ladulas.v1.PresentedProject
+	(*GitDiff)(nil),                      // 162: ladulas.v1.GitDiff
+	(*ProjectEntry)(nil),                 // 163: ladulas.v1.ProjectEntry
+	(*DocumentVersion)(nil),              // 164: ladulas.v1.DocumentVersion
 }
 var file_ladulas_v1_local_proto_depIdxs = []int32{
-	142, // 0: ladulas.v1.SignPayloadRequest.git_context:type_name -> ladulas.v1.GitContext
-	143, // 1: ladulas.v1.SignPayloadRequest.timeout:type_name -> google.protobuf.Duration
-	144, // 2: ladulas.v1.SignPayloadResponse.source:type_name -> ladulas.v1.DecisionSource
-	145, // 3: ladulas.v1.SignPayloadResponse.approval:type_name -> ladulas.v1.SignedApproval
-	143, // 4: ladulas.v1.SettingsResponse.sign_timeout:type_name -> google.protobuf.Duration
-	143, // 5: ladulas.v1.SettingsResponse.default_sign_timeout:type_name -> google.protobuf.Duration
-	143, // 6: ladulas.v1.SettingsResponse.min_sign_timeout:type_name -> google.protobuf.Duration
-	143, // 7: ladulas.v1.SettingsResponse.max_sign_timeout:type_name -> google.protobuf.Duration
-	143, // 8: ladulas.v1.SettingsResponse.max_grant_ttl:type_name -> google.protobuf.Duration
-	143, // 9: ladulas.v1.SetSignTimeoutRequest.sign_timeout:type_name -> google.protobuf.Duration
-	146, // 10: ladulas.v1.PeerStatus.offered_keys:type_name -> ladulas.v1.KeyRef
-	147, // 11: ladulas.v1.PeerStatus.paired_at:type_name -> google.protobuf.Timestamp
-	147, // 12: ladulas.v1.PeerStatus.last_seen_at:type_name -> google.protobuf.Timestamp
+	143, // 0: ladulas.v1.SignPayloadRequest.git_context:type_name -> ladulas.v1.GitContext
+	144, // 1: ladulas.v1.SignPayloadRequest.timeout:type_name -> google.protobuf.Duration
+	145, // 2: ladulas.v1.SignPayloadResponse.source:type_name -> ladulas.v1.DecisionSource
+	146, // 3: ladulas.v1.SignPayloadResponse.approval:type_name -> ladulas.v1.SignedApproval
+	144, // 4: ladulas.v1.SettingsResponse.sign_timeout:type_name -> google.protobuf.Duration
+	144, // 5: ladulas.v1.SettingsResponse.default_sign_timeout:type_name -> google.protobuf.Duration
+	144, // 6: ladulas.v1.SettingsResponse.min_sign_timeout:type_name -> google.protobuf.Duration
+	144, // 7: ladulas.v1.SettingsResponse.max_sign_timeout:type_name -> google.protobuf.Duration
+	144, // 8: ladulas.v1.SettingsResponse.max_grant_ttl:type_name -> google.protobuf.Duration
+	144, // 9: ladulas.v1.SetSignTimeoutRequest.sign_timeout:type_name -> google.protobuf.Duration
+	147, // 10: ladulas.v1.PeerStatus.offered_keys:type_name -> ladulas.v1.KeyRef
+	148, // 11: ladulas.v1.PeerStatus.paired_at:type_name -> google.protobuf.Timestamp
+	148, // 12: ladulas.v1.PeerStatus.last_seen_at:type_name -> google.protobuf.Timestamp
 	13,  // 13: ladulas.v1.StatusResponse.peers:type_name -> ladulas.v1.PeerStatus
 	0,   // 14: ladulas.v1.StatusResponse.lock_state:type_name -> ladulas.v1.LockState
-	147, // 15: ladulas.v1.StatusResponse.state_since:type_name -> google.protobuf.Timestamp
-	16,  // 16: ladulas.v1.StatusResponse.borrowed_keys:type_name -> ladulas.v1.BorrowedKeyStatus
-	15,  // 17: ladulas.v1.StatusResponse.locations:type_name -> ladulas.v1.InstanceLocations
-	146, // 18: ladulas.v1.BorrowedKeyStatus.key:type_name -> ladulas.v1.KeyRef
-	147, // 19: ladulas.v1.BorrowedKeyStatus.last_seen_at:type_name -> google.protobuf.Timestamp
-	0,   // 20: ladulas.v1.InitializeResponse.state:type_name -> ladulas.v1.LockState
-	0,   // 21: ladulas.v1.UnlockResponse.state:type_name -> ladulas.v1.LockState
-	0,   // 22: ladulas.v1.LockResponse.state:type_name -> ladulas.v1.LockState
-	0,   // 23: ladulas.v1.AwaitStateRequest.states:type_name -> ladulas.v1.LockState
-	143, // 24: ladulas.v1.AwaitStateRequest.timeout:type_name -> google.protobuf.Duration
-	0,   // 25: ladulas.v1.AwaitStateResponse.state:type_name -> ladulas.v1.LockState
-	147, // 26: ladulas.v1.AwaitStateResponse.state_since:type_name -> google.protobuf.Timestamp
-	1,   // 27: ladulas.v1.PeerListenState.source:type_name -> ladulas.v1.ListenSource
-	29,  // 28: ladulas.v1.PeerListenState.skipped:type_name -> ladulas.v1.SkippedListenAddress
-	33,  // 29: ladulas.v1.TunnelResponse.state:type_name -> ladulas.v1.TunnelState
-	30,  // 30: ladulas.v1.PeerListenResponse.state:type_name -> ladulas.v1.PeerListenState
-	30,  // 31: ladulas.v1.SetPeerListenResponse.state:type_name -> ladulas.v1.PeerListenState
-	147, // 32: ladulas.v1.KeyTransferInfo.at:type_name -> google.protobuf.Timestamp
-	2,   // 33: ladulas.v1.KeyInfo.origin:type_name -> ladulas.v1.KeyOrigin
-	147, // 34: ladulas.v1.KeyInfo.added_at:type_name -> google.protobuf.Timestamp
-	39,  // 35: ladulas.v1.KeyInfo.handed_to:type_name -> ladulas.v1.KeyTransferInfo
-	39,  // 36: ladulas.v1.KeyInfo.received_from:type_name -> ladulas.v1.KeyTransferInfo
-	40,  // 37: ladulas.v1.ListStoredKeysResponse.keys:type_name -> ladulas.v1.KeyInfo
-	40,  // 38: ladulas.v1.GenerateKeyResponse.key:type_name -> ladulas.v1.KeyInfo
-	40,  // 39: ladulas.v1.ImportKeyResponse.key:type_name -> ladulas.v1.KeyInfo
-	40,  // 40: ladulas.v1.SetKeyEnabledResponse.key:type_name -> ladulas.v1.KeyInfo
-	40,  // 41: ladulas.v1.SetKeyAgentUseResponse.key:type_name -> ladulas.v1.KeyInfo
-	147, // 42: ladulas.v1.KeyOfferInfo.received_at:type_name -> google.protobuf.Timestamp
-	148, // 43: ladulas.v1.LocalKeyInfo.added_by:type_name -> ladulas.v1.ClientProcess
-	147, // 44: ladulas.v1.LocalKeyInfo.added_at:type_name -> google.protobuf.Timestamp
-	147, // 45: ladulas.v1.LocalKeyInfo.expires_at:type_name -> google.protobuf.Timestamp
-	56,  // 46: ladulas.v1.ListLocalKeysResponse.keys:type_name -> ladulas.v1.LocalKeyInfo
-	56,  // 47: ladulas.v1.ForgetLocalKeyResponse.key:type_name -> ladulas.v1.LocalKeyInfo
-	40,  // 48: ladulas.v1.PromoteLocalKeyResponse.key:type_name -> ladulas.v1.KeyInfo
-	55,  // 49: ladulas.v1.ListKeyOffersResponse.offers:type_name -> ladulas.v1.KeyOfferInfo
-	40,  // 50: ladulas.v1.AnswerKeyOfferResponse.key:type_name -> ladulas.v1.KeyInfo
-	149, // 51: ladulas.v1.ListGrantsResponse.grants:type_name -> ladulas.v1.Grant
-	143, // 52: ladulas.v1.ExtendGrantRequest.extend_by:type_name -> google.protobuf.Duration
-	149, // 53: ladulas.v1.ExtendGrantResponse.grant:type_name -> ladulas.v1.Grant
-	143, // 54: ladulas.v1.RequestGrantRequest.ttl:type_name -> google.protobuf.Duration
-	149, // 55: ladulas.v1.RequestGrantResponse.grant:type_name -> ladulas.v1.Grant
-	150, // 56: ladulas.v1.RequestGrantResponse.decision:type_name -> ladulas.v1.Decision
-	75,  // 57: ladulas.v1.ListDelegationsResponse.delegations:type_name -> ladulas.v1.HeldDelegationInfo
-	151, // 58: ladulas.v1.HeldDelegationInfo.delegation:type_name -> ladulas.v1.Delegation
-	147, // 59: ladulas.v1.HeldDelegationInfo.received_at:type_name -> google.protobuf.Timestamp
-	78,  // 60: ladulas.v1.ListEndorsementsResponse.endorsements:type_name -> ladulas.v1.HeldEndorsementInfo
-	79,  // 61: ladulas.v1.ListEndorsementsResponse.retractions:type_name -> ladulas.v1.RetractionInfo
-	152, // 62: ladulas.v1.HeldEndorsementInfo.endorsement:type_name -> ladulas.v1.Endorsement
-	147, // 63: ladulas.v1.HeldEndorsementInfo.received_at:type_name -> google.protobuf.Timestamp
-	153, // 64: ladulas.v1.RetractionInfo.retraction:type_name -> ladulas.v1.Retraction
-	147, // 65: ladulas.v1.RetractionInfo.received_at:type_name -> google.protobuf.Timestamp
-	3,   // 66: ladulas.v1.BeginPairingRequest.intent:type_name -> ladulas.v1.PairingIntent
-	147, // 67: ladulas.v1.NearbyPairing.seen_at:type_name -> google.protobuf.Timestamp
-	87,  // 68: ladulas.v1.NearbyPairings.pairings:type_name -> ladulas.v1.NearbyPairing
-	4,   // 69: ladulas.v1.PairingProgress.kind:type_name -> ladulas.v1.PairingProgressKind
-	147, // 70: ladulas.v1.PairingProgress.expires_at:type_name -> google.protobuf.Timestamp
-	154, // 71: ladulas.v1.PairingProgress.confirmation:type_name -> ladulas.v1.ApprovalRequest
-	13,  // 72: ladulas.v1.PairingProgress.peer:type_name -> ladulas.v1.PeerStatus
-	3,   // 73: ladulas.v1.PairingProgress.intent:type_name -> ladulas.v1.PairingIntent
-	155, // 74: ladulas.v1.PairingProgress.attempt:type_name -> ladulas.v1.PairingAttempt
-	156, // 75: ladulas.v1.PendingPairingStatus.our_answer:type_name -> ladulas.v1.PairingAnswer
-	156, // 76: ladulas.v1.PendingPairingStatus.their_answer:type_name -> ladulas.v1.PairingAnswer
-	147, // 77: ladulas.v1.PendingPairingStatus.started_at:type_name -> google.protobuf.Timestamp
-	147, // 78: ladulas.v1.PendingPairingStatus.answered_at:type_name -> google.protobuf.Timestamp
-	92,  // 79: ladulas.v1.ListPendingPairingsResponse.pairings:type_name -> ladulas.v1.PendingPairingStatus
-	157, // 80: ladulas.v1.AnswerPendingPairingResponse.state:type_name -> ladulas.v1.PairingRecordState
-	92,  // 81: ladulas.v1.AnswerPendingPairingResponse.pairing:type_name -> ladulas.v1.PendingPairingStatus
-	13,  // 82: ladulas.v1.AnswerPendingPairingResponse.peer:type_name -> ladulas.v1.PeerStatus
-	13,  // 83: ladulas.v1.SetPeerDirectionsResponse.peer:type_name -> ladulas.v1.PeerStatus
-	13,  // 84: ladulas.v1.RenamePeerResponse.peer:type_name -> ladulas.v1.PeerStatus
-	158, // 85: ladulas.v1.CachedProject.project:type_name -> ladulas.v1.Publication
-	147, // 86: ladulas.v1.CachedProject.first_read_at:type_name -> google.protobuf.Timestamp
-	147, // 87: ladulas.v1.CachedProject.last_read_at:type_name -> google.protobuf.Timestamp
-	106, // 88: ladulas.v1.CachedProject.files:type_name -> ladulas.v1.CachedFile
-	147, // 89: ladulas.v1.CachedFile.modified_at:type_name -> google.protobuf.Timestamp
-	147, // 90: ladulas.v1.CachedFile.read_at:type_name -> google.protobuf.Timestamp
-	108, // 91: ladulas.v1.TrackedProject.documents:type_name -> ladulas.v1.TrackedDocument
-	147, // 92: ladulas.v1.TrackedProject.updated_at:type_name -> google.protobuf.Timestamp
-	109, // 93: ladulas.v1.TrackedDocument.snapshots:type_name -> ladulas.v1.DocumentSnapshot
-	147, // 94: ladulas.v1.DocumentSnapshot.taken_at:type_name -> google.protobuf.Timestamp
-	158, // 95: ladulas.v1.PublishProjectResponse.publication:type_name -> ladulas.v1.Publication
-	158, // 96: ladulas.v1.ListPublicationsResponse.published:type_name -> ladulas.v1.Publication
-	105, // 97: ladulas.v1.ListPublicationsResponse.cached:type_name -> ladulas.v1.CachedProject
-	5,   // 98: ladulas.v1.ApprovalPrompt.kind:type_name -> ladulas.v1.ApprovalPromptKind
-	120, // 99: ladulas.v1.ApprovalPrompt.grant:type_name -> ladulas.v1.GrantOffer
-	159, // 100: ladulas.v1.ApprovalPrompt.response:type_name -> ladulas.v1.ApprovalResponse
-	143, // 101: ladulas.v1.GrantOffer.ttls:type_name -> google.protobuf.Duration
-	143, // 102: ladulas.v1.GrantOffer.max_ttl:type_name -> google.protobuf.Duration
-	150, // 103: ladulas.v1.AnswerApprovalRequest.decision:type_name -> ladulas.v1.Decision
-	143, // 104: ladulas.v1.AnswerApprovalRequest.grant_ttl:type_name -> google.protobuf.Duration
-	6,   // 105: ladulas.v1.AnswerApprovalRequest.grant_reach:type_name -> ladulas.v1.GrantReach
-	160, // 106: ladulas.v1.AnswerApprovalRequest.presented:type_name -> ladulas.v1.PresentedProject
-	161, // 107: ladulas.v1.FetchRequestDiffResponse.diff:type_name -> ladulas.v1.GitDiff
-	158, // 108: ladulas.v1.PeerProject.project:type_name -> ladulas.v1.Publication
-	147, // 109: ladulas.v1.PeerProject.read:type_name -> google.protobuf.Timestamp
-	162, // 110: ladulas.v1.PeerListing.entries:type_name -> ladulas.v1.ProjectEntry
-	125, // 111: ladulas.v1.PeerListing.publisher:type_name -> ladulas.v1.PeerProject
-	147, // 112: ladulas.v1.PeerPage.modified:type_name -> google.protobuf.Timestamp
-	147, // 113: ladulas.v1.PeerPage.read_at:type_name -> google.protobuf.Timestamp
-	125, // 114: ladulas.v1.ListPeerProjectsResponse.projects:type_name -> ladulas.v1.PeerProject
-	125, // 115: ladulas.v1.OpenPeerProjectResponse.project:type_name -> ladulas.v1.PeerProject
-	126, // 116: ladulas.v1.ListPeerDirectoryResponse.listing:type_name -> ladulas.v1.PeerListing
-	126, // 117: ladulas.v1.SearchPeerProjectResponse.listing:type_name -> ladulas.v1.PeerListing
-	127, // 118: ladulas.v1.ReadPeerPageResponse.page:type_name -> ladulas.v1.PeerPage
-	127, // 119: ladulas.v1.ReadPeerPageResponse.compared_to:type_name -> ladulas.v1.PeerPage
-	163, // 120: ladulas.v1.ReadPeerPageResponse.version:type_name -> ladulas.v1.DocumentVersion
-	163, // 121: ladulas.v1.PeerDocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
-	7,   // 122: ladulas.v1.SigningService.SignPayload:input_type -> ladulas.v1.SignPayloadRequest
-	12,  // 123: ladulas.v1.ControlService.Status:input_type -> ladulas.v1.StatusRequest
-	17,  // 124: ladulas.v1.ControlService.Initialize:input_type -> ladulas.v1.InitializeRequest
-	19,  // 125: ladulas.v1.ControlService.Unlock:input_type -> ladulas.v1.UnlockRequest
-	21,  // 126: ladulas.v1.ControlService.Lock:input_type -> ladulas.v1.LockRequest
-	23,  // 127: ladulas.v1.ControlService.AwaitState:input_type -> ladulas.v1.AwaitStateRequest
-	25,  // 128: ladulas.v1.ControlService.KeyringStatus:input_type -> ladulas.v1.KeyringStatusRequest
-	27,  // 129: ladulas.v1.ControlService.SetUnlockAtLogin:input_type -> ladulas.v1.SetUnlockAtLoginRequest
-	35,  // 130: ladulas.v1.ControlService.PeerListen:input_type -> ladulas.v1.PeerListenRequest
-	37,  // 131: ladulas.v1.ControlService.SetPeerListen:input_type -> ladulas.v1.SetPeerListenRequest
-	31,  // 132: ladulas.v1.ControlService.Tunnel:input_type -> ladulas.v1.TunnelRequest
-	32,  // 133: ladulas.v1.ControlService.SetTunnel:input_type -> ladulas.v1.SetTunnelRequest
-	41,  // 134: ladulas.v1.ControlService.ListStoredKeys:input_type -> ladulas.v1.ListStoredKeysRequest
-	43,  // 135: ladulas.v1.ControlService.GenerateKey:input_type -> ladulas.v1.GenerateKeyRequest
-	45,  // 136: ladulas.v1.ControlService.ImportKey:input_type -> ladulas.v1.ImportKeyRequest
-	47,  // 137: ladulas.v1.ControlService.RemoveKey:input_type -> ladulas.v1.RemoveKeyRequest
-	49,  // 138: ladulas.v1.ControlService.SetKeyEnabled:input_type -> ladulas.v1.SetKeyEnabledRequest
-	51,  // 139: ladulas.v1.ControlService.SetKeyAgentUse:input_type -> ladulas.v1.SetKeyAgentUseRequest
-	53,  // 140: ladulas.v1.ControlService.SendKey:input_type -> ladulas.v1.SendKeyRequest
-	63,  // 141: ladulas.v1.ControlService.ListKeyOffers:input_type -> ladulas.v1.ListKeyOffersRequest
-	65,  // 142: ladulas.v1.ControlService.AnswerKeyOffer:input_type -> ladulas.v1.AnswerKeyOfferRequest
-	57,  // 143: ladulas.v1.ControlService.ListLocalKeys:input_type -> ladulas.v1.ListLocalKeysRequest
-	59,  // 144: ladulas.v1.ControlService.ForgetLocalKey:input_type -> ladulas.v1.ForgetLocalKeyRequest
-	61,  // 145: ladulas.v1.ControlService.PromoteLocalKey:input_type -> ladulas.v1.PromoteLocalKeyRequest
-	67,  // 146: ladulas.v1.ControlService.ListGrants:input_type -> ladulas.v1.ListGrantsRequest
-	82,  // 147: ladulas.v1.ControlService.RevokeGrant:input_type -> ladulas.v1.RevokeGrantRequest
-	69,  // 148: ladulas.v1.ControlService.ExtendGrant:input_type -> ladulas.v1.ExtendGrantRequest
-	71,  // 149: ladulas.v1.ControlService.RequestGrant:input_type -> ladulas.v1.RequestGrantRequest
-	73,  // 150: ladulas.v1.ControlService.ListDelegations:input_type -> ladulas.v1.ListDelegationsRequest
-	76,  // 151: ladulas.v1.ControlService.ListEndorsements:input_type -> ladulas.v1.ListEndorsementsRequest
-	80,  // 152: ladulas.v1.ControlService.RetractEndorsement:input_type -> ladulas.v1.RetractEndorsementRequest
-	84,  // 153: ladulas.v1.ControlService.BeginPairing:input_type -> ladulas.v1.BeginPairingRequest
-	85,  // 154: ladulas.v1.ControlService.PairWithPeer:input_type -> ladulas.v1.PairWithPeerRequest
-	86,  // 155: ladulas.v1.ControlService.BrowsePairings:input_type -> ladulas.v1.BrowsePairingsRequest
-	90,  // 156: ladulas.v1.ControlService.AnswerPairing:input_type -> ladulas.v1.AnswerPairingRequest
-	93,  // 157: ladulas.v1.ControlService.ListPendingPairings:input_type -> ladulas.v1.ListPendingPairingsRequest
-	95,  // 158: ladulas.v1.ControlService.AnswerPendingPairing:input_type -> ladulas.v1.AnswerPendingPairingRequest
-	97,  // 159: ladulas.v1.ControlService.WithdrawPairing:input_type -> ladulas.v1.WithdrawPairingRequest
-	99,  // 160: ladulas.v1.ControlService.SetPeerDirections:input_type -> ladulas.v1.SetPeerDirectionsRequest
-	101, // 161: ladulas.v1.ControlService.RenamePeer:input_type -> ladulas.v1.RenamePeerRequest
-	103, // 162: ladulas.v1.ControlService.RevokePeer:input_type -> ladulas.v1.RevokePeerRequest
-	110, // 163: ladulas.v1.ControlService.PublishProject:input_type -> ladulas.v1.PublishProjectRequest
-	112, // 164: ladulas.v1.ControlService.ListPublications:input_type -> ladulas.v1.ListPublicationsRequest
-	116, // 165: ladulas.v1.ControlService.UnpublishProject:input_type -> ladulas.v1.UnpublishProjectRequest
-	114, // 166: ladulas.v1.ControlService.SetAutoPublish:input_type -> ladulas.v1.SetAutoPublishRequest
-	118, // 167: ladulas.v1.ControlService.WatchApprovals:input_type -> ladulas.v1.WatchApprovalsRequest
-	121, // 168: ladulas.v1.ControlService.AnswerApproval:input_type -> ladulas.v1.AnswerApprovalRequest
-	123, // 169: ladulas.v1.ControlService.FetchRequestDiff:input_type -> ladulas.v1.FetchRequestDiffRequest
-	128, // 170: ladulas.v1.ControlService.ListPeerProjects:input_type -> ladulas.v1.ListPeerProjectsRequest
-	130, // 171: ladulas.v1.ControlService.OpenPeerProject:input_type -> ladulas.v1.OpenPeerProjectRequest
-	132, // 172: ladulas.v1.ControlService.ListPeerDirectory:input_type -> ladulas.v1.ListPeerDirectoryRequest
-	134, // 173: ladulas.v1.ControlService.SearchPeerProject:input_type -> ladulas.v1.SearchPeerProjectRequest
-	136, // 174: ladulas.v1.ControlService.ReadPeerPage:input_type -> ladulas.v1.ReadPeerPageRequest
-	138, // 175: ladulas.v1.ControlService.PeerDocumentVersions:input_type -> ladulas.v1.PeerDocumentVersionsRequest
-	140, // 176: ladulas.v1.ControlService.Reload:input_type -> ladulas.v1.ReloadRequest
-	9,   // 177: ladulas.v1.ControlService.Settings:input_type -> ladulas.v1.SettingsRequest
-	11,  // 178: ladulas.v1.ControlService.SetSignTimeout:input_type -> ladulas.v1.SetSignTimeoutRequest
-	8,   // 179: ladulas.v1.SigningService.SignPayload:output_type -> ladulas.v1.SignPayloadResponse
-	14,  // 180: ladulas.v1.ControlService.Status:output_type -> ladulas.v1.StatusResponse
-	18,  // 181: ladulas.v1.ControlService.Initialize:output_type -> ladulas.v1.InitializeResponse
-	20,  // 182: ladulas.v1.ControlService.Unlock:output_type -> ladulas.v1.UnlockResponse
-	22,  // 183: ladulas.v1.ControlService.Lock:output_type -> ladulas.v1.LockResponse
-	24,  // 184: ladulas.v1.ControlService.AwaitState:output_type -> ladulas.v1.AwaitStateResponse
-	26,  // 185: ladulas.v1.ControlService.KeyringStatus:output_type -> ladulas.v1.KeyringStatusResponse
-	28,  // 186: ladulas.v1.ControlService.SetUnlockAtLogin:output_type -> ladulas.v1.SetUnlockAtLoginResponse
-	36,  // 187: ladulas.v1.ControlService.PeerListen:output_type -> ladulas.v1.PeerListenResponse
-	38,  // 188: ladulas.v1.ControlService.SetPeerListen:output_type -> ladulas.v1.SetPeerListenResponse
-	34,  // 189: ladulas.v1.ControlService.Tunnel:output_type -> ladulas.v1.TunnelResponse
-	34,  // 190: ladulas.v1.ControlService.SetTunnel:output_type -> ladulas.v1.TunnelResponse
-	42,  // 191: ladulas.v1.ControlService.ListStoredKeys:output_type -> ladulas.v1.ListStoredKeysResponse
-	44,  // 192: ladulas.v1.ControlService.GenerateKey:output_type -> ladulas.v1.GenerateKeyResponse
-	46,  // 193: ladulas.v1.ControlService.ImportKey:output_type -> ladulas.v1.ImportKeyResponse
-	48,  // 194: ladulas.v1.ControlService.RemoveKey:output_type -> ladulas.v1.RemoveKeyResponse
-	50,  // 195: ladulas.v1.ControlService.SetKeyEnabled:output_type -> ladulas.v1.SetKeyEnabledResponse
-	52,  // 196: ladulas.v1.ControlService.SetKeyAgentUse:output_type -> ladulas.v1.SetKeyAgentUseResponse
-	54,  // 197: ladulas.v1.ControlService.SendKey:output_type -> ladulas.v1.SendKeyResponse
-	64,  // 198: ladulas.v1.ControlService.ListKeyOffers:output_type -> ladulas.v1.ListKeyOffersResponse
-	66,  // 199: ladulas.v1.ControlService.AnswerKeyOffer:output_type -> ladulas.v1.AnswerKeyOfferResponse
-	58,  // 200: ladulas.v1.ControlService.ListLocalKeys:output_type -> ladulas.v1.ListLocalKeysResponse
-	60,  // 201: ladulas.v1.ControlService.ForgetLocalKey:output_type -> ladulas.v1.ForgetLocalKeyResponse
-	62,  // 202: ladulas.v1.ControlService.PromoteLocalKey:output_type -> ladulas.v1.PromoteLocalKeyResponse
-	68,  // 203: ladulas.v1.ControlService.ListGrants:output_type -> ladulas.v1.ListGrantsResponse
-	83,  // 204: ladulas.v1.ControlService.RevokeGrant:output_type -> ladulas.v1.RevokeGrantResponse
-	70,  // 205: ladulas.v1.ControlService.ExtendGrant:output_type -> ladulas.v1.ExtendGrantResponse
-	72,  // 206: ladulas.v1.ControlService.RequestGrant:output_type -> ladulas.v1.RequestGrantResponse
-	74,  // 207: ladulas.v1.ControlService.ListDelegations:output_type -> ladulas.v1.ListDelegationsResponse
-	77,  // 208: ladulas.v1.ControlService.ListEndorsements:output_type -> ladulas.v1.ListEndorsementsResponse
-	81,  // 209: ladulas.v1.ControlService.RetractEndorsement:output_type -> ladulas.v1.RetractEndorsementResponse
-	89,  // 210: ladulas.v1.ControlService.BeginPairing:output_type -> ladulas.v1.PairingProgress
-	89,  // 211: ladulas.v1.ControlService.PairWithPeer:output_type -> ladulas.v1.PairingProgress
-	88,  // 212: ladulas.v1.ControlService.BrowsePairings:output_type -> ladulas.v1.NearbyPairings
-	91,  // 213: ladulas.v1.ControlService.AnswerPairing:output_type -> ladulas.v1.AnswerPairingResponse
-	94,  // 214: ladulas.v1.ControlService.ListPendingPairings:output_type -> ladulas.v1.ListPendingPairingsResponse
-	96,  // 215: ladulas.v1.ControlService.AnswerPendingPairing:output_type -> ladulas.v1.AnswerPendingPairingResponse
-	98,  // 216: ladulas.v1.ControlService.WithdrawPairing:output_type -> ladulas.v1.WithdrawPairingResponse
-	100, // 217: ladulas.v1.ControlService.SetPeerDirections:output_type -> ladulas.v1.SetPeerDirectionsResponse
-	102, // 218: ladulas.v1.ControlService.RenamePeer:output_type -> ladulas.v1.RenamePeerResponse
-	104, // 219: ladulas.v1.ControlService.RevokePeer:output_type -> ladulas.v1.RevokePeerResponse
-	111, // 220: ladulas.v1.ControlService.PublishProject:output_type -> ladulas.v1.PublishProjectResponse
-	113, // 221: ladulas.v1.ControlService.ListPublications:output_type -> ladulas.v1.ListPublicationsResponse
-	117, // 222: ladulas.v1.ControlService.UnpublishProject:output_type -> ladulas.v1.UnpublishProjectResponse
-	115, // 223: ladulas.v1.ControlService.SetAutoPublish:output_type -> ladulas.v1.SetAutoPublishResponse
-	119, // 224: ladulas.v1.ControlService.WatchApprovals:output_type -> ladulas.v1.ApprovalPrompt
-	122, // 225: ladulas.v1.ControlService.AnswerApproval:output_type -> ladulas.v1.AnswerApprovalResponse
-	124, // 226: ladulas.v1.ControlService.FetchRequestDiff:output_type -> ladulas.v1.FetchRequestDiffResponse
-	129, // 227: ladulas.v1.ControlService.ListPeerProjects:output_type -> ladulas.v1.ListPeerProjectsResponse
-	131, // 228: ladulas.v1.ControlService.OpenPeerProject:output_type -> ladulas.v1.OpenPeerProjectResponse
-	133, // 229: ladulas.v1.ControlService.ListPeerDirectory:output_type -> ladulas.v1.ListPeerDirectoryResponse
-	135, // 230: ladulas.v1.ControlService.SearchPeerProject:output_type -> ladulas.v1.SearchPeerProjectResponse
-	137, // 231: ladulas.v1.ControlService.ReadPeerPage:output_type -> ladulas.v1.ReadPeerPageResponse
-	139, // 232: ladulas.v1.ControlService.PeerDocumentVersions:output_type -> ladulas.v1.PeerDocumentVersionsResponse
-	141, // 233: ladulas.v1.ControlService.Reload:output_type -> ladulas.v1.ReloadResponse
-	10,  // 234: ladulas.v1.ControlService.Settings:output_type -> ladulas.v1.SettingsResponse
-	10,  // 235: ladulas.v1.ControlService.SetSignTimeout:output_type -> ladulas.v1.SettingsResponse
-	179, // [179:236] is the sub-list for method output_type
-	122, // [122:179] is the sub-list for method input_type
-	122, // [122:122] is the sub-list for extension type_name
-	122, // [122:122] is the sub-list for extension extendee
-	0,   // [0:122] is the sub-list for field type_name
+	148, // 15: ladulas.v1.StatusResponse.state_since:type_name -> google.protobuf.Timestamp
+	17,  // 16: ladulas.v1.StatusResponse.borrowed_keys:type_name -> ladulas.v1.BorrowedKeyStatus
+	16,  // 17: ladulas.v1.StatusResponse.locations:type_name -> ladulas.v1.InstanceLocations
+	15,  // 18: ladulas.v1.StatusResponse.inbound_tunnels:type_name -> ladulas.v1.InboundTunnel
+	147, // 19: ladulas.v1.BorrowedKeyStatus.key:type_name -> ladulas.v1.KeyRef
+	148, // 20: ladulas.v1.BorrowedKeyStatus.last_seen_at:type_name -> google.protobuf.Timestamp
+	0,   // 21: ladulas.v1.InitializeResponse.state:type_name -> ladulas.v1.LockState
+	0,   // 22: ladulas.v1.UnlockResponse.state:type_name -> ladulas.v1.LockState
+	0,   // 23: ladulas.v1.LockResponse.state:type_name -> ladulas.v1.LockState
+	0,   // 24: ladulas.v1.AwaitStateRequest.states:type_name -> ladulas.v1.LockState
+	144, // 25: ladulas.v1.AwaitStateRequest.timeout:type_name -> google.protobuf.Duration
+	0,   // 26: ladulas.v1.AwaitStateResponse.state:type_name -> ladulas.v1.LockState
+	148, // 27: ladulas.v1.AwaitStateResponse.state_since:type_name -> google.protobuf.Timestamp
+	1,   // 28: ladulas.v1.PeerListenState.source:type_name -> ladulas.v1.ListenSource
+	30,  // 29: ladulas.v1.PeerListenState.skipped:type_name -> ladulas.v1.SkippedListenAddress
+	34,  // 30: ladulas.v1.TunnelResponse.state:type_name -> ladulas.v1.TunnelState
+	31,  // 31: ladulas.v1.PeerListenResponse.state:type_name -> ladulas.v1.PeerListenState
+	31,  // 32: ladulas.v1.SetPeerListenResponse.state:type_name -> ladulas.v1.PeerListenState
+	148, // 33: ladulas.v1.KeyTransferInfo.at:type_name -> google.protobuf.Timestamp
+	2,   // 34: ladulas.v1.KeyInfo.origin:type_name -> ladulas.v1.KeyOrigin
+	148, // 35: ladulas.v1.KeyInfo.added_at:type_name -> google.protobuf.Timestamp
+	40,  // 36: ladulas.v1.KeyInfo.handed_to:type_name -> ladulas.v1.KeyTransferInfo
+	40,  // 37: ladulas.v1.KeyInfo.received_from:type_name -> ladulas.v1.KeyTransferInfo
+	41,  // 38: ladulas.v1.ListStoredKeysResponse.keys:type_name -> ladulas.v1.KeyInfo
+	41,  // 39: ladulas.v1.GenerateKeyResponse.key:type_name -> ladulas.v1.KeyInfo
+	41,  // 40: ladulas.v1.ImportKeyResponse.key:type_name -> ladulas.v1.KeyInfo
+	41,  // 41: ladulas.v1.SetKeyEnabledResponse.key:type_name -> ladulas.v1.KeyInfo
+	41,  // 42: ladulas.v1.SetKeyAgentUseResponse.key:type_name -> ladulas.v1.KeyInfo
+	148, // 43: ladulas.v1.KeyOfferInfo.received_at:type_name -> google.protobuf.Timestamp
+	149, // 44: ladulas.v1.LocalKeyInfo.added_by:type_name -> ladulas.v1.ClientProcess
+	148, // 45: ladulas.v1.LocalKeyInfo.added_at:type_name -> google.protobuf.Timestamp
+	148, // 46: ladulas.v1.LocalKeyInfo.expires_at:type_name -> google.protobuf.Timestamp
+	57,  // 47: ladulas.v1.ListLocalKeysResponse.keys:type_name -> ladulas.v1.LocalKeyInfo
+	57,  // 48: ladulas.v1.ForgetLocalKeyResponse.key:type_name -> ladulas.v1.LocalKeyInfo
+	41,  // 49: ladulas.v1.PromoteLocalKeyResponse.key:type_name -> ladulas.v1.KeyInfo
+	56,  // 50: ladulas.v1.ListKeyOffersResponse.offers:type_name -> ladulas.v1.KeyOfferInfo
+	41,  // 51: ladulas.v1.AnswerKeyOfferResponse.key:type_name -> ladulas.v1.KeyInfo
+	150, // 52: ladulas.v1.ListGrantsResponse.grants:type_name -> ladulas.v1.Grant
+	144, // 53: ladulas.v1.ExtendGrantRequest.extend_by:type_name -> google.protobuf.Duration
+	150, // 54: ladulas.v1.ExtendGrantResponse.grant:type_name -> ladulas.v1.Grant
+	144, // 55: ladulas.v1.RequestGrantRequest.ttl:type_name -> google.protobuf.Duration
+	150, // 56: ladulas.v1.RequestGrantResponse.grant:type_name -> ladulas.v1.Grant
+	151, // 57: ladulas.v1.RequestGrantResponse.decision:type_name -> ladulas.v1.Decision
+	76,  // 58: ladulas.v1.ListDelegationsResponse.delegations:type_name -> ladulas.v1.HeldDelegationInfo
+	152, // 59: ladulas.v1.HeldDelegationInfo.delegation:type_name -> ladulas.v1.Delegation
+	148, // 60: ladulas.v1.HeldDelegationInfo.received_at:type_name -> google.protobuf.Timestamp
+	79,  // 61: ladulas.v1.ListEndorsementsResponse.endorsements:type_name -> ladulas.v1.HeldEndorsementInfo
+	80,  // 62: ladulas.v1.ListEndorsementsResponse.retractions:type_name -> ladulas.v1.RetractionInfo
+	153, // 63: ladulas.v1.HeldEndorsementInfo.endorsement:type_name -> ladulas.v1.Endorsement
+	148, // 64: ladulas.v1.HeldEndorsementInfo.received_at:type_name -> google.protobuf.Timestamp
+	154, // 65: ladulas.v1.RetractionInfo.retraction:type_name -> ladulas.v1.Retraction
+	148, // 66: ladulas.v1.RetractionInfo.received_at:type_name -> google.protobuf.Timestamp
+	3,   // 67: ladulas.v1.BeginPairingRequest.intent:type_name -> ladulas.v1.PairingIntent
+	148, // 68: ladulas.v1.NearbyPairing.seen_at:type_name -> google.protobuf.Timestamp
+	88,  // 69: ladulas.v1.NearbyPairings.pairings:type_name -> ladulas.v1.NearbyPairing
+	4,   // 70: ladulas.v1.PairingProgress.kind:type_name -> ladulas.v1.PairingProgressKind
+	148, // 71: ladulas.v1.PairingProgress.expires_at:type_name -> google.protobuf.Timestamp
+	155, // 72: ladulas.v1.PairingProgress.confirmation:type_name -> ladulas.v1.ApprovalRequest
+	13,  // 73: ladulas.v1.PairingProgress.peer:type_name -> ladulas.v1.PeerStatus
+	3,   // 74: ladulas.v1.PairingProgress.intent:type_name -> ladulas.v1.PairingIntent
+	156, // 75: ladulas.v1.PairingProgress.attempt:type_name -> ladulas.v1.PairingAttempt
+	157, // 76: ladulas.v1.PendingPairingStatus.our_answer:type_name -> ladulas.v1.PairingAnswer
+	157, // 77: ladulas.v1.PendingPairingStatus.their_answer:type_name -> ladulas.v1.PairingAnswer
+	148, // 78: ladulas.v1.PendingPairingStatus.started_at:type_name -> google.protobuf.Timestamp
+	148, // 79: ladulas.v1.PendingPairingStatus.answered_at:type_name -> google.protobuf.Timestamp
+	93,  // 80: ladulas.v1.ListPendingPairingsResponse.pairings:type_name -> ladulas.v1.PendingPairingStatus
+	158, // 81: ladulas.v1.AnswerPendingPairingResponse.state:type_name -> ladulas.v1.PairingRecordState
+	93,  // 82: ladulas.v1.AnswerPendingPairingResponse.pairing:type_name -> ladulas.v1.PendingPairingStatus
+	13,  // 83: ladulas.v1.AnswerPendingPairingResponse.peer:type_name -> ladulas.v1.PeerStatus
+	13,  // 84: ladulas.v1.SetPeerDirectionsResponse.peer:type_name -> ladulas.v1.PeerStatus
+	13,  // 85: ladulas.v1.RenamePeerResponse.peer:type_name -> ladulas.v1.PeerStatus
+	159, // 86: ladulas.v1.CachedProject.project:type_name -> ladulas.v1.Publication
+	148, // 87: ladulas.v1.CachedProject.first_read_at:type_name -> google.protobuf.Timestamp
+	148, // 88: ladulas.v1.CachedProject.last_read_at:type_name -> google.protobuf.Timestamp
+	107, // 89: ladulas.v1.CachedProject.files:type_name -> ladulas.v1.CachedFile
+	148, // 90: ladulas.v1.CachedFile.modified_at:type_name -> google.protobuf.Timestamp
+	148, // 91: ladulas.v1.CachedFile.read_at:type_name -> google.protobuf.Timestamp
+	109, // 92: ladulas.v1.TrackedProject.documents:type_name -> ladulas.v1.TrackedDocument
+	148, // 93: ladulas.v1.TrackedProject.updated_at:type_name -> google.protobuf.Timestamp
+	110, // 94: ladulas.v1.TrackedDocument.snapshots:type_name -> ladulas.v1.DocumentSnapshot
+	148, // 95: ladulas.v1.DocumentSnapshot.taken_at:type_name -> google.protobuf.Timestamp
+	159, // 96: ladulas.v1.PublishProjectResponse.publication:type_name -> ladulas.v1.Publication
+	159, // 97: ladulas.v1.ListPublicationsResponse.published:type_name -> ladulas.v1.Publication
+	106, // 98: ladulas.v1.ListPublicationsResponse.cached:type_name -> ladulas.v1.CachedProject
+	5,   // 99: ladulas.v1.ApprovalPrompt.kind:type_name -> ladulas.v1.ApprovalPromptKind
+	121, // 100: ladulas.v1.ApprovalPrompt.grant:type_name -> ladulas.v1.GrantOffer
+	160, // 101: ladulas.v1.ApprovalPrompt.response:type_name -> ladulas.v1.ApprovalResponse
+	144, // 102: ladulas.v1.GrantOffer.ttls:type_name -> google.protobuf.Duration
+	144, // 103: ladulas.v1.GrantOffer.max_ttl:type_name -> google.protobuf.Duration
+	151, // 104: ladulas.v1.AnswerApprovalRequest.decision:type_name -> ladulas.v1.Decision
+	144, // 105: ladulas.v1.AnswerApprovalRequest.grant_ttl:type_name -> google.protobuf.Duration
+	6,   // 106: ladulas.v1.AnswerApprovalRequest.grant_reach:type_name -> ladulas.v1.GrantReach
+	161, // 107: ladulas.v1.AnswerApprovalRequest.presented:type_name -> ladulas.v1.PresentedProject
+	162, // 108: ladulas.v1.FetchRequestDiffResponse.diff:type_name -> ladulas.v1.GitDiff
+	159, // 109: ladulas.v1.PeerProject.project:type_name -> ladulas.v1.Publication
+	148, // 110: ladulas.v1.PeerProject.read:type_name -> google.protobuf.Timestamp
+	163, // 111: ladulas.v1.PeerListing.entries:type_name -> ladulas.v1.ProjectEntry
+	126, // 112: ladulas.v1.PeerListing.publisher:type_name -> ladulas.v1.PeerProject
+	148, // 113: ladulas.v1.PeerPage.modified:type_name -> google.protobuf.Timestamp
+	148, // 114: ladulas.v1.PeerPage.read_at:type_name -> google.protobuf.Timestamp
+	126, // 115: ladulas.v1.ListPeerProjectsResponse.projects:type_name -> ladulas.v1.PeerProject
+	126, // 116: ladulas.v1.OpenPeerProjectResponse.project:type_name -> ladulas.v1.PeerProject
+	127, // 117: ladulas.v1.ListPeerDirectoryResponse.listing:type_name -> ladulas.v1.PeerListing
+	127, // 118: ladulas.v1.SearchPeerProjectResponse.listing:type_name -> ladulas.v1.PeerListing
+	128, // 119: ladulas.v1.ReadPeerPageResponse.page:type_name -> ladulas.v1.PeerPage
+	128, // 120: ladulas.v1.ReadPeerPageResponse.compared_to:type_name -> ladulas.v1.PeerPage
+	164, // 121: ladulas.v1.ReadPeerPageResponse.version:type_name -> ladulas.v1.DocumentVersion
+	164, // 122: ladulas.v1.PeerDocumentVersionsResponse.versions:type_name -> ladulas.v1.DocumentVersion
+	7,   // 123: ladulas.v1.SigningService.SignPayload:input_type -> ladulas.v1.SignPayloadRequest
+	12,  // 124: ladulas.v1.ControlService.Status:input_type -> ladulas.v1.StatusRequest
+	18,  // 125: ladulas.v1.ControlService.Initialize:input_type -> ladulas.v1.InitializeRequest
+	20,  // 126: ladulas.v1.ControlService.Unlock:input_type -> ladulas.v1.UnlockRequest
+	22,  // 127: ladulas.v1.ControlService.Lock:input_type -> ladulas.v1.LockRequest
+	24,  // 128: ladulas.v1.ControlService.AwaitState:input_type -> ladulas.v1.AwaitStateRequest
+	26,  // 129: ladulas.v1.ControlService.KeyringStatus:input_type -> ladulas.v1.KeyringStatusRequest
+	28,  // 130: ladulas.v1.ControlService.SetUnlockAtLogin:input_type -> ladulas.v1.SetUnlockAtLoginRequest
+	36,  // 131: ladulas.v1.ControlService.PeerListen:input_type -> ladulas.v1.PeerListenRequest
+	38,  // 132: ladulas.v1.ControlService.SetPeerListen:input_type -> ladulas.v1.SetPeerListenRequest
+	32,  // 133: ladulas.v1.ControlService.Tunnel:input_type -> ladulas.v1.TunnelRequest
+	33,  // 134: ladulas.v1.ControlService.SetTunnel:input_type -> ladulas.v1.SetTunnelRequest
+	42,  // 135: ladulas.v1.ControlService.ListStoredKeys:input_type -> ladulas.v1.ListStoredKeysRequest
+	44,  // 136: ladulas.v1.ControlService.GenerateKey:input_type -> ladulas.v1.GenerateKeyRequest
+	46,  // 137: ladulas.v1.ControlService.ImportKey:input_type -> ladulas.v1.ImportKeyRequest
+	48,  // 138: ladulas.v1.ControlService.RemoveKey:input_type -> ladulas.v1.RemoveKeyRequest
+	50,  // 139: ladulas.v1.ControlService.SetKeyEnabled:input_type -> ladulas.v1.SetKeyEnabledRequest
+	52,  // 140: ladulas.v1.ControlService.SetKeyAgentUse:input_type -> ladulas.v1.SetKeyAgentUseRequest
+	54,  // 141: ladulas.v1.ControlService.SendKey:input_type -> ladulas.v1.SendKeyRequest
+	64,  // 142: ladulas.v1.ControlService.ListKeyOffers:input_type -> ladulas.v1.ListKeyOffersRequest
+	66,  // 143: ladulas.v1.ControlService.AnswerKeyOffer:input_type -> ladulas.v1.AnswerKeyOfferRequest
+	58,  // 144: ladulas.v1.ControlService.ListLocalKeys:input_type -> ladulas.v1.ListLocalKeysRequest
+	60,  // 145: ladulas.v1.ControlService.ForgetLocalKey:input_type -> ladulas.v1.ForgetLocalKeyRequest
+	62,  // 146: ladulas.v1.ControlService.PromoteLocalKey:input_type -> ladulas.v1.PromoteLocalKeyRequest
+	68,  // 147: ladulas.v1.ControlService.ListGrants:input_type -> ladulas.v1.ListGrantsRequest
+	83,  // 148: ladulas.v1.ControlService.RevokeGrant:input_type -> ladulas.v1.RevokeGrantRequest
+	70,  // 149: ladulas.v1.ControlService.ExtendGrant:input_type -> ladulas.v1.ExtendGrantRequest
+	72,  // 150: ladulas.v1.ControlService.RequestGrant:input_type -> ladulas.v1.RequestGrantRequest
+	74,  // 151: ladulas.v1.ControlService.ListDelegations:input_type -> ladulas.v1.ListDelegationsRequest
+	77,  // 152: ladulas.v1.ControlService.ListEndorsements:input_type -> ladulas.v1.ListEndorsementsRequest
+	81,  // 153: ladulas.v1.ControlService.RetractEndorsement:input_type -> ladulas.v1.RetractEndorsementRequest
+	85,  // 154: ladulas.v1.ControlService.BeginPairing:input_type -> ladulas.v1.BeginPairingRequest
+	86,  // 155: ladulas.v1.ControlService.PairWithPeer:input_type -> ladulas.v1.PairWithPeerRequest
+	87,  // 156: ladulas.v1.ControlService.BrowsePairings:input_type -> ladulas.v1.BrowsePairingsRequest
+	91,  // 157: ladulas.v1.ControlService.AnswerPairing:input_type -> ladulas.v1.AnswerPairingRequest
+	94,  // 158: ladulas.v1.ControlService.ListPendingPairings:input_type -> ladulas.v1.ListPendingPairingsRequest
+	96,  // 159: ladulas.v1.ControlService.AnswerPendingPairing:input_type -> ladulas.v1.AnswerPendingPairingRequest
+	98,  // 160: ladulas.v1.ControlService.WithdrawPairing:input_type -> ladulas.v1.WithdrawPairingRequest
+	100, // 161: ladulas.v1.ControlService.SetPeerDirections:input_type -> ladulas.v1.SetPeerDirectionsRequest
+	102, // 162: ladulas.v1.ControlService.RenamePeer:input_type -> ladulas.v1.RenamePeerRequest
+	104, // 163: ladulas.v1.ControlService.RevokePeer:input_type -> ladulas.v1.RevokePeerRequest
+	111, // 164: ladulas.v1.ControlService.PublishProject:input_type -> ladulas.v1.PublishProjectRequest
+	113, // 165: ladulas.v1.ControlService.ListPublications:input_type -> ladulas.v1.ListPublicationsRequest
+	117, // 166: ladulas.v1.ControlService.UnpublishProject:input_type -> ladulas.v1.UnpublishProjectRequest
+	115, // 167: ladulas.v1.ControlService.SetAutoPublish:input_type -> ladulas.v1.SetAutoPublishRequest
+	119, // 168: ladulas.v1.ControlService.WatchApprovals:input_type -> ladulas.v1.WatchApprovalsRequest
+	122, // 169: ladulas.v1.ControlService.AnswerApproval:input_type -> ladulas.v1.AnswerApprovalRequest
+	124, // 170: ladulas.v1.ControlService.FetchRequestDiff:input_type -> ladulas.v1.FetchRequestDiffRequest
+	129, // 171: ladulas.v1.ControlService.ListPeerProjects:input_type -> ladulas.v1.ListPeerProjectsRequest
+	131, // 172: ladulas.v1.ControlService.OpenPeerProject:input_type -> ladulas.v1.OpenPeerProjectRequest
+	133, // 173: ladulas.v1.ControlService.ListPeerDirectory:input_type -> ladulas.v1.ListPeerDirectoryRequest
+	135, // 174: ladulas.v1.ControlService.SearchPeerProject:input_type -> ladulas.v1.SearchPeerProjectRequest
+	137, // 175: ladulas.v1.ControlService.ReadPeerPage:input_type -> ladulas.v1.ReadPeerPageRequest
+	139, // 176: ladulas.v1.ControlService.PeerDocumentVersions:input_type -> ladulas.v1.PeerDocumentVersionsRequest
+	141, // 177: ladulas.v1.ControlService.Reload:input_type -> ladulas.v1.ReloadRequest
+	9,   // 178: ladulas.v1.ControlService.Settings:input_type -> ladulas.v1.SettingsRequest
+	11,  // 179: ladulas.v1.ControlService.SetSignTimeout:input_type -> ladulas.v1.SetSignTimeoutRequest
+	8,   // 180: ladulas.v1.SigningService.SignPayload:output_type -> ladulas.v1.SignPayloadResponse
+	14,  // 181: ladulas.v1.ControlService.Status:output_type -> ladulas.v1.StatusResponse
+	19,  // 182: ladulas.v1.ControlService.Initialize:output_type -> ladulas.v1.InitializeResponse
+	21,  // 183: ladulas.v1.ControlService.Unlock:output_type -> ladulas.v1.UnlockResponse
+	23,  // 184: ladulas.v1.ControlService.Lock:output_type -> ladulas.v1.LockResponse
+	25,  // 185: ladulas.v1.ControlService.AwaitState:output_type -> ladulas.v1.AwaitStateResponse
+	27,  // 186: ladulas.v1.ControlService.KeyringStatus:output_type -> ladulas.v1.KeyringStatusResponse
+	29,  // 187: ladulas.v1.ControlService.SetUnlockAtLogin:output_type -> ladulas.v1.SetUnlockAtLoginResponse
+	37,  // 188: ladulas.v1.ControlService.PeerListen:output_type -> ladulas.v1.PeerListenResponse
+	39,  // 189: ladulas.v1.ControlService.SetPeerListen:output_type -> ladulas.v1.SetPeerListenResponse
+	35,  // 190: ladulas.v1.ControlService.Tunnel:output_type -> ladulas.v1.TunnelResponse
+	35,  // 191: ladulas.v1.ControlService.SetTunnel:output_type -> ladulas.v1.TunnelResponse
+	43,  // 192: ladulas.v1.ControlService.ListStoredKeys:output_type -> ladulas.v1.ListStoredKeysResponse
+	45,  // 193: ladulas.v1.ControlService.GenerateKey:output_type -> ladulas.v1.GenerateKeyResponse
+	47,  // 194: ladulas.v1.ControlService.ImportKey:output_type -> ladulas.v1.ImportKeyResponse
+	49,  // 195: ladulas.v1.ControlService.RemoveKey:output_type -> ladulas.v1.RemoveKeyResponse
+	51,  // 196: ladulas.v1.ControlService.SetKeyEnabled:output_type -> ladulas.v1.SetKeyEnabledResponse
+	53,  // 197: ladulas.v1.ControlService.SetKeyAgentUse:output_type -> ladulas.v1.SetKeyAgentUseResponse
+	55,  // 198: ladulas.v1.ControlService.SendKey:output_type -> ladulas.v1.SendKeyResponse
+	65,  // 199: ladulas.v1.ControlService.ListKeyOffers:output_type -> ladulas.v1.ListKeyOffersResponse
+	67,  // 200: ladulas.v1.ControlService.AnswerKeyOffer:output_type -> ladulas.v1.AnswerKeyOfferResponse
+	59,  // 201: ladulas.v1.ControlService.ListLocalKeys:output_type -> ladulas.v1.ListLocalKeysResponse
+	61,  // 202: ladulas.v1.ControlService.ForgetLocalKey:output_type -> ladulas.v1.ForgetLocalKeyResponse
+	63,  // 203: ladulas.v1.ControlService.PromoteLocalKey:output_type -> ladulas.v1.PromoteLocalKeyResponse
+	69,  // 204: ladulas.v1.ControlService.ListGrants:output_type -> ladulas.v1.ListGrantsResponse
+	84,  // 205: ladulas.v1.ControlService.RevokeGrant:output_type -> ladulas.v1.RevokeGrantResponse
+	71,  // 206: ladulas.v1.ControlService.ExtendGrant:output_type -> ladulas.v1.ExtendGrantResponse
+	73,  // 207: ladulas.v1.ControlService.RequestGrant:output_type -> ladulas.v1.RequestGrantResponse
+	75,  // 208: ladulas.v1.ControlService.ListDelegations:output_type -> ladulas.v1.ListDelegationsResponse
+	78,  // 209: ladulas.v1.ControlService.ListEndorsements:output_type -> ladulas.v1.ListEndorsementsResponse
+	82,  // 210: ladulas.v1.ControlService.RetractEndorsement:output_type -> ladulas.v1.RetractEndorsementResponse
+	90,  // 211: ladulas.v1.ControlService.BeginPairing:output_type -> ladulas.v1.PairingProgress
+	90,  // 212: ladulas.v1.ControlService.PairWithPeer:output_type -> ladulas.v1.PairingProgress
+	89,  // 213: ladulas.v1.ControlService.BrowsePairings:output_type -> ladulas.v1.NearbyPairings
+	92,  // 214: ladulas.v1.ControlService.AnswerPairing:output_type -> ladulas.v1.AnswerPairingResponse
+	95,  // 215: ladulas.v1.ControlService.ListPendingPairings:output_type -> ladulas.v1.ListPendingPairingsResponse
+	97,  // 216: ladulas.v1.ControlService.AnswerPendingPairing:output_type -> ladulas.v1.AnswerPendingPairingResponse
+	99,  // 217: ladulas.v1.ControlService.WithdrawPairing:output_type -> ladulas.v1.WithdrawPairingResponse
+	101, // 218: ladulas.v1.ControlService.SetPeerDirections:output_type -> ladulas.v1.SetPeerDirectionsResponse
+	103, // 219: ladulas.v1.ControlService.RenamePeer:output_type -> ladulas.v1.RenamePeerResponse
+	105, // 220: ladulas.v1.ControlService.RevokePeer:output_type -> ladulas.v1.RevokePeerResponse
+	112, // 221: ladulas.v1.ControlService.PublishProject:output_type -> ladulas.v1.PublishProjectResponse
+	114, // 222: ladulas.v1.ControlService.ListPublications:output_type -> ladulas.v1.ListPublicationsResponse
+	118, // 223: ladulas.v1.ControlService.UnpublishProject:output_type -> ladulas.v1.UnpublishProjectResponse
+	116, // 224: ladulas.v1.ControlService.SetAutoPublish:output_type -> ladulas.v1.SetAutoPublishResponse
+	120, // 225: ladulas.v1.ControlService.WatchApprovals:output_type -> ladulas.v1.ApprovalPrompt
+	123, // 226: ladulas.v1.ControlService.AnswerApproval:output_type -> ladulas.v1.AnswerApprovalResponse
+	125, // 227: ladulas.v1.ControlService.FetchRequestDiff:output_type -> ladulas.v1.FetchRequestDiffResponse
+	130, // 228: ladulas.v1.ControlService.ListPeerProjects:output_type -> ladulas.v1.ListPeerProjectsResponse
+	132, // 229: ladulas.v1.ControlService.OpenPeerProject:output_type -> ladulas.v1.OpenPeerProjectResponse
+	134, // 230: ladulas.v1.ControlService.ListPeerDirectory:output_type -> ladulas.v1.ListPeerDirectoryResponse
+	136, // 231: ladulas.v1.ControlService.SearchPeerProject:output_type -> ladulas.v1.SearchPeerProjectResponse
+	138, // 232: ladulas.v1.ControlService.ReadPeerPage:output_type -> ladulas.v1.ReadPeerPageResponse
+	140, // 233: ladulas.v1.ControlService.PeerDocumentVersions:output_type -> ladulas.v1.PeerDocumentVersionsResponse
+	142, // 234: ladulas.v1.ControlService.Reload:output_type -> ladulas.v1.ReloadResponse
+	10,  // 235: ladulas.v1.ControlService.Settings:output_type -> ladulas.v1.SettingsResponse
+	10,  // 236: ladulas.v1.ControlService.SetSignTimeout:output_type -> ladulas.v1.SettingsResponse
+	180, // [180:237] is the sub-list for method output_type
+	123, // [123:180] is the sub-list for method input_type
+	123, // [123:123] is the sub-list for extension type_name
+	123, // [123:123] is the sub-list for extension extendee
+	0,   // [0:123] is the sub-list for field type_name
 }
 
 func init() { file_ladulas_v1_local_proto_init() }
@@ -10444,15 +10531,15 @@ func file_ladulas_v1_local_proto_init() {
 	file_ladulas_v1_audit_proto_init()
 	file_ladulas_v1_project_proto_init()
 	file_ladulas_v1_service_proto_init()
-	file_ladulas_v1_local_proto_msgTypes[25].OneofWrappers = []any{}
-	file_ladulas_v1_local_proto_msgTypes[33].OneofWrappers = []any{}
+	file_ladulas_v1_local_proto_msgTypes[26].OneofWrappers = []any{}
+	file_ladulas_v1_local_proto_msgTypes[34].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ladulas_v1_local_proto_rawDesc), len(file_ladulas_v1_local_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   135,
+			NumMessages:   136,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -23,6 +23,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/sshsig"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
@@ -567,12 +568,12 @@ func (n *Node) heldHere() map[string]bool {
 // requester asks again the first time it is looking for a key it does not have.
 func (n *Node) RefreshKeys(ctx context.Context) {
 	for _, l := range n.sortedLinks() {
-		addresses := l.addresses()
-		if len(addresses) == 0 {
+		targets := l.targets(ctx)
+		if len(targets) == 0 {
 			continue
 		}
 
-		l.learnKeys(ctx, addresses[0])
+		l.learnKeys(ctx, targets[0])
 	}
 }
 
@@ -817,7 +818,7 @@ func (n *Node) collectingHoldersOf(
 		}
 
 		record, ok := n.trust.Peer(borrowed.GetPeerFingerprint())
-		if !ok || trust.Dialable(record) {
+		if !ok || n.dialable(record) {
 			continue
 		}
 
@@ -1025,8 +1026,8 @@ func (n *Node) signOverLink(
 		return nil, err
 	}
 
-	addresses := holder.addresses()
-	if len(addresses) == 0 {
+	targets := holder.targets(ctx)
+	if len(targets) == 0 {
 		return nil, errors.New("peer: the key holder has no address to dial")
 	}
 
@@ -1045,9 +1046,15 @@ func (n *Node) signOverLink(
 
 	var lastErr error
 
-	for _, address := range addresses {
+	for _, over := range targets {
+		pinned, baseURL, err := over.resolve()
+		if err != nil {
+			// A tunnel that is not up yet: the fallback position doing nothing.
+			continue
+		}
+
 		client := ladulasv1connect.NewKeyServiceClient(
-			holder.client.HTTP(), holder.client.URL(address),
+			pinned.HTTP(), baseURL,
 			connect.WithSendMaxBytes(maxRequestBytes))
 
 		resp, err := client.RemoteSign(ctx, connect.NewRequest(request))
@@ -1058,13 +1065,26 @@ func (n *Node) signOverLink(
 				return nil, lastErr
 			}
 
+			holder.pathFailed(over, err)
+
 			continue
 		}
 
-		holder.succeeded(address)
+		holder.called(over.via)
 
 		return n.checkSignature(
 			holder, outgoing, body, payload, wrapSSHSIG, resp.Msg)
+	}
+
+	if lastErr == nil {
+		// Nothing was tried: every target was a tunnel that is not up. That is
+		// an unreachable holder, which decision AT falls through to the next
+		// one — a nil error here would read as an answer and stop RemoteSign
+		// at a nil response. And it is not a presence change: a tunnel still
+		// raising is no reason to blank the keys the holder offers (decision
+		// AY), so failed() is left to the link's own loop.
+		return nil, fmt.Errorf("%w: %s: %w", ErrHolderUnreachable,
+			holder.Name(), &transport.TunnelError{Err: errTunnelDown})
 	}
 
 	holder.failed(lastErr)

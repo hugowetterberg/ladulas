@@ -1,7 +1,10 @@
 package peer
 
 import (
+	"context"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
@@ -44,6 +47,17 @@ type dialer struct {
 	// ordinary call skip the race entirely. Only a direct route sets it
 	// (path.go).
 	preferred string
+	// onTunnel says the last call that worked went through the tunnel, and
+	// checked is when the path was last decided by a race rather than taken
+	// from that: a relayed tunnel yields to a direct address that answers, and
+	// asking the probe on every page of a document would cost two seconds a
+	// page whenever none does, so it is asked once a heartbeat (decision AY).
+	onTunnel bool
+	checked  time.Time
+	// tunnel is the client raised on demand to a peer whose offer names a
+	// server (decision AY), nil until one is wanted. The reaper closes it when
+	// nothing has used it for a while (reapTunnels).
+	tunnel *tunnelPath
 }
 
 // dialerFor returns the warm client for a peer, building one if there is none
@@ -69,7 +83,7 @@ func (n *Node) dialerFor(record *storepb.TrustRecord) (*dialer, error) {
 		return existing, nil
 	}
 
-	client, err := transport.NewClient(transport.ClientOptions{
+	client, err := n.newDirectClient(transport.ClientOptions{
 		Identity: n.identity,
 		Expect:   key,
 	})
@@ -87,6 +101,82 @@ func (n *Node) dialerFor(record *storepb.TrustRecord) (*dialer, error) {
 	n.dialers[fingerprint] = made
 
 	return made, nil
+}
+
+// tunnelFor is the dialer's raised tunnel to a peer, created the first time a
+// call wants one and brought into line with the peer's offer on every call;
+// nil for a peer that offers nothing this instance can raise against.
+func (d *dialer) tunnelFor(n *Node, record *storepb.TrustRecord) *tunnelPath {
+	d.mu.Lock()
+	tunnel := d.tunnel
+
+	if tunnel == nil && n.raisable(record) {
+		key, err := trust.PublicKey(record)
+		if err == nil {
+			tunnel = newTunnelPath(n, record, key)
+			d.tunnel = tunnel
+		}
+	}
+	d.mu.Unlock()
+
+	tunnel.sync(record)
+
+	if !tunnel.snapshot().usable {
+		return nil
+	}
+
+	return tunnel
+}
+
+// tunnelPath is the dialer's tunnel, nil when it has none.
+func (d *dialer) tunnelPath() *tunnelPath {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.tunnel
+}
+
+// targets orders a call's paths: the one the last call took when there is
+// one, by the precedence (onPath), and otherwise the race (Node.arrange).
+func (d *dialer) targets(
+	ctx context.Context, n *Node, tunnel *tunnelPath, addresses []string,
+) []target {
+	d.mu.Lock()
+	preferred := d.preferred
+	onTunnel := d.onTunnel
+	recent := time.Since(d.checked) < n.heartbeat
+	d.mu.Unlock()
+
+	direct := directTargets(d.client, addresses)
+
+	switch {
+	case onTunnel && tunnel.snapshot().up && recent:
+		return onPath(pathTunnel, tunnel, direct)
+	case onTunnel && tunnel.snapshot().up:
+		// The dialer has no stream for the far end to say how it sees this
+		// client, so the raise's Ping was the only report it had — and that
+		// Ping runs before hole-punching, so it nearly always says relayed.
+		// Once a heartbeat it asks again through the tunnel, which costs one
+		// round trip where the probe it would otherwise re-race costs up to
+		// probeTimeout. A punched tunnel then keeps the call ahead of direct
+		// TCP, as the precedence says; a relayed one, or one that did not
+		// answer, goes to the race (decision AY).
+		d.mu.Lock()
+		d.checked = time.Now()
+		d.mu.Unlock()
+
+		if tunnel.refresh(ctx) == nil && !tunnel.snapshot().relayed {
+			return onPath(pathTunnel, tunnel, direct)
+		}
+	case preferred != "" && slices.Contains(addresses, preferred):
+		return onPath(pathDirect, tunnel, promote(direct, preferred))
+	}
+
+	d.mu.Lock()
+	d.checked = time.Now()
+	d.mu.Unlock()
+
+	return n.arrange(ctx, tunnel, direct)
 }
 
 // order is the addresses to try, best first.
@@ -146,6 +236,8 @@ func (d *dialer) rememberRoute(via route) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.onTunnel = via.kind == pathTunnel
+
 	if via.kind != pathDirect {
 		d.preferred = ""
 
@@ -153,6 +245,14 @@ func (d *dialer) rememberRoute(via route) {
 	}
 
 	d.preferred = via.address
+}
+
+// remembered is the direct address the last call reached the peer on.
+func (d *dialer) remembered() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.preferred
 }
 
 // forget drops the remembered address, so that the next call races again.
@@ -165,14 +265,36 @@ func (d *dialer) forget() {
 	defer d.mu.Unlock()
 
 	d.preferred = ""
+	d.onTunnel = false
 }
 
 func (d *dialer) close() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	tunnel := d.tunnel
+	d.tunnel = nil
 
 	if d.client != nil {
 		d.client.CloseIdle()
+	}
+	d.mu.Unlock()
+
+	tunnel.close()
+}
+
+// closeIdle drops the dialer's pooled connections, direct and through the
+// tunnel, and keeps the tunnel itself: a raised client is a network stack, not
+// a pooled connection, and the reaper is what closes one (reapTunnels).
+func (d *dialer) closeIdle() {
+	d.mu.Lock()
+	tunnel := d.tunnel
+
+	if d.client != nil {
+		d.client.CloseIdle()
+	}
+	d.mu.Unlock()
+
+	if client := tunnel.establishedClient(); client != nil {
+		client.CloseIdle()
 	}
 }
 
@@ -216,7 +338,7 @@ func (n *Node) CloseIdle() {
 	n.dialMu.Unlock()
 
 	for _, held := range dialers {
-		held.close()
+		held.closeIdle()
 	}
 
 	n.mu.Lock()
@@ -234,5 +356,9 @@ func (n *Node) CloseIdle() {
 	// the watch loop's own read failing, which is what its backoff is for.
 	for _, existing := range links {
 		existing.client.CloseIdle()
+
+		if client := existing.tunnel.establishedClient(); client != nil {
+			client.CloseIdle()
+		}
 	}
 }

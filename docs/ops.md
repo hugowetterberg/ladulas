@@ -642,10 +642,11 @@ they need a shared network, or a re-pair, to hear the new address
 A signal for this — home DERP connected or not, from the server's own
 status — is not built.
 
-### A peer's tunnel says something other than "tunnel offered"
+### A peer's tunnel says something other than its path
 
-**Signal:** the TUNNEL column of `ladulas peers`, or the peer sheet's
-Tunnel row.
+**Signal:** the TUNNEL column of `ladulas peers` or `ladulas status`, or the
+peer sheet's Tunnel row, says something other than `tunnel direct`, `tunnel
+relayed <region>`, `direct <address>` or `tunnel offered`.
 **Action:** the words are the whole diagnosis, and each has one cause.
 `tunnel off here` — this instance has the upgrade off, or its build has no
 tailcat. `peer offers no tunnel` — the peer's build has none, or it has
@@ -658,8 +659,52 @@ key only` — a phone, or an offer whose DERP region failed the region rule
 (`ladulas_tunnel_events_total{event="region_refused"}`, and a warning in
 the log naming the reason). `tunnel offer stale` — no beat has confirmed
 it for fourteen days, or the peer's direct contacts have carried no offer at
-all for more than ten minutes; it clears on the next beat that carries one. Nothing dials over the tunnel
-yet, so none of these changes how a peer is reached today.
+all for more than ten minutes; it clears on the next beat that carries one.
+`tunnel in backoff until <time>` — raises have been failing (`event="raise_failed"`);
+the next is at that time, never more than a minute away, and sooner if the
+peer's presence comes back on any path. The causes are the ones under "The
+tunnel does not raise" below. `fallback to direct, because <reason>` — the
+tunnel broke while in use and traffic is on the direct path; it goes back
+once the tunnel has been raised again and held for three minutes. `tunnel
+address stale, no direct path` — raises are failing for a peer whose tunnel
+is its only carrier: the address it gave no longer works and nothing else
+can bring the new one. That is almost always the peer's DERP region gone
+or re-picked; it needs a shared network or a re-pair
+([decision AX](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)).
+Every word except the last leaves the peer reachable on its direct path.
+
+### The tunnel does not raise
+
+**Signal:** a peer that offers a tunnel reads `tunnel offered` or `tunnel
+in backoff until …` for longer than a minute or two, never a path word, and
+`ladulas_tunnel_events_total{event="raise_failed"}` climbs; or on the
+other machine the peer is missing from `ladulas status`'s inbound tunnels.
+**Action:** the daemon's debug log has the raise's own error ("could not
+raise a tunnel to a peer"), and it is one of four. *DERP unreachable* from
+here — outbound HTTPS to the peer's region blocked — which also means this
+machine's own server cannot be reached. *The region withdrawn* — the
+peer's address embeds a region that no longer answers; the peer has to
+re-pick, and tunnel-only pairs have to re-pair. *Version mismatch* reads as
+its own word above and never raises at all. *The allowlist out of step* —
+the error reads "the tunnel server did not answer", because a server that
+does not admit a client key never acknowledges it: the far end has not got
+this machine's offer, or lost it. A direct contact re-offers by itself after
+any failure (`event="reoffered"`), so this heals as soon as the two can reach
+each other directly; a pair with no direct path cannot heal it that way. A
+raise that gets through and then fails the pinned Ping reached somebody
+else, and is refused for exactly that reason.
+
+### A pair is on a relayed tunnel and document sync is slow
+
+**Signal:** the peer's path is `tunnel relayed <region>`, and
+`ladulas_peers{path="tunnel_relayed"}` is non-zero.
+**Action:** the tunnel could not punch a direct UDP path — symmetric NAT,
+UDP blocked — and no direct TCP address answers either, or the pair would
+be on that instead (a relayed tunnel yields to any direct address that
+answers the probe). Everything works, but through a relay that is free,
+throttled, and makes no promises, and the throttle lands on document sync
+first, since it is the one large flow. Opening UDP outbound on either side
+is what lets it punch; a self-hosted DERP map is what removes the throttle.
 
 ### The CLI says nothing is listening, but the daemon is running
 
@@ -997,10 +1042,8 @@ build reattaches to the new daemon perfectly happily.
 * **No alerting exists.** The metrics are there and nothing scrapes them on
   a schedule; the watch list above is a description of what an operator
   should look at, not of something that pages anybody.
-* **Nothing dials over the tunnel yet.** The server, the offers, the
-  allowlist and the tunnel listener's gate are in place; raising clients,
-  the path order, the fallback and hysteresis are the next step, so today
-  every peer is reached on its direct addresses whatever its tunnel says.
+* **A pending pairing is settled over its direct addresses only.** Settling
+  through the tunnel arrives with the pairing server.
 * **A DERP region cannot be moved gracefully.** A re-pick forgets the old
   region at once; keeping it serving beside the new one until every peer
   has the new address is designed and not built.

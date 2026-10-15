@@ -467,27 +467,149 @@ func (t *Tunnel) Close() error {
 // view of that client (Server.Status, since tailcat v0.7.0): a current direct
 // address is a punched path, and anything else is the relay.
 func (t *Tunnel) path(server *tailcat.Server, client key.NodePublic) string {
-	relayed := "tunnel, relayed via DERP " + t.Region()
+	connected, relayed, relay := t.clientState(server, client)
 
+	switch {
+	case connected && !relayed:
+		return "tunnel, direct"
+	case relay != "":
+		return "tunnel, relayed via DERP " + relay
+	default:
+		return "tunnel, relayed via DERP " + t.Region()
+	}
+}
+
+// clientState is the server's view of one client: whether it is a peer of the
+// server at all, and if so whether a relay carries it and which.
+func (t *Tunnel) clientState(
+	server *tailcat.Server, client key.NodePublic,
+) (connected, relayed bool, relay string) {
 	status := server.Status()
 	if status == nil {
-		return relayed
+		return false, false, ""
 	}
 
 	peer, ok := status.Peer[client]
 	if !ok || peer == nil {
-		return relayed
+		return false, false, ""
 	}
 
 	if peer.CurAddr != "" {
-		return "tunnel, direct"
+		return true, false, ""
 	}
 
-	if peer.Relay != "" {
-		return "tunnel, relayed via DERP " + peer.Relay
+	return true, true, peer.Relay
+}
+
+// ClientPath implements peer.Tunnel: how the server sees one client key now,
+// for the report the listening side sends the dialling side (decision AY).
+func (t *Tunnel) ClientPath(clientKey []byte) string {
+	if len(clientKey) != 32 {
+		return ""
 	}
 
-	return relayed
+	t.mu.Lock()
+	server := t.server
+	t.mu.Unlock()
+
+	if server == nil {
+		return ""
+	}
+
+	connected, relayed, relay := t.clientState(server, key.NodePublicFromRaw32(mem.B(clientKey)))
+
+	switch {
+	case !connected:
+		return ""
+	case !relayed:
+		return peer.ClientPathDirect
+	case relay != "":
+		return peer.ClientPathRelayed + " " + relay
+	default:
+		return peer.ClientPathRelayed
+	}
+}
+
+// Raise implements peer.Tunnel: a tailcat client to a peer's server, with this
+// instance's client key, so that the peer's allowlist — which admitted that
+// key when it arrived over an authenticated channel — lets it in (decision
+// AY). Every client is a whole network stack, per server address.
+//
+// The address embeds its DERP region whole (Server.TailcatAddr always does),
+// so the client fetches no map. The region rule has been applied to it in
+// pkg/peer, which holds the offer, before this is called.
+func (t *Tunnel) Raise(serverAddress string) (peer.TunnelClient, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+
+	if closed {
+		return nil, errors.New("tunnel: closed")
+	}
+
+	if _, err := tailcat.ParseAddr(tailcat.Addr(serverAddress)); err != nil {
+		return nil, fmt.Errorf("tunnel: %w", err)
+	}
+
+	clientKey, err := nodePrivate(t.opts.ClientKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tunnelClient{client: &tailcat.Client{
+		Server:     tailcat.Addr(serverAddress),
+		Key:        clientKey,
+		DERPMapURL: t.opts.DERPMapURL,
+		Logf: func(format string, args ...any) {
+			t.log.Debug("tailcat client: " + fmt.Sprintf(format, args...))
+		},
+	}}, nil
+}
+
+// tunnelClient is a tailcat client as peer.TunnelClient.
+type tunnelClient struct {
+	client *tailcat.Client
+}
+
+func (c *tunnelClient) Ping(deadlineUnixNano int64) error {
+	ctx, cancel := deadlineContext(deadlineUnixNano)
+	defer cancel()
+
+	if _, err := c.client.Ping(ctx); err != nil {
+		return fmt.Errorf("tunnel: ping the server: %w", err)
+	}
+
+	return nil
+}
+
+func (c *tunnelClient) Dial(deadlineUnixNano int64) (transport.TunnelConn, error) {
+	ctx, cancel := deadlineContext(deadlineUnixNano)
+	defer cancel()
+
+	conn, err := c.client.DialTCPPort(ctx, Port)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel: dial the peer port: %w", err)
+	}
+
+	return &tunnelConn{Conn: conn, path: "tunnel"}, nil
+}
+
+func (c *tunnelClient) Close() error {
+	if err := c.client.Close(); err != nil {
+		return fmt.Errorf("tunnel: close the client: %w", err)
+	}
+
+	return nil
+}
+
+// deadlineContext is a context for a deadline in Unix nanoseconds, zero for
+// none.
+func deadlineContext(unixNano int64) (context.Context, context.CancelFunc) {
+	if unixNano == 0 {
+		return context.WithCancel(context.Background())
+	}
+
+	return context.WithDeadline(context.Background(), time.Unix(0, unixNano))
 }
 
 // tunnelListener is the server's listener as transport.TunnelListener.

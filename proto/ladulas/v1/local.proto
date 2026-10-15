@@ -537,13 +537,18 @@ message PeerStatus {
   bool dialable = 13;
   // Which kind of path the peer is in contact over, when online is true:
   // "direct" for a pinned TLS connection to or from one of its addresses,
-  // which is the only kind there is. Empty when it is not in contact.
+  // "tunnel direct" for the tunnel over a punched UDP path, and "tunnel
+  // relayed <region>" for the tunnel through a DERP relay (decision AY).
+  // Empty when it is not in contact.
   string path = 14;
   // What this instance knows about a tunnel to the peer, in the words of the
-  // state set decision AX defines once (trust.DescribeTunnel): "tunnel off
-  // here", "peer offers no tunnel", "peer withdrew its tunnel", "version
-  // mismatch (ours …, theirs …)", "tunnel offer stale", or "tunnel offered".
-  // Empty from an older daemon.
+  // state set defined once in trust.DescribeTunnel (decisions AX and AY):
+  // "direct <address>", "tunnel direct", "tunnel relayed <region>", "fallback
+  // to direct, because <reason>", "tunnel in backoff until <time>", "tunnel
+  // off here", "peer offers no tunnel", "version mismatch (ours …, theirs …)",
+  // "peer withdrew its tunnel", "tunnel address stale, no direct path",
+  // "tunnel offer stale", "peer offers a client key only", or "tunnel
+  // offered". Empty from an older daemon.
   string tunnel = 15;
 }
 
@@ -605,6 +610,20 @@ message StatusResponse {
   // and `doctor` can say a tool has put something in the agent without a
   // second call.
   int32 local_keys = 17;
+  // The tunnel clients connected to this instance's long-lived tunnel server,
+  // one per paired peer whose client is up, as the server sees them
+  // (decision AY). The listening side's half of `ladulas status`: the dialling
+  // side's path is on each peer, and this is what the other end of it looks
+  // like from here.
+  repeated InboundTunnel inbound_tunnels = 18;
+}
+
+// InboundTunnel is one peer's tunnel client as this instance's server sees it.
+message InboundTunnel {
+  string name = 1;
+  string fingerprint = 2;
+  // "tunnel direct" for a punched UDP path, or "tunnel relayed <region>".
+  string path = 3;
 }
 
 // InstanceLocations is where a running instance keeps things.

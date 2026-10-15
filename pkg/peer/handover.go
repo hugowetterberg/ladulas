@@ -14,7 +14,6 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
-	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // Handing a portable key to a paired peer (§10, decision S).
@@ -246,7 +245,7 @@ func (n *Node) deliverHandover(
 	ctx context.Context, record *storepb.TrustRecord,
 	handover *storepb.QueuedKeyHandover,
 ) {
-	if !trust.Dialable(record) {
+	if !n.dialable(record) {
 		n.wakeForKey(record.GetFingerprint())
 
 		return
@@ -335,7 +334,7 @@ func (n *Node) deliverQueuedKeys(ctx context.Context) {
 			continue
 		}
 
-		if !trust.Dialable(record) {
+		if !n.dialable(record) {
 			continue
 		}
 

@@ -417,14 +417,16 @@ type PeerView struct {
 	// which sentence to put beside the state.
 	Dialable bool `json:"dialable"`
 	// Path is which kind of path the peer is in contact over while it is, in
-	// the control API's word for it ("direct"), and empty while it is not. It
+	// the control API's word for it ("direct", "tunnel direct", "tunnel
+	// relayed <region>"; decision AY), and empty while it is not. It
 	// is carried separately from State so that a surface which wants to show
 	// the path beside the pill does not have to parse the pill; State already
 	// names any path that is not the ordinary one (trust.DescribeState).
 	Path string `json:"path,omitempty"`
 	// Tunnel is what this instance knows about a tunnel to the peer, in the
-	// daemon's word from the one set decision AX defines
-	// (trust.DescribeTunnel): "tunnel off here", "tunnel offered", and so on.
+	// daemon's word from the one set decisions AX and AY define
+	// (trust.DescribeTunnel): "tunnel off here", "tunnel relayed fra",
+	// "fallback to direct, because …", and so on.
 	// Empty from a daemon too old to say.
 	Tunnel string `json:"tunnel,omitempty"`
 	// LastSeen is when there was last a link, for the rows that have not got one

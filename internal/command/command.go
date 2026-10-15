@@ -608,14 +608,45 @@ func printPeerStatus(
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintln(w, "  NAME\tDIRECTION\tSTATE\tFINGERPRINT")
+	fmt.Fprintln(w, "  NAME\tDIRECTION\tSTATE\tTUNNEL\tFINGERPRINT")
 
 	for _, peer := range peers {
-		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
 			peer.GetName(),
 			directionWord(peer.GetMayApprove(), peer.GetMayRequest()),
 			peerState(peer),
+			tunnelWord(peer),
 			peer.GetFingerprint())
+	}
+
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("write table: %w", err)
+	}
+
+	return printInboundTunnels(live.GetInboundTunnels())
+}
+
+// printInboundTunnels is the listening side's half of the tunnel (decision
+// AY): which peers' clients are connected to this instance's tunnel server,
+// and whether each is punched or relayed, as the server sees it. The peer
+// table above is the dialling side's view of the same connections, which is
+// why a pair can read "tunnel relayed" on one machine and appear here on the
+// other.
+func printInboundTunnels(inbound []*ladulasv1.InboundTunnel) error {
+	if len(inbound) == 0 {
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("Inbound tunnels")
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+	fmt.Fprintln(w, "  NAME\tPATH\tFINGERPRINT")
+
+	for _, tunnel := range inbound {
+		fmt.Fprintf(w, "  %s\t%s\t%s\n",
+			tunnel.GetName(), tunnel.GetPath(), tunnel.GetFingerprint())
 	}
 
 	if err := w.Flush(); err != nil {

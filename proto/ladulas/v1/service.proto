@@ -1028,6 +1028,12 @@ service PresenceService {
 
 message PingRequest {
   google.protobuf.Timestamp sent_at = 1;
+  // The caller's tunnel offer (decision AX). A Ping is how a caller re-offers
+  // over a direct contact after its tunnel failed, so that an allowlist entry
+  // the far end lost heals itself, and how a dial-back that holds no stream
+  // says anything about its tunnel at all (§8, decision AY). Absent says
+  // nothing, as on every other carrier.
+  TunnelOffer tunnel = 2;
 }
 
 message PingResponse {
@@ -1035,6 +1041,9 @@ message PingResponse {
   string instance_name = 2;
   // Whether this peer currently has a human able to answer a prompt.
   bool can_prompt = 3;
+  // How this instance's tunnel server sees the caller's tunnel client
+  // (decision AY). The raise reads it from the Ping that proves the tunnel.
+  TunnelPathReport tunnel_path = 4;
 }
 
 message WatchRequest {
@@ -1057,6 +1066,26 @@ message PresenceEvent {
   // The approver's tunnel offer, on every beat, beside the addresses it does
   // not replace (decision AX). A rotated key reaches a requester this way.
   TunnelOffer tunnel = 5;
+  // How the approver's tunnel server sees the requester's tunnel client, on
+  // every beat (decision AY), whichever path this stream is on. It is how a
+  // requester tells a punched tunnel from a relayed one: its own client has
+  // only an active probe to ask, and the listening side already knows.
+  TunnelPathReport tunnel_path = 6;
+}
+
+// TunnelPathReport is the listening side's view of one caller's tunnel client
+// (decision AY), from tailcat's Server.Status: whether that client is
+// connected at all, and whether a punched UDP path carries it or a DERP relay
+// does. It decides path precedence on the dialling side — a punched tunnel
+// beats direct TCP, and direct TCP beats a relayed tunnel — and is said by the
+// side that knows rather than probed for by the side that does not.
+message TunnelPathReport {
+  // Whether the caller's client is connected to this instance's server.
+  bool connected = 1;
+  // Whether a DERP relay carries it, rather than a punched UDP path.
+  bool relayed = 2;
+  // The relay's region, when relayed.
+  string relay = 3;
 }
 
 // TunnelOffer is one instance's half of the tunnel upgrade (§8, decision AX):

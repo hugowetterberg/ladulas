@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -299,4 +300,117 @@ func unixNano(t time.Time) int64 {
 	}
 
 	return t.UnixNano()
+}
+
+// TunnelDialer opens connections to a peer's tunnel server: one tailcat
+// client, raised against the peer's server address (decision AY). The deadline
+// is Unix nanoseconds, zero for none, for the reason TunnelConn's are.
+type TunnelDialer interface {
+	Dial(deadlineUnixNano int64) (TunnelConn, error)
+}
+
+// TunnelHost is the host every tunnel client's URLs name. It is never
+// resolved and never dialled — the client's every connection goes through its
+// tunnel whatever the URL says — and it is not an address, so nothing that
+// keeps addresses can mistake it for one (§8, "a path is not an address").
+const TunnelHost = "tunnel"
+
+// NewTunnelClient is NewClient with every connection opened through a tunnel
+// instead of a TCP dial (decision AY).
+//
+// Nothing else changes, and that is the point: the same certificate, the same
+// TLS 1.3 configuration and the same pin to the same identity key as a direct
+// client, so that a tunnel which comes up and reaches somebody else is a
+// failed handshake rather than a new peer. Expect is required here. A tunnel
+// is raised only to a peer that is already paired, and a client that would pin
+// whatever it met first has no business being pointed through one.
+func NewTunnelClient(opts ClientOptions, tunnel TunnelDialer) (*Client, error) {
+	if opts.Expect == nil {
+		return nil, errors.New("transport: a tunnel client needs the identity to expect")
+	}
+
+	if tunnel == nil {
+		return nil, errors.New("transport: a tunnel client needs a tunnel")
+	}
+
+	client, err := NewClient(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	transport, ok := client.http.Transport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("transport: unexpected client transport")
+	}
+
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialTunnel(ctx, tunnel)
+	}
+
+	return client, nil
+}
+
+// dialTunnel opens one connection through a tunnel, bounded by the context.
+//
+// TunnelDialer takes a deadline rather than a context, because gomobile binds
+// no context, so a cancellation that arrives before the deadline is honoured
+// here: the call returns at once, and the connection the dial produces later
+// is closed rather than leaked.
+func dialTunnel(ctx context.Context, tunnel TunnelDialer) (net.Conn, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > DialTimeout {
+		deadline = time.Now().Add(DialTimeout)
+	}
+
+	type dialled struct {
+		conn TunnelConn
+		err  error
+	}
+
+	done := make(chan dialled, 1)
+
+	go func() {
+		conn, err := tunnel.Dial(deadline.UnixNano())
+		done <- dialled{conn: conn, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			return nil, &TunnelError{Err: got.err}
+		}
+
+		return &tunnelNetConn{
+			conn:   got.conn,
+			remote: tunnelAddr{path: got.conn.Path(), key: got.conn.ClientKey()},
+		}, nil
+	case <-ctx.Done():
+		go func() {
+			if got := <-done; got.conn != nil {
+				_ = got.conn.Close()
+			}
+		}()
+
+		return nil, &TunnelError{Err: ctx.Err()}
+	}
+}
+
+// TunnelError is a failure to reach a peer through its tunnel, as opposed to
+// through one of its addresses (decision AY). It has a type of its own so that
+// a report of every way a call failed can rank it apart: a raise that timed
+// out and an address that refused are both "nothing answered", and without
+// the type the later of the two would win and the report would hide that the
+// tunnel was the path expected to work (peer.failureRank).
+type TunnelError struct {
+	Err error
+}
+
+// Error implements error.
+func (e *TunnelError) Error() string {
+	return "through the tunnel: " + e.Err.Error()
+}
+
+// Unwrap lets errors.Is see the cause: a deadline, a refusal, a closed tunnel.
+func (e *TunnelError) Unwrap() error {
+	return e.Err
 }

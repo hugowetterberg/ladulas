@@ -136,6 +136,8 @@ func (s *controlService) Status(
 
 	resp.ListenAddresses = fromNode.Msg.GetListenAddresses()
 	resp.Peers = fromNode.Msg.GetPeers()
+	// The listening side's half of the tunnel (decision AY).
+	resp.InboundTunnels = fromNode.Msg.GetInboundTunnels()
 	// The keys on other machines, including the machines that are not there
 	// (decision N). It is the answer `ladulas keys list` is really after on a
 	// keyless box, and the reason it is here rather than derived from the peer

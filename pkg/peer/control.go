@@ -40,12 +40,38 @@ func (n *Node) Status(
 	}
 
 	resp.Peers = n.PeerStatuses()
+	// The listening side's half of the tunnel (decision AY).
+	resp.InboundTunnels = n.InboundTunnels()
 	// Beside the per-peer offered keys, which say what is usable this second,
 	// the whole borrowed set — including the keys on peers that are not there
 	// (decision N).
 	resp.BorrowedKeys = n.BorrowedKeys()
 
 	return connect.NewResponse(resp), nil
+}
+
+// InboundTunnels is every paired peer whose tunnel client is connected to this
+// instance's server, as the server sees it (decision AY). It is the listening
+// side's view, from tailcat's Server.Status: the dialling side has only an
+// active probe to ask, which is why the server also says it to the peer on
+// every beat.
+func (n *Node) InboundTunnels() []*ladulasv1.InboundTunnel {
+	var out []*ladulasv1.InboundTunnel
+
+	for _, record := range n.trust.Peers() {
+		report := n.clientReport(record)
+		if !report.GetConnected() {
+			continue
+		}
+
+		out = append(out, &ladulasv1.InboundTunnel{
+			Name:        record.GetName(),
+			Fingerprint: record.GetFingerprint(),
+			Path:        trust.TunnelPath(report.GetRelayed(), report.GetRelay()),
+		})
+	}
+
+	return out
 }
 
 // PeerStatuses is the peer list an embedder can show without going through the
@@ -73,10 +99,15 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 		AllKeys:     record.GetMayUseAllKeys(),
 		PairedAt:    record.GetPairedAt(),
 		// Computed here so that no surface repeats the rule (§3, trust.Dialable).
-		Dialable: trust.Dialable(record),
-		// And the tunnel's word, from the one place that has it (decision AX).
-		Tunnel: n.describeTunnel(record),
+		Dialable: n.dialable(record),
 	}
+
+	// The raised tunnel, if any, and the direct address in use, for the
+	// tunnel's word below.
+	var (
+		tunnel  *tunnelPath
+		address string
+	)
 
 	// A link reports its own state and is the better answer when there is one.
 	// Without one, what is left is how the last dial went — which for an
@@ -85,10 +116,23 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 	// never having been tried.
 	existing := n.link(record.GetFingerprint())
 	if existing == nil {
+		n.dialMu.Lock()
+		held := n.dialers[record.GetFingerprint()]
+		n.dialMu.Unlock()
+
+		if held != nil {
+			tunnel = held.tunnelPath()
+			address = held.remembered()
+		}
+
 		if state := n.reachOf(record.GetFingerprint()); state != nil {
 			status.Online = state.online
 			status.Path = state.path.word()
 			status.LastError = state.lastErr
+
+			if state.path == pathTunnel {
+				status.Path = tunnel.word()
+			}
 
 			if !state.lastSeen.IsZero() {
 				status.LastSeenAt = timestamppb.New(state.lastSeen)
@@ -97,8 +141,11 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 	} else {
 		online, lastErr, lastSeen := existing.State()
 
+		tunnel = existing.tunnel
+		address = existing.directAddress()
+
 		status.Online = online
-		status.Path = existing.currentPath().word()
+		status.Path = existing.currentWord()
 		status.LastError = lastErr
 		// What the peer offers is only known while a link is up, which is exactly
 		// the state in which a keyless box can actually use it.
@@ -120,9 +167,11 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 	if holding {
 		status.Online = true
 
-		// The peer dialled in, and the only way in is the listener on this
-		// instance's addresses, so the call it is holding is a direct one. A
-		// listener for a path that is not an address will have to say so itself.
+		// The peer dialled in. The calls a peer holds open here are a phone's
+		// collections, and a phone is not on the tunnel yet (§8), so the call
+		// it is holding is a direct one. When phones join the tunnel, the
+		// connection's RemoteAddr — the path, on the tunnel listener — is what
+		// will have to say otherwise.
 		if status.GetPath() == "" {
 			status.Path = pathDirect.word()
 		}
@@ -133,6 +182,14 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 			lastCall.After(status.GetLastSeenAt().AsTime())) {
 		status.LastSeenAt = timestamppb.New(lastCall)
 	}
+
+	// And the tunnel's word, from the one place that has it (decisions AX
+	// and AY).
+	if status.GetPath() != pathDirect.word() {
+		address = ""
+	}
+
+	status.Tunnel = n.describeTunnel(record, status.GetPath(), address, tunnel)
 
 	return status
 }

@@ -15,7 +15,6 @@ import (
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1/ladulasv1connect"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
-	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // The approver's half of poll-on-open (§11).
@@ -134,7 +133,7 @@ func (n *Node) requesters() []*storepb.TrustRecord {
 	var out []*storepb.TrustRecord
 
 	for _, record := range n.trust.Peers() {
-		if record.GetMayRequest() && trust.Dialable(record) {
+		if record.GetMayRequest() && n.dialable(record) {
 			out = append(out, record)
 		}
 	}

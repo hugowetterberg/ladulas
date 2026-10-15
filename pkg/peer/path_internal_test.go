@@ -13,12 +13,12 @@ import (
 //
 // The case is the café laptop. At home its link's preferred address was the
 // desktop's LAN address; it moved onto a path that is not an address, and then
-// that path dropped. Nothing on the indirect path updated preferred, so if it
+// that path dropped. Nothing on the tunnel path updated preferred, so if it
 // were still trusted the presence loop would spend three rounds on a LAN
 // address that is blackholed from the café before sweeping, and decision AQ
-// would re-add it to the record on every beat. Nothing takes an indirect path
-// yet; this is the rule being in place before anything does.
-func TestAnIndirectRouteLeavesTheAddressMachineryAlone(t *testing.T) {
+// would re-add it to the record on every beat. The tunnel is that path
+// (decision AY); the rule was in place before it was.
+func TestATunnelRouteLeavesTheAddressMachineryAlone(t *testing.T) {
 	t.Parallel()
 
 	record := []string{"100.74.235.31:7373", "192.168.1.10:7373"}
@@ -50,31 +50,31 @@ func TestAnIndirectRouteLeavesTheAddressMachineryAlone(t *testing.T) {
 		t.Errorf("after a direct beat the link is on %v", got)
 	}
 
-	l.reached(route{kind: pathIndirect})
+	l.reached(route{kind: pathTunnel})
 
 	if l.preferred != "192.168.1.10:7373" {
-		t.Errorf("an indirect route rewrote the direct address to %q", l.preferred)
+		t.Errorf("a tunnel route rewrote the direct address to %q", l.preferred)
 	}
 
 	// Not reported as where the peer is being reached, so learnAddresses keeps
 	// nothing the peer stopped advertising.
 	if got := n.lastReached(fingerprint); got != "" {
-		t.Errorf("over an indirect path the reached address is still %q", got)
+		t.Errorf("over a tunnel path the reached address is still %q", got)
 	}
 
 	// And not tried alone, nor first: the record in its own order.
 	if got := l.presenceOrder(); !slices.Equal(got, record) {
-		t.Errorf("over an indirect path presence would try %v, want the record %v",
+		t.Errorf("over a tunnel path presence would try %v, want the record %v",
 			got, record)
 	}
 
 	if got := l.addresses(); !slices.Equal(got, record) {
-		t.Errorf("over an indirect path calls would try %v, want the record %v",
+		t.Errorf("over a tunnel path calls would try %v, want the record %v",
 			got, record)
 	}
 
-	if got := l.currentPath(); got != pathIndirect {
-		t.Errorf("the link reports %v, want the indirect path", got)
+	if got := l.currentPath(); got != pathTunnel {
+		t.Errorf("the link reports %v, want the tunnel path", got)
 	}
 
 	// A direct dial confirms an address again, and things are as they were.
@@ -91,7 +91,7 @@ func TestAnIndirectRouteLeavesTheAddressMachineryAlone(t *testing.T) {
 
 // The dialer's half: a call that went some other way drops the remembered
 // address, so the next direct call races rather than trusting it.
-func TestADialerForgetsWhatAnIndirectRouteSaysNothingAbout(t *testing.T) {
+func TestADialerForgetsWhatATunnelRouteSaysNothingAbout(t *testing.T) {
 	t.Parallel()
 
 	held := &dialer{}
@@ -111,16 +111,16 @@ func TestADialerForgetsWhatAnIndirectRouteSaysNothingAbout(t *testing.T) {
 		t.Fatalf("a remembered direct address gave %v, raced %v", got, raced)
 	}
 
-	held.rememberRoute(route{kind: pathIndirect})
+	held.rememberRoute(route{kind: pathTunnel})
 
 	if held.preferred != "" {
-		t.Errorf("an indirect route left %q remembered", held.preferred)
+		t.Errorf("a tunnel route left %q remembered", held.preferred)
 	}
 
 	held.order(race, addresses)
 
 	if !raced {
-		t.Error("after an indirect route the next direct call did not race")
+		t.Error("after a tunnel route the next direct call did not race")
 	}
 }
 
@@ -163,12 +163,12 @@ func TestTheReachedAddressRuleIsForDirectDialsOnly(t *testing.T) {
 			"address kept first", record.GetAddresses())
 	}
 
-	held.rememberRoute(route{kind: pathIndirect})
+	held.rememberRoute(route{kind: pathTunnel})
 	approver.node.learnAddresses(fingerprint, []string{later})
 
 	record, _ = approver.store.Peer(fingerprint)
 	if !slices.Equal(record.GetAddresses(), []string{later}) {
-		t.Errorf("after an indirect route the record is %v, want only what the "+
+		t.Errorf("after a tunnel route the record is %v, want only what the "+
 			"peer advertises", record.GetAddresses())
 	}
 }

@@ -38,6 +38,10 @@ type fakeTunnel struct {
 	region   string
 	closed   chan struct{}
 	once     sync.Once
+	// fabric is what carries connections between fake tunnels, for the tests
+	// of the dialling half (decision AY); nil where only the bookkeeping is
+	// under test, and then nothing can be raised.
+	fabric *fabric
 }
 
 func newFakeTunnel(address string, client byte) *fakeTunnel {
@@ -70,7 +74,27 @@ func (f *fakeTunnel) Start() (string, error) {
 func (f *fakeTunnel) ClientKey() []byte { return f.client }
 
 func (f *fakeTunnel) Listen() (transport.TunnelListener, error) {
+	if f.fabric != nil {
+		return f.fabric.listen(f), nil
+	}
+
 	return &idleListener{closed: f.closed, once: &f.once}, nil
+}
+
+func (f *fakeTunnel) Raise(address string) (TunnelClient, error) {
+	if f.fabric == nil {
+		return nil, errors.New("no fabric to raise over")
+	}
+
+	return &fabricClient{fabric: f.fabric, address: address, key: f.client}, nil
+}
+
+func (f *fakeTunnel) ClientPath(key []byte) string {
+	if f.fabric == nil {
+		return ""
+	}
+
+	return f.fabric.clientPath(f.address, key)
 }
 
 func (f *fakeTunnel) Admit(key []byte) {
@@ -262,7 +286,7 @@ func TestAWithdrawalClearsTheOfferAndTheAllowlist(t *testing.T) {
 		t.Error("a withdrawn client key is still admitted")
 	}
 
-	if got := trust.DescribeTunnel(record, 1, false); got != trust.TunnelWithdrawn {
+	if got := trust.DescribeTunnel(record, &trust.TunnelFacts{Ours: 1}); got != trust.TunnelWithdrawn {
 		t.Errorf("a withdrawn tunnel reads %q", got)
 	}
 
@@ -275,7 +299,7 @@ func TestAWithdrawalClearsTheOfferAndTheAllowlist(t *testing.T) {
 	}
 
 	desk, _ := store.Peer("SHA256:desk")
-	if got := trust.DescribeTunnel(desk, 1, false); got != trust.TunnelNoOffer {
+	if got := trust.DescribeTunnel(desk, &trust.TunnelFacts{Ours: 1}); got != trust.TunnelNoOffer {
 		t.Errorf("a peer that never offered reads %q", got)
 	}
 }
@@ -440,11 +464,11 @@ func TestTheTunnelGate(t *testing.T) {
 	}
 }
 
-// A tunnel offer does not make a peer dialable until something can dial over
-// the tunnel: until then a collector that offers one stays a collector, and its
-// offer never ages out, since nothing but its tunnel could carry the next one
-// (decision AX).
-func TestATunnelOnlyPeerStaysUndialableAndNeverStale(t *testing.T) {
+// A tunnel offer makes a peer dialable only for an instance that can raise a
+// client to it (decision AY): with the upgrade off here a collector that
+// offers one stays a collector. And its offer never ages out, since nothing
+// but its tunnel could carry the next one (decision AX).
+func TestATunnelOnlyPeerIsDialableOnlyWithATunnelAndNeverStale(t *testing.T) {
 	t.Parallel()
 
 	tunnelOnly := &storepb.TrustRecord{
@@ -452,9 +476,14 @@ func TestATunnelOnlyPeerStaysUndialableAndNeverStale(t *testing.T) {
 		Tunnel:      offerFrom("tccafe", 1),
 	}
 
-	if trust.Dialable(tunnelOnly) {
+	if tunnelNode(&memoryStore{}, nil).dialable(tunnelOnly) {
 		t.Error("a peer with only a tunnel server address is dialable " +
-			"before anything can dial over the tunnel")
+			"by an instance that has no tunnel to raise with")
+	}
+
+	if !tunnelNode(&memoryStore{}, newFakeTunnel("tcours", 9)).dialable(tunnelOnly) {
+		t.Error("a peer with only a tunnel server address is not dialable " +
+			"by an instance that can raise a client to it")
 	}
 
 	if !trust.TunnelServes(tunnelOnly.GetTunnel()) {
@@ -537,8 +566,9 @@ func TestAbsentBeatsContradictOnlyWhenTheyKeepComing(t *testing.T) {
 }
 
 // An approver that collects from an inbox, and has turned the tunnel on, still
-// collects: its offer must not move it to a link nothing can connect over,
-// which would leave its requester asking it nothing at all (decision AX).
+// collects from a requester that has the upgrade off: its offer must not move
+// it to a link nothing can connect over, which would leave its requester
+// asking it nothing at all (decisions AX and AY).
 func TestACollectorWithATunnelOfferKeepsItsInbox(t *testing.T) {
 	phone := newPhone(t, "collector")
 	requester := newInstance(t, "builder")
@@ -842,7 +872,7 @@ func TestPairingExchangesAndAdmitsTunnelOffers(t *testing.T) {
 		t.Error("the two client keys were not admitted on both sides")
 	}
 
-	if got := approver.node.describeTunnel(theirs); got != trust.TunnelOffered {
+	if got := approver.node.describeTunnel(theirs, "", "", nil); got != trust.TunnelOffered {
 		t.Errorf("the paired peer's tunnel reads %q", got)
 	}
 }

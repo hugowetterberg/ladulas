@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"connectrpc.com/connect"
 
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
 	"github.com/hugowetterberg/ladulas/pkg/transport"
@@ -90,17 +93,21 @@ func (n *Node) reachOf(fingerprint string) *reach {
 	return &copied
 }
 
-// call runs something against a peer, trying its addresses in turn.
+// call runs something against a peer, trying its paths in turn.
+//
+// A link's paths are tried when there is a link, in the order its established
+// path gives (link.targets). Otherwise the dialer's: a warm client, the address
+// it last reached the peer on, and — for a peer whose offer names a server —
+// a tunnel raised on demand (decision AY), with the raise raced against the
+// direct probe whenever no path is established, so that no call waits on it.
 func (n *Node) call(
 	ctx context.Context,
 	record *storepb.TrustRecord,
 	fn func(ctx context.Context, client *http.Client, baseURL string) error,
 ) error {
 	if existing := n.link(record.GetFingerprint()); existing != nil {
-		used, err := n.callOver(ctx, existing.client, existing.addresses(), fn)
-		if used != "" {
-			existing.succeeded(used)
-		}
+		used, err := n.callOver(ctx, existing.targets(ctx), fn)
+		existing.called(used)
 
 		return err
 	}
@@ -113,17 +120,22 @@ func (n *Node) call(
 		return err
 	}
 
-	addresses := held.order(func(all []string) []string {
-		return reachableFirst(ctx, all)
-	}, record.GetAddresses())
+	tunnel := held.tunnelFor(n, record)
 
-	used, err := n.callOver(ctx, held.client, addresses, fn)
+	used, err := n.callOver(ctx, held.targets(ctx, n, tunnel, record.GetAddresses()), fn)
 
 	switch {
-	case used != "":
-		held.remember(used)
+	case used.kind != pathNone:
+		held.rememberRoute(used)
+
+		// The first thing done over a direct contact after the tunnel failed
+		// is to say the offer again, so an allowlist entry the far end lost
+		// heals itself (§8).
+		if used.kind == pathDirect && tunnel.takeReoffer() {
+			go n.reoffer(held.client, used.address)
+		}
 	case ctx.Err() == nil:
-		// Every address failed, and the one that worked before is the least
+		// Every path failed, and the address that worked before is the least
 		// likely to be the right guess on whatever network this is now.
 		held.forget()
 	}
@@ -132,14 +144,15 @@ func (n *Node) call(
 	// the background, or a long poll being torn down — so it is not recorded as
 	// having failed to reach anybody.
 	if ctx.Err() == nil {
-		n.noteReach(record.GetFingerprint(), pathDirect, err)
+		n.noteReach(record.GetFingerprint(), used.kind, err)
 	}
 
 	return err
 }
 
-// callOver tries a peer's addresses in turn and reports the most informative
-// failure, which is not the last one.
+// callOver tries a peer's paths in turn and reports the most informative
+// failure, which is not the last one. It returns the route that worked, of
+// kind pathNone when none did.
 //
 // It returned the last error until 2026-08-21, and the last address is the worst
 // one by construction — the list is ordered best first, so the final attempt is
@@ -191,6 +204,32 @@ func reachableFirst(ctx context.Context, addresses []string) []string {
 		return addresses
 	}
 
+	first := firstAnswering(ctx, addresses)
+	if first == "" {
+		return addresses
+	}
+
+	out := make([]string, 0, len(addresses))
+	out = append(out, first)
+
+	for _, address := range addresses {
+		if address != first {
+			out = append(out, address)
+		}
+	}
+
+	return out
+}
+
+// firstAnswering is the race itself: the first address that accepts a TCP
+// connect inside probeTimeout, or "" when none does. It probes a single
+// address too, because deciding between direct TCP and a relayed tunnel needs
+// to know whether that one address answers (route.go).
+func firstAnswering(ctx context.Context, addresses []string) string {
+	if len(addresses) == 0 {
+		return ""
+	}
+
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
@@ -238,30 +277,16 @@ func reachableFirst(ctx context.Context, addresses []string) []string {
 	case <-probeCtx.Done():
 	}
 
-	if first == "" {
-		return addresses
-	}
-
-	out := make([]string, 0, len(addresses))
-	out = append(out, first)
-
-	for _, address := range addresses {
-		if address != first {
-			out = append(out, address)
-		}
-	}
-
-	return out
+	return first
 }
 
 func (n *Node) callOver(
 	ctx context.Context,
-	client *transport.Client,
-	addresses []string,
+	targets []target,
 	fn func(ctx context.Context, client *http.Client, baseURL string) error,
-) (string, error) {
-	if len(addresses) == 0 {
-		return "", ErrNoAddress
+) (route, error) {
+	if len(targets) == 0 {
+		return route{}, ErrNoAddress
 	}
 
 	var (
@@ -271,14 +296,33 @@ func (n *Node) callOver(
 		ourselves int
 	)
 
-	for _, address := range addresses {
-		err := fn(ctx, client.HTTP(), client.URL(address))
+	for _, t := range targets {
+		client, baseURL, err := t.resolve()
 		if err == nil {
-			return address, nil
+			err = fn(ctx, client.HTTP(), baseURL)
+			if err == nil {
+				return t.via, nil
+			}
+
+			if t.via.kind == pathTunnel && ctx.Err() == nil &&
+				transportFailure(err) {
+				// The tunnel was up and the call through it failed on the way
+				// rather than in the answer: it is torn down and held back, and
+				// the rest of the list is the fallback (§8). Not when the
+				// caller's own budget ran out: a diff fetch that outlives its
+				// thirty seconds over a slow relay says nothing against the
+				// tunnel, and tearing it down for that would break the presence
+				// stream riding on it.
+				t.tunnel.failed(err)
+			}
+		} else if t.via.kind == pathTunnel && len(targets) > 1 {
+			// A tunnel that is not up yet is the fallback position doing
+			// nothing, not a failure worth reporting over the addresses.
+			continue
 		}
 
 		if ctx.Err() != nil {
-			return "", err
+			return route{}, err
 		}
 
 		if errors.Is(err, transport.ErrSelfAddress) {
@@ -289,26 +333,58 @@ func (n *Node) callOver(
 
 		attempted++
 
+		if t.via.kind == pathTunnel {
+			var tunnelErr *transport.TunnelError
+			if !errors.As(err, &tunnelErr) {
+				err = &transport.TunnelError{Err: err}
+			}
+		}
+
 		if rank := failureRank(err); best == nil || rank >= bestRank {
-			best = fmt.Errorf("peer: reach %s: %w", address, err)
+			best = fmt.Errorf("peer: reach %s: %w", t, err)
 			bestRank = rank
 		}
 	}
 
 	switch {
 	case best != nil && attempted > 1:
-		return "", fmt.Errorf("%w (%d more addresses also failed)",
+		return route{}, fmt.Errorf("%w (%d more paths also failed)",
 			best, attempted-1)
 	case best != nil:
-		return "", best
+		return route{}, best
 	case ourselves > 0:
 		// Every address the peer advertises is one of this machine's own, which
 		// is a trust record to repair rather than a peer to wait for.
-		return "", fmt.Errorf(
+		return route{}, fmt.Errorf(
 			"peer: every address recorded for this peer is one of ours, so it "+
 				"was never dialled: %w", transport.ErrSelfAddress)
 	default:
-		return "", ErrNoAddress
+		return route{}, ErrNoAddress
+	}
+}
+
+// transportFailure reports whether a call failed on the way to the peer or
+// back — a connection that broke, a deadline, nothing answering — rather than
+// in an answer the peer gave. Only the first says anything against the path
+// the call took; a refusal or a not-found came back over a path that works.
+func transportFailure(err error) bool {
+	var (
+		tunnelErr *transport.TunnelError
+		netErr    net.Error
+	)
+
+	switch {
+	case errors.As(err, &tunnelErr), errors.As(err, &netErr),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return true
+	}
+
+	switch connect.CodeOf(err) {
+	case connect.CodeUnavailable, connect.CodeDeadlineExceeded:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -318,28 +394,47 @@ func (n *Node) callOver(
 // It is deliberately coarse. The distinction worth drawing is between an address
 // that was never reached at all and one that answered, because the first says
 // nothing about the peer and the second is the peer talking.
+//
+// A tunnel that was never reached has a rank of its own, above an address that
+// was never reached and below anything that answered (decision AY). Before it
+// had one, a raise that timed out and a refused direct address tied — both
+// "nothing answered" — and the later won, so the report read "reach
+// 192.168…: connection refused" and hid that the tunnel was the path expected
+// to work. A tunnel failure that did get an answer — a handshake with the
+// wrong identity, a gate that refused the client key — ranks as the answer.
 func failureRank(err error) int {
-	var dns *net.DNSError
+	var (
+		dns       *net.DNSError
+		tunnelErr *transport.TunnelError
+	)
+
+	rank := 4
 
 	switch {
+	case errors.Is(err, transport.ErrUnknownPeer):
+		// Somebody answered as the wrong identity. Rare, serious, and the one
+		// failure worth reporting over a refusal.
+		return 5
 	case errors.As(err, &dns):
 		// A name that does not resolve. Ordinary and uninformative: an
 		// advertised tailnet name is unresolvable to a peer with MagicDNS off,
 		// and the addresses behind it are what that peer uses.
-		return 1
+		rank = 1
 	case errors.Is(err, syscall.ECONNREFUSED),
 		errors.Is(err, syscall.EHOSTUNREACH),
 		errors.Is(err, syscall.ENETUNREACH),
 		errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, os.ErrDeadlineExceeded):
+		errors.Is(err, os.ErrDeadlineExceeded),
+		errors.Is(err, errTunnelDown):
 		// The address is real and nothing is listening, or nothing answered.
-		return 2
-	case errors.Is(err, transport.ErrUnknownPeer):
-		// Somebody answered as the wrong identity. Rare, serious, and the one
-		// failure worth reporting over a refusal.
-		return 4
+		rank = 2
 	default:
 		// A handshake or an RPC that got an answer it did not like.
+	}
+
+	if errors.As(err, &tunnelErr) && rank < 3 {
 		return 3
 	}
+
+	return rank
 }

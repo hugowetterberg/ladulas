@@ -145,19 +145,37 @@ func (s *peerService) CancelApproval(
 }
 
 // Ping answers whether this instance is there and whether anybody can answer a
-// prompt on it.
+// prompt on it, and how this instance's tunnel server sees the caller's tunnel
+// client (decision AY).
+//
+// It answers any paired peer, not only one that may ask for approvals: a raise
+// proves its tunnel with a pinned Ping, and the dial-back that raises one is an
+// approver calling a requester, which by construction may not ask that
+// requester for anything (§8). Liveness and the tunnel's path are all it says,
+// and the pairing is what entitles a peer to both. It also takes the caller's
+// offer, which is how a dial-back says anything about its tunnel at all and how
+// a direct contact after a tunnel failure re-offers.
 func (s *peerService) Ping(
 	ctx context.Context,
 	req *connect.Request[ladulasv1.PingRequest],
 ) (*connect.Response[ladulasv1.PingResponse], error) {
-	if _, _, err := s.node.authorize(ctx); err != nil {
+	peer, record, err := s.node.pairedPeer(ctx)
+	if err != nil {
 		return nil, err
+	}
+
+	s.node.saw(peer.Fingerprint)
+	s.node.learnTunnel(peer.Fingerprint, req.Msg.GetTunnel())
+
+	if current, ok := s.node.trust.Peer(peer.Fingerprint); ok {
+		record = current
 	}
 
 	return connect.NewResponse(&ladulasv1.PingResponse{
 		SentAt:       req.Msg.GetSentAt(),
 		InstanceName: s.node.identity.Name(),
 		CanPrompt:    s.node.canPrompt(),
+		TunnelPath:   s.node.clientReport(record),
 	}), nil
 }
 
@@ -168,7 +186,7 @@ func (s *peerService) Watch(
 	req *connect.Request[ladulasv1.WatchRequest],
 	stream *connect.ServerStream[ladulasv1.PresenceEvent],
 ) error {
-	peer, _, err := s.node.authorize(ctx)
+	peer, record, err := s.node.authorize(ctx)
 	if err != nil {
 		return err
 	}
@@ -182,6 +200,12 @@ func (s *peerService) Watch(
 	defer ticker.Stop()
 
 	for {
+		// Read afresh on every beat: an offer the beat before this one carried
+		// may have changed the client key the report is about.
+		if current, ok := s.node.trust.Peer(peer.Fingerprint); ok {
+			record = current
+		}
+
 		err := stream.Send(&ladulasv1.PresenceEvent{
 			Timestamp:    timestamppb.Now(),
 			InstanceName: s.node.identity.Name(),
@@ -189,8 +213,11 @@ func (s *peerService) Watch(
 			// Said on every beat rather than once, so an approver that
 			// changes networks under a held stream is still heard.
 			ListenAddresses: s.node.Advertised(),
-			// And the tunnel offer, on the same beat (decision AX).
-			Tunnel: s.node.offer(),
+			// And the tunnel offer, on the same beat (decision AX), and how
+			// this instance's server sees the requester's tunnel client, which
+			// is how the requester tells punched from relayed (decision AY).
+			Tunnel:     s.node.offer(),
+			TunnelPath: s.node.clientReport(record),
 		})
 		if err != nil {
 			return fmt.Errorf("send a presence heartbeat: %w", err)

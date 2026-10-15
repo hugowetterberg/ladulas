@@ -155,7 +155,21 @@ its author meant, a phone that nobody is picking up.
   gate turned away: an identity that is not paired, or a paired one with a
   client key it never offered. `region_refused` is a peer's tunnel address
   whose DERP region failed the region rule, so its server address was not
-  kept. `other` is a word this build does not know.
+  kept. The dialling half ([decision AY](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09))
+  adds six. `raised` and `raise_failed` are clients raised to peers' servers
+  in the background, or not: a few `raised` per link per unseal is normal,
+  and so is one per documentation burst from the dialer after its reaper
+  closed the last; a steady `raise_failed` is one of the causes in
+  [ops](ops.md#the-tunnel-does-not-raise). `failed` is a tunnel that broke
+  while in use, which sends traffic back to the direct path and holds the
+  tunnel back for its dwell; a call that ran out its own deadline through
+  the tunnel is not one, and does not count. `switched` is a link moving between paths
+  make-before-break and `fallback` one moving because its path broke;
+  neither is a presence change, so neither shows anywhere else — a
+  `switched` rate that keeps pace with beats is a tunnel flapping between
+  punched and relayed. `reoffered` is this instance saying its offer again
+  over a direct contact after a failure. `other` is a word this build does
+  not know.
 * **`ladulas_tunnel_server{state}`** — the long-lived server, 1 for the
   state it is in: `off` (the upgrade switched off, or a build without
   tailcat), `starting` (built and not up yet — for long, the first region
@@ -165,9 +179,10 @@ its author meant, a phone that nobody is picking up.
   that is unreachable or withdrawn reads `up` here and nothing reports it
   yet ([ops](ops.md#the-tunnel-says-up-and-nobody-can-reach-it)). Every state is emitted
   so that off and absent read differently, and like the other peer-node
-  gauges it is absent while sealed. Nothing here says which path a peer is
-  on: nothing dials over the tunnel yet, and the `path` label on
-  `ladulas_peers` arrives with the dialling.
+  gauges it is absent while sealed. Which path each peer is on is the
+  `path` label on `ladulas_peers`, below. Until 2026-10-14's second step
+  this said nothing dialled over the tunnel yet, and the label was promised
+  with the dialling.
 
 ## State gauges — the daemon
 
@@ -222,10 +237,20 @@ touches no disk; they are as cheap as the scrape interval makes them.
   is not a fault** ([decision N](architecture.md#10-keys-and-key-storage));
   what is worth watching is `usable` falling to zero on a machine that has
   no keys of its own, because that box can no longer sign anything.
-* **`ladulas_peers{state}`** — paired peers by whether a link is up
-  (`online`/`offline`). A desktop peer that is `offline` for long is a
-  fault; a phone is `offline` nearly always by construction, since it never
-  listens and dials only when somebody opens the app
+* **`ladulas_peers{state,path}`** — paired peers by whether a link is up
+  (`online`/`offline`) and which path it is on
+  ([decision AY](architecture.md#19-decisions-resolved-2026-08-08-extended-2026-08-09)):
+  `direct` (a pinned TLS connection to an address), `tunnel_direct` (the
+  tunnel over a punched UDP path), `tunnel_relayed` (the tunnel through a
+  DERP relay — free, throttled, and where document sync slows first;
+  [ops](ops.md#a-pair-is-on-a-relayed-tunnel-and-document-sync-is-slow)), and
+  `none` for every offline peer. All four combinations are emitted, zeroes
+  included. The relay's region is deliberately not a label: it is a value
+  from a peer's address and would make a series per region. The `path`
+  label is new on 2026-10-14; a query on `state` alone still sums
+  correctly. A desktop peer that is `offline` for long is a fault; a phone
+  is `offline` nearly always by construction, since it never listens and
+  dials only when somebody opens the app
   ([architecture §3](architecture.md#3-system-overview)). The gauge cannot
   tell you which kind a peer is — it has no identifying label and will not
   get one — so read it against how many of the pairings are phones.

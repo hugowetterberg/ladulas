@@ -150,10 +150,12 @@ type Options struct {
 	// PairingRetry is how often a pending pairing is taken to its peer.
 	// Defaults to DefaultPairingRetry.
 	PairingRetry time.Duration
-	// Tunnel is the tunnel upgrade's engine (decision AX). Optional: without
-	// one the node offers no tunnel and says so on every carrier, which is what
-	// a build without tailcat and an instance with the upgrade off both are.
-	// SetTunnel changes it at runtime.
+	// Tunnel is the tunnel upgrade's engine (decision AX): the long-lived
+	// server, and the clients raised to peers' servers (decision AY).
+	// Optional: without one the node offers no tunnel and says so on every
+	// carrier, and raises nothing, which is what a build without tailcat and
+	// an instance with the upgrade off both are. SetTunnel changes it at
+	// runtime.
 	Tunnel Tunnel
 	// TunnelStale is how long a peer's tunnel offer stays raisable without a
 	// beat re-confirming it. Defaults to DefaultTunnelStale.
@@ -468,9 +470,13 @@ func (n *Node) Serve(ctx context.Context) error {
 		go n.raiseServer(tunnel)
 	}
 
-	// The server closes after the links have stopped: the links are its
-	// clients, and seal closes clients first (§3).
+	// The server closes after the links have stopped and the dialer has hung
+	// up: those hold this instance's tunnel clients, and seal closes clients
+	// first (§3). The dialer's raised clients are whole network stacks with a
+	// DERP connection each, and an instance that claimed to hold nothing
+	// usable while keeping one would be lying (decision AY).
 	defer n.closeTunnel()
+	defer n.closeDialers()
 
 	// Links come up before the listener, because a headless box's whole reason
 	// for existing is to reach its approver, and it should not have to wait for
@@ -481,6 +487,10 @@ func (n *Node) Serve(ctx context.Context) error {
 	// under way. The loop puts its confirmation back on screen and takes this
 	// side's answer to the peer whenever the peer can be reached (§7).
 	go n.runConvergence(ctx)
+
+	// The dialer raises tunnels on demand, and nothing but this closes the
+	// ones nobody is using (decision AY).
+	go n.reapTunnels(ctx)
 
 	defer n.stopLinks()
 
@@ -656,8 +666,8 @@ func (n *Node) presence(fingerprint string) (bool, time.Time) {
 // else, none.
 //
 // There are two ways of asking, and which one a peer gets is decided by whether
-// it can be dialled (trust.Dialable), which today means whether it advertised
-// an address. One that can is dialled when there is something to decide; one
+// it can be dialled (trust.Dialable): whether it advertised an address, or
+// offers a tunnel server this instance can raise a client to (decision AY). One that can is dialled when there is something to decide; one
 // that cannot is a phone, and gets an inbox it collects from instead (§3, and
 // inbox.go). Both are approvers in the same fan-out.
 //
@@ -682,7 +692,7 @@ func (n *Node) Reconcile() {
 			continue
 		}
 
-		if trust.Dialable(record) {
+		if n.dialable(record) {
 			wanted[record.GetFingerprint()] = record
 
 			continue

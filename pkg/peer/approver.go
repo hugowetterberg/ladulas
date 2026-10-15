@@ -17,6 +17,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/project"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 )
 
 // RemoteApprover is a paired peer, as the approval engine sees it: something
@@ -59,17 +60,17 @@ func (a *RemoteApprover) Decide(
 	defer a.link.node.track(msg.GetRequestId(), a.link.Fingerprint(),
 		msg.GetSshsig().GetGitContext())()
 
-	addresses := a.link.addresses()
-	if len(addresses) == 0 {
+	targets := a.link.targets(ctx)
+	if len(targets) == 0 {
 		return nil, errors.New("peer: the peer has no address to dial")
 	}
 
 	var lastErr error
 
-	for _, address := range addresses {
-		answer, err := a.ask(ctx, address, msg.GetRequestId(), body, digest)
+	for _, over := range targets {
+		answer, err := a.ask(ctx, over, msg.GetRequestId(), body, digest)
 		if err == nil {
-			a.link.succeeded(address)
+			a.link.called(over.via)
 
 			return answer, nil
 		}
@@ -78,7 +79,28 @@ func (a *RemoteApprover) Decide(
 			return nil, err
 		}
 
+		if over.via.kind == pathTunnel {
+			if errors.Is(err, errTunnelDown) {
+				// Not up yet: the fallback position doing nothing.
+				continue
+			}
+
+			a.link.pathFailed(over, err)
+		}
+
 		lastErr = err
+	}
+
+	if lastErr == nil {
+		// Nothing was tried: the only target was a tunnel that is not up — a
+		// tunnel-only peer asleep, or its tunnel in backoff. That is not an
+		// answer, and returning none would read as one to the engine, which
+		// takes a nil error as a final word and denies the whole request with
+		// every other approver's prompt dropped. It is not a presence change
+		// either: the link's own loop owns that, and blanking the offered keys
+		// from the request path for a raise still under way is the switch
+		// decision AY says never goes through failed().
+		return nil, &transport.TunnelError{Err: errTunnelDown}
 	}
 
 	a.link.failed(lastErr)
@@ -178,11 +200,14 @@ func (n *Node) autoPublish(ctx context.Context, git *ladulasv1.GitContext) {
 		publication.GetName(), publication.GetPath()))
 }
 
-// ask runs one streamed RequestApproval against one address.
+// ask runs one streamed RequestApproval against one of the link's paths.
 func (a *RemoteApprover) ask(
-	ctx context.Context, address, requestID string, body, digest []byte,
+	ctx context.Context, over target, requestID string, body, digest []byte,
 ) (*approval.Answer, error) {
-	client := a.link.approvalClient(address)
+	client, err := a.link.approvalClient(over)
+	if err != nil {
+		return nil, err
+	}
 
 	stream, err := client.RequestApproval(ctx, connect.NewRequest(
 		&ladulasv1.RequestApprovalRequest{Request: body}))

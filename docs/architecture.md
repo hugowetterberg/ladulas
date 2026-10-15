@@ -249,6 +249,12 @@ because an instance serves one account on one machine.
   take half a minute and the links and listener should not wait on it. A
   server that cannot start keeps retrying on the links' backoff and costs
   nothing but the tunnel meanwhile.
+* **And it raises clients to peers' tunnel servers (decision AY)**, each a
+  whole network stack of the same kind: one per link, for as long as the
+  link lives — a mutual pair has one in each direction — and one per peer
+  the dialer calls back, raised on demand and closed by a reaper goroutine
+  when nothing has used it for five minutes. A raise is always a goroutine
+  of its own, in the background; no call waits on one.
 * **While a pairing screen is open, a DNS-SD responder** announces it, and
   while an "Add a machine" screen is open a browser lists what is
   announced (decision AW).
@@ -265,9 +271,10 @@ convergence loop, the DNS-SD responder and browser, and the tailcat server
 with them — are built by unsealing and dropped by sealing, which is what
 makes "the DEK is not in memory" a statement about the process rather than
 a hope. The sockets and the audit log outlive it. The tunnel's order on the
-way down is clients, then the server (§8): the links, which are what raise
-clients, stop first, and an instance that claimed to hold nothing usable
-while keeping a DERP presence and live WireGuard sessions would be lying.
+way down is clients, then the server (§8): the links and the dialer, which
+are what raise clients, stop and hang up first, and an instance that claimed
+to hold nothing usable while keeping a DERP presence and live WireGuard
+sessions would be lying.
 
 The relay's process model is one sentence: an HTTP server, a debug server,
 and no background work at all. It holds its device registrations in memory
@@ -286,7 +293,9 @@ direct UDP path when it can and relays through DERP when it cannot. It
 carries the same pinned TLS as a direct connection and is not trusted any
 more than the network is. It is a path, not an address (§8): it is never
 written into a record's address list, and the direct addresses stay as the
-fallback.
+fallback. Which of the two carries traffic is decided per peer, by a
+precedence and not by a preference for the tunnel (decision AY): a tunnel
+with a punched direct path, then direct TCP, then a relayed tunnel.
 
 Desktops listen and accept peer connections. **Phones never listen** —
 they always dial out, triggered by a wake-up push (optional), by the user
@@ -324,24 +333,33 @@ more.
 
 Until 2026-10-14 the rule above read "decided by whether it advertised an
 address at pairing time". It now reads **a record that carries a direct
-`host:port`** — and, once links can dial over the tunnel (decision AX, the
-step after the one that introduced the offer), **or a tunnel offer that
-names a server**. A desktop reachable only through its tunnel is then a
-machine that listens, not a phone, and gets a link rather than an inbox.
-Whether the offer's versions meet this instance's, whether it has aged out,
-and whether this build has a tunnel at all are reasons a client is not
-raised, and none of them turns a desktop into a phone: deciding
-link-or-inbox on them would move a peer between the two every time a beat
-aged an offer out.
+`host:port`, or a tunnel offer naming a server in a version this instance
+speaks** (`trust.Dialable(record, ours)`, decision AY). A desktop reachable
+only through its tunnel is then a machine that listens, not a phone, and
+gets a link rather than an inbox. Whether the offer has aged out is a
+reason a client is not raised and is deliberately *not* part of the rule:
+deciding link-or-inbox on it would move a peer between the two every time a
+beat aged an offer out. Whether this instance has a tunnel at all, and
+whether the versions meet, *are* part of it, and that is a correction.
 
-The tunnel clause is written and switched off (`trust.tunnelDialling`).
-It was first switched on in the same change as the offer, and that was a
-bug: an approver with no peer listener is a collector, one that turned the
-upgrade on still started its server and offered its address, and its
-requesters' `Reconcile` moved it from its inbox to a link — a link that
-could never connect, since links still took the direct path only. From
-that beat on, that approver was asked nothing at all. **A path counts
-towards dialable when something can take it, not when it is announced.**
+The tunnel clause was first written to read the offer alone, and was switched
+off (`trust.tunnelDialling`, a constant that was false) in the step that
+introduced the offer, because it had been a bug with a victim: an approver
+with no peer listener is a collector, one that turned the upgrade on still
+started its server and offered its address, and its requesters' `Reconcile`
+moved it from its inbox to a link — a link that could never connect, since
+links then took the direct path only. From that beat on, that approver was
+asked nothing at all. **A path counts towards dialable when something can
+take it, not when it is announced.** When links learned to dial over the
+tunnel (decision AY) the clause was switched on, and the same sentence
+decided its shape: a requester with the upgrade off, or on a tunnel version
+the collector does not speak, cannot take that path either, and reading the
+offer alone would have brought the bug straight back for exactly those
+requesters. So the rule takes this instance's version, the constant is gone,
+and turning the upgrade on or off reconciles. A pending pairing is still
+dialable by its addresses only (`trust.PendingDialable`): settling over the
+tunnel arrives with the pairing server, which is the only way a pending
+pairing could be born without one.
 What changed is where the question
 is asked. It used to be asked as `len(Addresses) > 0` in every place that
 needed it — the link-or-inbox choice in `Reconcile`, the pairing convergence
@@ -1290,22 +1308,31 @@ leaves the field unset, takes a non-empty address list as proof
 because a direct address is always a way to dial.
 
 The path a connected peer is on is reported the same way, as `PeerStatus.path`:
-`direct` — a pinned TLS connection to or from one of its addresses — for every
-peer today, and empty for one not in contact. The ordinary path is not named on
-the pill, so a peer that read `connected` still does; a path that is not the
-ordinary one is named after it (`connected, …`). The word goes through
-`DescribeState` and `PeerView.Path`, which this section makes the single source,
-rather than into each surface separately.
+`direct` — a pinned TLS connection to or from one of its addresses — `tunnel
+direct` for the tunnel over a punched UDP path, `tunnel relayed <region>` for
+the tunnel through a DERP relay (decision AY), and empty for a peer not in
+contact. The ordinary path is not named on the pill, so a peer that read
+`connected` still does; a path that is not the ordinary one is named after it
+(`connected, tunnel relayed fra`). The word goes through `DescribeState` and
+`PeerView.Path`, which this section makes the single source, rather than into
+each surface separately; the desktop's peer sheet shows it as a row as well.
 
-What is known about a peer's tunnel (decision AX) is a third word, sent as
-`PeerStatus.tunnel` and chosen in one place, `trust.DescribeTunnel`: "tunnel
-off here", "peer offers no tunnel", "peer withdrew its tunnel", "version
-mismatch (ours …, theirs …)", "peer offers a client key only", "tunnel offer
-stale" or "tunnel offered". It describes what this instance holds, not a path
-in use, because nothing dials over the tunnel yet; the words for a path in use
-("tunnel direct", "tunnel relayed <region>", "fallback to direct, because …",
-"tunnel in backoff until …", "tunnel address stale, no direct path") arrive
-with the dialling, through the same function. `ladulas peers` prints it as a
+What is known about a peer's tunnel is a third word, sent as
+`PeerStatus.tunnel` and chosen in one place, `trust.DescribeTunnel`, from the
+record and what the raise is doing (`trust.TunnelFacts`). The set, in the order
+the function asks: "tunnel off here", "peer offers no tunnel", "peer withdrew
+its tunnel", "version mismatch (ours …, theirs …)", "peer offers a client key
+only"; then, when the peer is on the tunnel, the path word itself ("tunnel
+direct", "tunnel relayed <region>"); then what is holding the tunnel back —
+"tunnel address stale, no direct path" (raises failing for a peer whose tunnel
+is its only carrier, the withdrawn-region case), "tunnel offer stale", "fallback
+to direct, because <reason>" (traffic left a tunnel that failed in use and is
+waiting out its dwell), "tunnel in backoff until <time>"; and the ordinary
+answers, "direct <address>" (on direct TCP, which a relayed tunnel yields to)
+and "tunnel offered". Until 2026-10-14's second step it described only what
+this instance held, because nothing dialled over the tunnel; the path words
+were promised then and arrived with the dialling (decision AY), through the
+same function as promised. `ladulas peers` and `ladulas status` print it as a
 column and the desktop's peer sheet as a row.
 
 **Where the answer comes from for a device that dials in**, since none of the
@@ -1575,23 +1602,25 @@ is ever written into an address list** (`trust.DirectAddresses`): the
 dialled address and the advertised list at pairing, on both sides, and the
 list a beat carries. Every address a pairing or a beat produces today is
 one — the dials are TCP dials, which take nothing else — so this keeps out
-nothing that could have worked. Direct is the only path kind a call takes
-today; the kinds exist so that the rule is in the code before a second one
-is, rather than discovered in three places when it arrives. The second is
-the tunnel (below): its server address is a field of its own on the record
-(`TrustRecord.tunnel`), never an entry in `Addresses`, never `preferred`
-and never the reached address. Rejected: letting a path's endpoint stand in
-for an address, which is each of the three failures above.
+nothing that could have worked. The kinds were in the code before a second
+one was, so that the rule did not have to be discovered in three places when
+it arrived. The second is the tunnel (below, decision AY): its server
+address is a field of its own on the record (`TrustRecord.tunnel`), never an
+entry in `Addresses`, never `preferred` and never the reached address, and a
+call through it reports `pathTunnel` with no address at all. Rejected:
+letting a path's endpoint stand in for an address, which is each of the
+three failures above.
 
 **The tunnel upgrade (decision AX, 2026-10-14).** Two paired instances that
 both have tailcat, and have both turned the upgrade on, exchange tunnel
 credentials over the pinned channel and can then reach each other's peer
 listener through [tailcat](https://github.com/tailscale/tailcat): a
 WireGuard tunnel that finds its peer through a DERP relay, punches a direct
-UDP path when it can, and stays relayed when it cannot. This step builds the
-listening half and the bookkeeping; raising a client and dialling over the
-tunnel are the next one, so today an offer is held, admitted and described,
-and links still take the direct path.
+UDP path when it can, and stays relayed when it cannot. Decision AX built the
+listening half and the bookkeeping, and for one step an offer was held,
+admitted and described while links still took the direct path; decision AY
+is the dialling half — raising clients, the path order, switching without a
+presence change — described after the listening half below.
 
 *Pinned TLS stays inside the tunnel.* The tunnel never authenticates an
 instance. Every connection through it runs the same TLS 1.3 handshake, each
@@ -1772,7 +1801,187 @@ module's `go` line is 1.27.1, which tailcat requires; `go mod tidy` ignores
 build tags, so this moves every `pkg/` consumer to 1.27.1 too. A nested
 module for the binaries would have kept the root at 1.26.5, and was not
 taken: a two-module repository for one release's toolchain gap is more
-cost than the gap.
+cost than the gap. The dialling half (below) adds `Tunnel.Raise`, which
+returns a `peer.TunnelClient` (ping, dial, close, deadlines as Unix
+nanoseconds), and `Tunnel.ClientPath`, the server's view of one client key,
+both in the same bindable terms; and `transport.NewTunnelClient`, which is
+`NewClient` with every connection opened through a tunnel.
+
+**Dialling over the tunnel (decision AY, 2026-10-14).** The listening half
+made a tunnel something a peer could offer; this is what takes it. Every
+rule here exists because the obvious version of it breaks something the
+direct path already does well.
+
+*Who raises a client.* "The side that dials" is not one side. Three things
+dial: a requester's link to each approver; both sides of a mutual pair,
+since `Reconcile` links every peer that may approve; and an approver dialling
+back to a requester through the dialer, for documentation, diffs and sync.
+So **every side that issues RPCs to a peer raises its own client** to that
+peer's server address (`pkg/peer/raise.go`, `tunnelPath`), and every side
+with a server admits each peer's client key, which the listening half
+already did. A link holds its client for as long as it lives — a mutual
+pair has one in each direction, which is expected. The dialer raises one on
+demand, only for a peer whose offer names a server this instance can raise
+against, and a reaper closes it after five minutes unused
+(`DefaultTunnelIdle`): `CloseIdle` drops pooled connections, and a raised
+client is a whole network stack under them, so it needs a reaper of its
+own. The reaper's idle test and its teardown are one hold of the tunnel's
+lock, so a dial-back that takes the client in between is never handed one
+that is about to close. Turning the upgrade off (`SetTunnel`) drops every
+dialer's client at once rather than at its next call: each is a whole tailcat
+stack with its DERP and WireGuard sessions, and switching off a public
+exposure (decision AX) should end it. Without the dialer's client,
+documentation — the one large flow —
+would fail off-LAN in exactly the case the upgrade is for: the approver at
+home opening a café laptop's project pages would dial the laptop's
+unreachable direct addresses. The engine count is one server, one client
+per peer and direction in use, and later one pairing server while a code
+is displayed.
+
+*Raised in the background, proved by the pinned Ping.* A raise builds the
+client against the server address, waits for tailcat's own MEOW
+acknowledgement, runs the pinned TLS handshake through it against **the same
+fingerprint** a direct connection pins, and calls `Ping`. Only a pinned Ping
+that succeeds over the tunnel counts as established; a tunnel that comes up
+and reaches somebody else is a failed handshake, not a new peer. The region
+rule is applied again at the raise, since the local DERP map it is held
+against may have changed since the offer was written. The Ping carries this
+instance's offer and its answer carries how the far server sees this client
+(below). `Ping` answers any paired peer for this, not only one that may ask
+for approvals — it used to require the requester direction, and the
+dial-back that raises a client is an approver calling a requester, which by
+construction may not ask it for anything. Liveness and the tunnel's path are
+all it says, and the pairing entitles a peer to both.
+
+*No call waits on a raise.* A call uses whichever path is established. A call
+made with no established path **races** the raise against the direct probe
+(`Node.arrange`, `pkg/peer/route.go`): a raise is started if none is under
+way and the backoff allows, the probe — the same bare TCP connect race
+`reachableFirst` has always run — runs beside it, and the first to win
+decides the order, inside a five-second window. A direct address that
+answers wins at once; a raise that comes up punched wins at once; a raise
+that comes up relayed waits for the probe, because direct TCP outranks it;
+and with neither, the addresses go first with the tunnel behind them,
+resolved when it is tried, so a raise that finishes while the addresses time
+out is still used. The raise's own timeout (twenty seconds) bounds only the
+background attempt. This holds for all three call shapes: the link's
+presence, the link's calls, and the dialer's calls. A sequential "raise, then
+fall back" was the obvious alternative and was rejected: it would spend
+decision AJ's ssh login budget per holder, turn decision AT's cheap
+fall-through to the next holder into a wait, and push a woken phone past its
+wake grace into the loud alert.
+
+*A path change is not a presence change.* The link's presence stream is
+held on one path at a time, and the link moves between paths
+**make-before-break**: the new `Watch` is opened over the better path and its
+first beat received, the link's path is moved, and only then is the old
+stream closed. When the path it is on breaks, every other path gets one
+attempt before anything is declared lost. Neither goes through
+`link.failed()`. That is the point: `failed()` is the link going down — it
+empties the offered keys, so the SSH agent's list goes blank for the length
+of a reconnect and an ssh started in that window gets "no identities", and
+the next success pushes grant activity and logs a new link. A switch done
+that way was the obvious implementation, since a stream that ends already
+calls it; the switch and the fallback are written to avoid it, and log "the
+link to a peer changed path" or "fell back to another path" instead of
+"linked to a peer". A call that happens to succeed over the other path while
+the stream holds one does not move the link either: which path the link is
+on is the stream's to say (`link.called`). The same goes for the offered
+keys a beat refreshes: a `ListKeys` that broke on the way, or a tunnel target
+not up to ask through, leaves the set as the peer last said it, and only a
+refusal empties it. Clearing on any failure, as the single-path link did,
+blanked the agent's list whenever a beat raced a tunnel failure during a
+fallback — the very blank the switch is written to avoid.
+
+*Not answering is not an answer.* A request-path call whose only target is a
+tunnel that is not up — a tunnel-only peer asleep, or its tunnel in backoff
+— has asked nobody, and returns an error saying so (`TunnelError` wrapping
+"the tunnel is not up"; for a key holder, `ErrHolderUnreachable`). It does
+not call `link.failed()`, since presence is the link's own loop's to judge.
+For a while it returned no answer and no error: the approval engine reads a
+nil error as a final word, so one sleeping tunnel-only approver denied every
+request the instant it was asked and dropped the other approvers' prompts
+with it, and `RemoteSign` stopped at a nil response instead of falling
+through to the next holder as decision AT says. Likewise a call that runs
+out its *own* deadline through the tunnel says nothing against the tunnel and
+does not tear it down: a diff fetch outliving thirty seconds over a slow
+relay used to drop the tunnel the link's presence stream was riding on.
+
+*Which path wins.* **A tunnel with a punched direct path, then direct TCP,
+then a relayed tunnel**, re-evaluated on beats. A relayed tunnel can always
+be raised while DERP is up, so "the tunnel whenever it is up" would send a
+tailnet pair, or a LAN pair whose punching failed, through a throttled relay
+with a direct path that answers in milliseconds beside it, and give the
+DERP operator every pair's traffic timing. So a relayed tunnel yields to any
+direct address that answers the probe, and carries traffic when none does.
+The dialling side learns which kind it has from the listening side: the
+server reports its `Server.Status()` view of the caller's client — punched,
+or relayed and through which region — on every `PresenceEvent` and in the
+`PingResponse` (`TunnelPathReport`). That is cheaper than probing with
+`DiscoPing`, which is all the dialling side has of its own, and it is said
+by the side that knows. A fresh tunnel counts as relayed until a report
+says otherwise, because tailcat starts on DERP and punches a few seconds
+later. A link hears on every beat. The dialer holds no stream, so once a
+heartbeat, when a dial-back on the tunnel would otherwise re-race the probe,
+it Pings through the tunnel instead and takes the answer's report
+(`tunnelPath.refresh`): a tunnel that has punched since the raise then keeps
+the call ahead of direct TCP, and one still relayed goes on to the race. It
+used to learn only from the raise's own Ping, which runs before punching and
+so nearly always said relayed; a dial-back read relayed for its whole life,
+lost the precedence to any direct address that answered, and paid the probe
+once a heartbeat. Bulk flows follow the same path as presence and approvals; splitting
+them is not worth a second path machine. *Rejected:* direct first, tunnel
+only when direct fails — it sends nothing through DERP for pairs that can
+reach each other, but gives up the tunnel's punched path for pairs whose
+direct TCP path is fragile, which is the address machinery's whole history.
+
+*Preferred while it works, never exclusive.* When the tunnel cannot be
+raised, calls take the direct dialler under its existing rules. The strict
+reading — once upgraded, never dial direct again — was considered and
+rejected: a laptop and a desktop on the same Wi-Fi with the uplink down
+could not approve a commit, and the day the public DERP fleet is throttled
+or withdrawn every upgraded pair would stop until somebody did something,
+which is Krypton's failure and the case §1 was written to prevent. And the
+first thing done over a direct contact after a raise or the tunnel has
+failed is to say the offer again, so an allowlist entry the far end lost
+heals itself: a link's stream carries the offer whenever it opens, which
+covers a fallback, and otherwise a Ping carrying it goes over the direct
+address (`Node.reoffer`).
+
+*Hysteresis and backoff.* A tunnel that failed while in use is torn down and
+is not preferred again until it has been raised again and has held for a
+dwell of three minutes (`DefaultTunnelDwell`); while it waits out the dwell
+it is the fallback position, used only when nothing direct answers. Without
+it a tunnel flapping on a bad uplink drags a link between paths on every
+beat. Raises that fail back off between the presence loop's floor and
+ceiling, never past the ceiling — so a desktop unsealed after a long seal is
+back on its tunnel within a minute — and the backoff resets when the peer's
+presence comes back over any path, or the tunnel has held for the dwell.
+
+*How a failure is reported.* A tunnel that was never reached has its own
+error type (`transport.TunnelError`) and its own rank in the failure
+ranking, above an address that refused and below anything that answered.
+Before it had one, a raise that timed out and a refused direct address tied
+— both "nothing answered" — and the later won, so the report would read
+"reach 192.168…: connection refused" and hide that the tunnel was the path
+expected to work. A tunnel that got an answer — the wrong identity, a gate
+refusing the client key — ranks as the answer. A call through the tunnel
+that fails on the way, rather than in an answer, tears the tunnel down
+(`transportFailure`): a refusal or a not-found came back over a path that
+works.
+
+*What it shows.* The path word (`tunnel direct`, `tunnel relayed <region>`)
+and the tunnel's state word (§7) come from `trust.DescribeTunnel`; `ladulas
+status` prints both, plus an **inbound tunnels** section listing the peers
+whose clients are connected to this instance's server as the server sees
+them (`StatusResponse.inbound_tunnels`); and `ladulas_peers` carries a `path`
+label, with raises, failures, switches, fallbacks and re-offers counted in
+`ladulas_tunnel_events_total` (observability.md).
+
+*Not in this step.* A pending pairing is still settled over its direct
+addresses only. (The dialer hearing whether its tunnel has punched was on
+this list in the first draft; it asks once a heartbeat now, above.) The pairing server
+and phones on the tunnel are later steps.
 
 **A link is not up until the peer has said something.** The presence stream
 is what tells this instance whether there is anybody to ask before it has
@@ -4939,7 +5148,8 @@ Added 2026-10-14:
 |---|----------|------------|
 | AV | What the code a person types is, and what proves it | **a six-digit PIN, proved with CPace and never with an HMAC.** CPace per draft-irtf-cfrg-cpace-21 (CPACE-RISTR255-SHA512, the draft's §10.4 key confirmation), written in `internal/cpace` on `gtank/ristretto255` and tested on the draft's vectors, run inside the pinned TLS channel by two new RPCs, `PairStart` and `PairFinish`. The listener is the initiator and the joiner the responder, so the joiner commits its tag before it receives anything key-derived and the listener verifies it before answering; both identity keys go into CI, joiner first; the associated data carries `ladulas-pairing-v2` and a direction; the listener mints the session id; both rounds must come from one TLS identity; what the joiner says about itself is read only after its tag verifies. An attempt is charged when round one is accepted and refunded only on a verified confirmation, so an unfinished round counts; one counter of five per window covers the PIN and the older proof, and in-flight exchanges are capped by what is left. The displaying side shows each failed attempt with its source, and offers a new PIN when they are spent. For one release the window also holds an independent ten-character secret for older joiners, the full code stays at version 1 with the PIN as a new field, and a joiner holding a PIN never calls the older `Pair` — an unimplemented `PairStart` is a hard failure that names a possible impostor. A spent window answers late joiners "another machine used this code" until it would have expired. Supersedes decision M's *mechanism* — the ten characters, the HMAC proof and the fifty-bit bound — and leaves M's two halves exactly as they were. Rejected: keeping the ten characters and the HMAC (a code, not a PIN, and the PIN is the point); SPAKE2 (needs nothing-up-my-sleeve constants, and the Go implementation is unmaintained); vendoring `the-sarge/cpace` (unreviewed, and a newer Go than the module's); and above all an HMAC keyed with the PIN on any path, including a fallback for older listeners, because twenty bits of HMAC is an offline search of milliseconds. Rationale in §7 |
 | AW | How a joining machine finds the one showing a PIN | **it picks it from a DNS-SD list while both screens are open, and dials the one address the list checked for it.** `_ladulas-pair._tcp` through `github.com/brutella/dnssd` v1.2.14, carried patched as `internal/dnssd` so that its responder answers and its browser asks on the chosen interfaces only (upstream answers queries on every interface whatever `Config.Ifaces` says, which put the name, port and tag in reach of anything on `docker0` while a PIN was up), in `internal/discovery` and reached from `pkg/peer` only through `PairingAnnouncer`. Announced only while a pairing window's PIN is on screen, withdrawn with goodbyes when it is spent, abandoned, replaced or answered and when the node closes; on the interfaces with a bound peer address (every eligible one on an explicit wildcard), minus container and VM interfaces, the tailnet and loopback; instance name as the DNS-SD name, a neutral `ladulas-<random>` host per window, the bound link-local and private addresses, TXT `v=2` and a random session tag that de-duplicates the list and is never a PAKE input. Browsed only while a `BrowsePairings` stream is open — the desktop screen holds one through a lease its polls renew, `ladulas pair --join` for as long as it is listing — and forgotten when nobody is; sealing closes it. The PIN is shown once the probe has settled the name, up to three seconds, and announce and withdraw are serialised per node so a stale withdraw cannot take down a newer window's announcement. A result is listed only if it was heard on an eligible interface (the browse is confined to those, and each answer is checked again on `IfaceName`) and has an address that is link-local or private and inside that interface's subnet; one row per window, every row sharing a name with another flagged as a duplicate and never chosen between. A join names the entry; the daemon resolves it to its one address when the join starts and makes one PIN exchange there, over direct TCP. Phones neither browse nor announce: they pair by the QR, whose identity key a list cannot carry. Supersedes the resolved "mDNS/Bonjour discovery lands with the mobile milestone" and §8's plan for the phone to find `desktop.local`. Rejected: Syncthing-style custom announcements (a port of our own, invisible to standard tools); `grandcat/zeroconf` and its fork (answer on any interface, goodbyes that evict Avahi's host records); `hashicorp/mdns` (no goodbye, no probing, no live browse); Avahi over D-Bus (needs the system bus, announces into `docker0` and `tailscale0`); announcing for as long as the daemon runs, which tells the whole LAN about the box all day for the minute a pairing needs; and listing every address an entry carries, which turns one press into a PIN sprayed at as many addresses as an attacker cares to put in a record. Rationale in §7 |
-| AX | Whether two paired instances may reach each other through a NAT traversal layer, and on what terms | **yes, as an upgrade both sides opt into, with the same pinned TLS inside it and the direct path kept as the fallback; this step builds the listening half.** The tunnel is [tailcat](https://github.com/tailscale/tailcat) pinned at `main` `52fbad3` (2026-10-07) for its `AllowClient` hook, `KeySet`, `DisconnectClient` and `Server.PeerKey`, which raises the module's `go` line to 1.27.1. **The tunnel never authenticates anybody**: every connection through it is decision A1's TLS 1.3 handshake pinned to the identity key, the tailcat keys (a server node key, a client node key and a pre-shared key per instance, generated once into the encrypted store) decide only who reaches that handshake, and `pkg/transport` asserts X25519MLKEM768 so that the post-quantum claim rests on the TLS rather than on tailcat's pre-shared key. **Opt-in per instance and described as a public exposure** in decision H's sense: `ladulas tunnel on`, `SetTunnel`, or the desktop's switch, each with the daemon's two sentences beside it — what it exposes, and what the DERP operator learns. **Capability rides AQ's carriers** as `TunnelOffer` (versions of ours, server address, client key): `WatchRequest`, every `PresenceEvent`, `FetchPendingResponse`, pairing's `PairRequest`/`PairResponse` and `PairFinishRequest`/`PairFinishResponse`, and `FetchPendingRequest` for a phone that has no other way back. Absent changes nothing, empty versions withdraws (and a build without tailcat or with the upgrade off sends that form on every carrier), a withdrawal from a peer that never offered is not written, the record is written on change only, the offer is kept on the pending pairing too, and an offer no beat has confirmed for fourteen days or that direct contacts without one have contradicted for ten minutes stops being raised — **except for a peer with no direct address**, whose tunnel is the only carrier of the next offer. **The allowlist** is the client keys of the trust records and pending pairings, rebuilt at every server start, changed for free (`KeySet`), with revoke, decline and withdraw removing the key and dropping the client. **The tunnel listener has its own gate**: a paired or pending identity arriving with the client key it offered, never anybody because a pairing window is open, no pairing RPCs, `SettlePairing` only for a pending identity, and `RemoteAddr` shown as the path. **The region is a contract**: picked once from the DERP map, persisted, and never re-picked implicitly; Tailscale's public fleet through tailcat's map is the default, a self-hosted map is a setting, and a re-pick is deliberate (`--repick`) and strands tunnel-only pairs until the two-server grace exists. A peer-supplied region — every one an address embeds — is held to the relay URL's rule (§11), by host name, ports and certificate name because the address does not carry the id, with literal addresses required for a region not our own. **Lifecycle is the inner half's**: unseal starts the server in the background and nothing is offered until it is up, seal closes clients then the server, a closing or closed node offers nothing rather than the withdrawal and takes no new tunnel, and the tunnel keys join the copies zeroing cannot reach. **tailcat stays out of `pkg/`**: `pkg/peer.Tunnel` and `pkg/transport`'s tunnel interfaces are strings and bytes, `internal/tunnel` is the only importer, the binaries hand a factory to `internal/app`, and `notailcat` builds without it. **Dialable** is written to count a usable tunnel server address and switched off until links can dial over the tunnel (§3): counting it on the offer alone moved collectors off their inboxes onto links that could not connect. Retires §1's NAT-traversal non-goal (history kept there) and restates decision S's premise (§10); §1's no-mandatory-infrastructure goal survives because LAN pairing needs no relay and an upgraded pair falls back to direct. Not in this step: raising clients and dialling over the tunnel, the path order and hysteresis, the pairing server, phones. Rejected: tailcat as the only transport (a relay mandatory on every connection, the allowlist forced off, a flag day); trusting the node key as the identity (loses the hardware phone identity and the fingerprint confirmation); building against v0.7.0's add-only allowlist (revocation would restart the server and drop every other tunnel); a nested module to keep the root on 1.26.5 (two modules for one toolchain gap); a relay of our own as the default (author-hosted infrastructure on the path, §1). Rationale in §8 |
+| AX | Whether two paired instances may reach each other through a NAT traversal layer, and on what terms | **yes, as an upgrade both sides opt into, with the same pinned TLS inside it and the direct path kept as the fallback; this step builds the listening half, and decision AY the dialling half.** The tunnel is [tailcat](https://github.com/tailscale/tailcat) pinned at `main` `52fbad3` (2026-10-07) for its `AllowClient` hook, `KeySet`, `DisconnectClient` and `Server.PeerKey`, which raises the module's `go` line to 1.27.1. **The tunnel never authenticates anybody**: every connection through it is decision A1's TLS 1.3 handshake pinned to the identity key, the tailcat keys (a server node key, a client node key and a pre-shared key per instance, generated once into the encrypted store) decide only who reaches that handshake, and `pkg/transport` asserts X25519MLKEM768 so that the post-quantum claim rests on the TLS rather than on tailcat's pre-shared key. **Opt-in per instance and described as a public exposure** in decision H's sense: `ladulas tunnel on`, `SetTunnel`, or the desktop's switch, each with the daemon's two sentences beside it — what it exposes, and what the DERP operator learns. **Capability rides AQ's carriers** as `TunnelOffer` (versions of ours, server address, client key): `WatchRequest`, every `PresenceEvent`, `FetchPendingResponse`, pairing's `PairRequest`/`PairResponse` and `PairFinishRequest`/`PairFinishResponse`, and `FetchPendingRequest` for a phone that has no other way back. Absent changes nothing, empty versions withdraws (and a build without tailcat or with the upgrade off sends that form on every carrier), a withdrawal from a peer that never offered is not written, the record is written on change only, the offer is kept on the pending pairing too, and an offer no beat has confirmed for fourteen days or that direct contacts without one have contradicted for ten minutes stops being raised — **except for a peer with no direct address**, whose tunnel is the only carrier of the next offer. **The allowlist** is the client keys of the trust records and pending pairings, rebuilt at every server start, changed for free (`KeySet`), with revoke, decline and withdraw removing the key and dropping the client. **The tunnel listener has its own gate**: a paired or pending identity arriving with the client key it offered, never anybody because a pairing window is open, no pairing RPCs, `SettlePairing` only for a pending identity, and `RemoteAddr` shown as the path. **The region is a contract**: picked once from the DERP map, persisted, and never re-picked implicitly; Tailscale's public fleet through tailcat's map is the default, a self-hosted map is a setting, and a re-pick is deliberate (`--repick`) and strands tunnel-only pairs until the two-server grace exists. A peer-supplied region — every one an address embeds — is held to the relay URL's rule (§11), by host name, ports and certificate name because the address does not carry the id, with literal addresses required for a region not our own. **Lifecycle is the inner half's**: unseal starts the server in the background and nothing is offered until it is up, seal closes clients then the server, a closing or closed node offers nothing rather than the withdrawal and takes no new tunnel, and the tunnel keys join the copies zeroing cannot reach. **tailcat stays out of `pkg/`**: `pkg/peer.Tunnel` and `pkg/transport`'s tunnel interfaces are strings and bytes, `internal/tunnel` is the only importer, the binaries hand a factory to `internal/app`, and `notailcat` builds without it. **Dialable** is written to count a usable tunnel server address and switched off until links can dial over the tunnel (§3): counting it on the offer alone moved collectors off their inboxes onto links that could not connect. (Switched on by decision AY, with this instance's own version made part of the rule so that the same failure cannot return through an instance with the upgrade off.) Retires §1's NAT-traversal non-goal (history kept there) and restates decision S's premise (§10); §1's no-mandatory-infrastructure goal survives because LAN pairing needs no relay and an upgraded pair falls back to direct. Not in this step: raising clients and dialling over the tunnel, the path order and hysteresis (all three decision AY's), the pairing server, phones. Rejected: tailcat as the only transport (a relay mandatory on every connection, the allowlist forced off, a flag day); trusting the node key as the identity (loses the hardware phone identity and the fingerprint confirmation); building against v0.7.0's add-only allowlist (revocation would restart the server and drop every other tunnel); a nested module to keep the root on 1.26.5 (two modules for one toolchain gap); a relay of our own as the default (author-hosted infrastructure on the path, §1). Rationale in §8 |
+| AY | How an upgraded pair chooses between the tunnel and the direct path, and what moving between them costs | **every side that issues RPCs raises its own client in the background, no call waits for one, and the link moves between paths without its presence ever changing; a punched tunnel beats direct TCP, and direct TCP beats a relayed tunnel.** A link holds a client for its lifetime (a mutual pair has one each way) and the dialer raises one on demand for a peer whose offer names a server, reaped after five minutes unused because `CloseIdle` cannot reach a network stack. A raise runs the same pinned TLS through the tunnel against the same fingerprint and counts only once a pinned `Ping` succeeds; the region rule is applied again at the raise; `Ping` answers any paired peer, since the dial-back that raises is an approver calling a requester. A call with no established path races the raise against the direct probe inside five seconds — direct answering or a punched raise win at once, a relayed raise waits for the probe — and the raise's timeout bounds only the background attempt; this holds for link presence, link calls and dialer calls. The link moves make-before-break (new `Watch`, first beat, then close the old) and, when its path breaks, tries the other before declaring anything lost; neither goes through `link.failed()`, so the agent's key list never blanks, no grant activity is pushed and nothing logs a new link; a key listing that broke on the way leaves the offered set alone, and a call whose only target is a tunnel not yet up returns an error rather than no answer. Precedence is re-evaluated on beats from the listening side's report of how it sees the caller's client (`TunnelPathReport` on every `PresenceEvent` and in `PingResponse`, from `Server.Status`), a fresh tunnel counting as relayed until reported punched; the dialer, with no stream, re-asks with a Ping through the tunnel once a heartbeat. A call's own deadline running out does not tear the tunnel down. A tunnel that failed in use is not preferred again until it has been re-raised and held for three minutes; raises back off between the presence loop's floor and ceiling, reset by presence returning on any path. A direct contact after a failure re-offers. `trust.Dialable` now takes this instance's tunnel version and counts a tunnel offer only when it can be raised, the switch-off constant is gone, and turning the upgrade on or off reconciles; a pending pairing stays dialable by address only until the pairing server. Status: `trust.DescribeTunnel` gains the path and state words from `trust.TunnelFacts`, `PeerStatus.path` names the tunnel, `ladulas status` has a TUNNEL column and an inbound-tunnels section, a tunnel failure has its own error type and rank, and `ladulas_peers` a `path` label beside raise, failure, switch, fallback and re-offer counts. Amends AQ's reached-address rule to direct dials only (§8). Rejected: raise-then-fall-back (spends AJ's ssh budget per holder, turns AT's fall-through into a wait, pushes a woken phone past its grace); the tunnel whenever it is up (a throttled relay carrying pairs that can reach each other in milliseconds); direct first and the tunnel only when direct fails (gives up the punched path where direct TCP is fragile); the tunnel exclusively once upgraded (a pair with the uplink down could not approve, and every upgraded pair would die with the DERP fleet); a switch through `failed()` (blanks the agent's keys for a reconnect); counting a tunnel towards dialable on the offer alone (moves collectors onto links an instance with the upgrade off cannot connect). Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
