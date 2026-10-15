@@ -93,19 +93,11 @@ func (SystemKeyring) Get(name string) (string, error) {
 
 // Has implements Keyring.
 //
-// A platform keychain that is readable without a prompt has nothing cheaper to
-// offer than a read, so this is one.
-func (k SystemKeyring) Has(name string) (bool, error) {
-	_, err := k.Get(name)
-
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return false, nil
-	case err != nil:
-		return false, err
-	}
-
-	return true, nil
+// On macOS and Windows a read costs no prompt, so it is one. On the Secret
+// Service it is a search that never unlocks anything, because a read there can
+// wait forever on a prompt nobody is shown; probe has the details.
+func (SystemKeyring) Has(name string) (bool, error) {
+	return probe(name)
 }
 
 // Set implements Keyring.

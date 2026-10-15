@@ -607,6 +607,31 @@ If none of those explains it, it is worth a report: a request in flight and an
 attached, unlocked front end that was not asked is the thing decision AL is
 supposed to have made impossible.
 
+### `ladulas status` and the lock panel hang as soon as the store is unlocked
+
+`ladulas unlock` succeeds, the journal says `lock state state=unlocked`, and
+from then on `ladulas status`, `ladulas keyring status` and the desktop
+window's lock panel never answer. `ssh-add -l` and `ladulas peers` still do.
+
+**Cause.** The login collection of the Secret Service keyring was locked —
+typically after a reboot into a session whose login did not unlock it through
+PAM — and nothing on the session could show the unlock prompt. Asking whether
+the store is enrolled for login unlock used to be a keychain read, and
+go-keyring unlocks the collection before every read and then waits for the
+prompt's answer with no timeout. Once the store is open, every status call asks
+that question, so every status call parked. A sealed store never asked, which
+is why it started exactly at unlock.
+
+The question is now a search of the collection, which sees locked entries and
+never prompts (`pkg/keystore.probe`).
+
+**Action:** if it recurs, `busctl --user get-property org.freedesktop.secrets
+/org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection
+Locked` says whether the keyring is locked. An instance that *is* enrolled
+still reads the key at unlock, and that read still waits on the same prompt:
+unlock the login keyring (Seahorse, or a session that runs a prompter), or
+unlock with the passphrase.
+
 ### The daemon died and the store is sealed again
 
 ```
