@@ -49,6 +49,13 @@ type Request struct {
 	// handler that sends the request somewhere else sends these bytes, so that
 	// the digest in the answer it gets back is over material both ends had.
 	Body []byte
+	// Display is the request as this instance decided it — its own parse of
+	// the git object and its own verdict on it — serialized for a front end in
+	// another process to draw (decision Z). For a request raised here it is
+	// Body. For one that arrived from a peer it is not: Body is the requester's
+	// bytes, which carry the requester's parse and verdict, or none at all, and
+	// a card drawn from them is a card drawn from a claim (§5).
+	Display []byte
 
 	// shown is what the host that drew the card added to the prompt this
 	// package rendered. See Presented.
@@ -479,13 +486,19 @@ func (e *Engine) submit(
 	// so a response cannot be replayed against a different request even though
 	// it travels separately from it. A request that arrived over the channel
 	// brought its own bytes and keeps them.
-	if body == nil {
-		serialized, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("serialize request: %w", err)
-		}
+	//
+	// It keeps them for the digest and for nothing else. The verdict above is
+	// in msg and not in those bytes, so what a front end draws is serialized
+	// separately: drawing the requester's bytes showed a borrowed signature
+	// as unchecked with no message at all, and would show whatever parse and
+	// verdict a requester chose to send (§5).
+	display, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("serialize request: %w", err)
+	}
 
-		body = serialized
+	if body == nil {
+		body = display
 	}
 
 	policy := e.Policy()
@@ -497,6 +510,7 @@ func (e *Engine) submit(
 		GrantMachine: GrantMachine(msg),
 		Origin:       origin,
 		Body:         body,
+		Display:      display,
 	}
 
 	// A kind that can be promised for carries the offer, and a kind that

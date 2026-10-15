@@ -7,7 +7,7 @@
 // the branch and the diff are the requesting machine's word for it. §5 says the
 // UI has to say which is which, and that is what the provenance line does.
 
-import { el, append, facts, warnings, section } from "./dom.js";
+import { el, append, facts, warnings, section, caution, ASSERTED } from "./dom.js";
 import { renderDiff, attachDiffFetch } from "./diff.js";
 import { documentsRoute } from "./projects.js";
 
@@ -53,18 +53,22 @@ function commonFacts(request) {
   }
 
   if (request.requester) {
+    // The process behind a request from another machine is that machine's
+    // account of it (§16); one from here was read off the socket.
+    const claimed = !request.requester.local && claimedBy(request);
+
     if (request.requester.program) {
-      rows.push({ label: "Program", value: request.requester.program, mono: true });
+      rows.push({ label: "Program", value: request.requester.program, mono: true, asserted: claimed });
     }
 
     // Who asked, rather than which helper they asked through: ssh and
     // ladulas-sign read the same whoever ran them, and the session does not.
     if (request.requester.asker) {
-      rows.push({ label: "Asked by", value: request.requester.asker });
+      rows.push({ label: "Asked by", value: request.requester.asker, asserted: claimed });
     }
 
     if (request.requester.chain) {
-      rows.push({ label: "Started by", value: request.requester.chain, mono: true });
+      rows.push({ label: "Started by", value: request.requester.chain, mono: true, asserted: claimed });
     }
 
     if (!request.requester.local) {
@@ -74,6 +78,16 @@ function commonFacts(request) {
 
   return rows;
 }
+
+// claimedBy is the tooltip for something the requester told us, naming it when
+// it is another machine.
+function claimedBy(request) {
+  const name = request.requester && !request.requester.local && request.requester.name;
+
+  return name ? "Reported by " + name + ". Nothing here can check it." : ASSERTED;
+}
+
+const UNCHECKED = "Not checked against the bytes being signed.";
 
 function keyLabel(key) {
   if (key.comment) {
@@ -98,24 +112,39 @@ function renderGitSign(request) {
   }
 
   const nodes = [];
+  const claimed = claimedBy(request);
 
-  nodes.push(provenance(git));
+  // Everything parsed out of the object is proven when the object was checked,
+  // and is one more claim when it was not.
+  const unchecked = git.verified ? false : UNCHECKED;
+
+  const note = provenance(git);
+
+  if (note) {
+    nodes.push(note);
+  }
 
   nodes.push(facts([
-    { label: "Repository", value: git.repository, asserted: true, mono: true },
-    { label: "Remote", value: git.originUrl, asserted: true, mono: true },
-    { label: "Branch", value: git.branch, asserted: true },
-    { label: "Author", value: identity(git.author) },
-    { label: "Committer", value: differentCommitter(git) },
-    { label: "Tagger", value: identity(git.tagger) },
-    { label: "Tag", value: git.tag },
-    { label: "Tagged object", value: git.taggedObject, mono: true },
-    { label: "Tree", value: git.tree, mono: true },
-    { label: "Parents", value: (git.parents || []).join(", "), mono: true },
+    { label: "Repository", value: git.repository, asserted: claimed, mono: true },
+    { label: "Remote", value: git.originUrl, asserted: claimed, mono: true },
+    { label: "Branch", value: git.branch, asserted: claimed },
+    { label: "Author", value: identity(git.author), asserted: unchecked },
+    { label: "Committer", value: differentCommitter(git), asserted: unchecked },
+    { label: "Tagger", value: identity(git.tagger), asserted: unchecked },
+    { label: "Tag", value: git.tag, asserted: unchecked },
+    { label: "Tagged object", value: git.taggedObject, mono: true, asserted: unchecked },
+    { label: "Tree", value: git.tree, mono: true, asserted: unchecked },
+    { label: "Parents", value: (git.parents || []).join(", "), mono: true, asserted: unchecked },
   ]));
 
   if (git.message) {
-    nodes.push(el("pre", "message", git.message));
+    const message = el("div", "message");
+
+    append(message,
+      el("pre", "message", git.message),
+      unchecked ? caution(unchecked) : null);
+
+    nodes.push(message);
   }
 
   for (const header of git.extraHeaders || []) {
@@ -170,21 +199,24 @@ function renderProjectNote(project) {
   return node;
 }
 
-// provenance is the sentence that keeps the whole rich prompt honest.
+// provenance is the sentence that keeps the whole rich prompt honest, when
+// there is something to say for the commit as a whole: that it was checked.
+//
+// A commit that was not checked used to get a red banner here, on top of the
+// prompt's own warning saying the same thing, so a card with nothing wrong in
+// it led with two alarms and pushed the commit off the screen. The rows that
+// were not checked now carry the marker instead, and a check that failed is
+// the prompt's warning, which says why.
 function provenance(git) {
   if (!git.verified) {
-    return el("p", "warning danger",
-      git.verificationError ||
-        "The commit shown here was not checked against the payload being signed.");
+    return null;
   }
 
   const what = git.objectType === "tag" ? "tag" : "commit";
 
   return el("p", "provenance verified",
-    "The " + what + " below was checked against the bytes being signed: the " +
-      "message, author and timestamps are what the signature covers. The " +
-      "repository, branch and diff are the requesting machine's account of " +
-      "itself and are marked as such.");
+    "The " + what + " below was checked against the bytes being signed: its " +
+      "message, author and dates are what the signature covers.");
 }
 
 function identity(who) {

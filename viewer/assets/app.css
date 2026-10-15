@@ -35,6 +35,7 @@
   --danger-bg: #450a0a;
   --danger-border: #dc2626;
   --danger-text: #fecaca;
+  --caution: #f59e0b;
 
   /* The surfaces that are not the page: a control's face, a code block, a text
      field. They were literals in a dozen rules, which is why the first attempt
@@ -92,6 +93,7 @@
     --danger-bg: #fee2e2;
     --danger-border: #dc2626;
     --danger-text: #7f1d1d;
+    --caution: #b45309;
 
     --control: #f4f4f5;
     --control-hover: #e4e4e7;
@@ -188,6 +190,18 @@ dl.facts dd { margin: 0; }
   font-size: 12px;
 }
 
+/* The marker beside a claim. Small and beside the value rather than a sentence
+   after it: a card from another machine is mostly claims. */
+.caution {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-left: 6px;
+  color: var(--caution);
+  cursor: help;
+}
+
+.caution svg { width: 14px; height: 14px; }
+
 .provenance {
   margin: 14px 0 0;
   padding: 8px 11px;
@@ -217,8 +231,17 @@ dl.facts dd { margin: 0; }
 
 /* Commit message --------------------------------------------------------- */
 
+div.message { position: relative; margin: 12px 0 0; }
+
+div.message > .caution {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  margin: 0;
+}
+
 pre.message {
-  margin: 12px 0 0;
+  margin: 0;
   padding: 11px 13px;
   background: var(--bg-sunken);
   border: 1px solid var(--border);

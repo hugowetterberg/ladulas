@@ -1515,10 +1515,12 @@ enum ApprovalPromptKind {
 message ApprovalPrompt {
   ApprovalPromptKind kind = 1;
   string request_id = 2;
-  // The serialized ApprovalRequest, for the same reason the peer channel
-  // carries one: the card is drawn from the bytes the digest covers, so the
-  // front end and the daemon are looking at the same material rather than at
-  // two serializations of it.
+  // The serialized ApprovalRequest as this instance decided it: its own parse
+  // of a git object and its own verdict on it. For a local request these are
+  // the bytes the approval's digest covers. For one from a peer they are not —
+  // the digest covers the requester's serialization, which carries the
+  // requester's parse and verdict or none — and drawing those put a claim on
+  // the card in place of the check (architecture §5).
   bytes request = 3;
   // What may be promised, when a promise may be made at all (decisions U, V).
   GrantOffer grant = 4;

@@ -8,6 +8,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/approval"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/sshsig"
+	"google.golang.org/protobuf/proto"
 )
 
 const testCommit = "tree e95bc8444bcd06692c882451e807e45dfe27b5ba\n" +
@@ -329,5 +330,92 @@ func TestDiffSummary(t *testing.T) {
 		if got := approval.DiffSummary(tc.diff); got != tc.want {
 			t.Errorf("%s: got %q, want %q", name, got, tc.want)
 		}
+	}
+}
+
+// A request from a peer keeps the requester's bytes for the digest, and those
+// bytes carry the requester's parse and verdict rather than this instance's. A
+// front end in another process draws Display, so Display has to be the
+// request as it was decided here: a borrowed signature drawn from the
+// requester's bytes showed as unchecked with no message, and a requester that
+// sent a parse of its own choosing marked as verified had it shown as such.
+func TestAPeerRequestIsDrawnAsDecidedHere(t *testing.T) {
+	f := newEngine(t, approval.DefaultPolicy())
+
+	handler := &stubHandler{id: "gui", answer: approveAnswer()}
+	f.engine.Register(handler)
+
+	msg := gitSignWithContext([]byte(testCommit), &ladulasv1.GitContext{
+		RepositoryPath: "/home/someone/Projects/elephant-distribution",
+		Parsed: &ladulasv1.GitObject{
+			Type:    "commit",
+			Subject: "a completely different subject",
+		},
+		VerifiedAgainstPayload: true,
+	})
+	msg.Requester = &ladulasv1.RequesterInfo{
+		InstanceId: "SHA256:pietro", Name: "pietro",
+	}
+
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal the request: %v", err)
+	}
+
+	if _, _, err := f.engine.SubmitPeerSigning(
+		context.Background(), msg, body); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	req := handler.lastRequest()
+	if req == nil {
+		t.Fatal("the approver was never asked")
+	}
+
+	if string(req.Body) != string(body) {
+		t.Error("the bytes the digest covers are no longer the requester's")
+	}
+
+	var drawn ladulasv1.ApprovalRequest
+
+	if err := proto.Unmarshal(req.Display, &drawn); err != nil {
+		t.Fatalf("the display bytes do not parse: %v", err)
+	}
+
+	git := drawn.GetSshsig().GetGitContext()
+
+	if !git.GetVerifiedAgainstPayload() {
+		t.Error("the card would say the commit was not checked")
+	}
+
+	if got := git.GetParsed().GetSubject(); got != "tighten the socket permissions" {
+		t.Errorf("the card would show %q, want the subject from the payload", got)
+	}
+
+	if got := git.GetParsed().GetMessage(); !strings.Contains(got, "The agent socket was 0644.") {
+		t.Errorf("the card would show the message %q", got)
+	}
+}
+
+// The title leads with who is asking and where: a remote request names the
+// machine, and either kind names the repository.
+func TestGitPromptTitleNamesTheMachineAndTheRepository(t *testing.T) {
+	remote := gitSignWithContext([]byte(testCommit), &ladulasv1.GitContext{
+		RepositoryPath: "/home/someone/Projects/elephant-distribution",
+	})
+	remote.Requester = &ladulasv1.RequesterInfo{Name: "pietro"}
+
+	if got, want := approval.RenderPrompt(remote).Title,
+		"Git signature for pietro in elephant-distribution"; got != want {
+		t.Errorf("remote title is %q, want %q", got, want)
+	}
+
+	local := gitSignWithContext([]byte(testCommit), &ladulasv1.GitContext{
+		OriginUrl: "git@github.com:someone/alvar.git",
+	})
+
+	if got, want := approval.RenderPrompt(local).Title,
+		"Git signature in alvar"; got != want {
+		t.Errorf("local title is %q, want %q", got, want)
 	}
 }

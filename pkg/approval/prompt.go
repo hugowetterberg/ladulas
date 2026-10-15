@@ -206,6 +206,9 @@ func renderGitSign(p *Prompt, req *ladulasv1.ApprovalRequest) {
 	p.Title = "Git signature"
 
 	git := req.GetSshsig().GetGitContext()
+
+	defer func() { p.Title = gitTitle(p.Title, req, git) }()
+
 	if git == nil {
 		// A plain agent only ever sees the digest; the rich context arrives with
 		// ladulas-sign in M2 (§5).
@@ -246,12 +249,49 @@ func renderGitSign(p *Prompt, req *ladulasv1.ApprovalRequest) {
 		}
 	}
 
+	// A commit that was checked and did not match is a warning. One that was
+	// never checked is not — there was no object to check, so what is shown
+	// of it is the requester's word, and the details above already say so
+	// line by line. Warning about it as well put two banners above a card
+	// that had nothing alarming in it, and pushed the commit off the screen.
 	if problem := git.GetVerificationError(); problem != "" {
 		p.Warnings = append(p.Warnings, problem)
-	} else if !git.GetVerifiedAgainstPayload() {
-		p.Warnings = append(p.Warnings,
-			"the commit shown was not checked against the payload being signed")
 	}
+}
+
+// gitTitle leads with which machine is asking and in which repository, which
+// is the first thing somebody glancing at a popup needs: a commit on a box
+// down the hall is a different question from one in the shell beside them.
+// Both names are the requester's word, and the details that carry them are
+// marked as such.
+func gitTitle(
+	title string, req *ladulasv1.ApprovalRequest, git *ladulasv1.GitContext,
+) string {
+	if who := req.GetRequester(); who != nil && !who.GetLocal() && who.GetName() != "" {
+		title += " for " + who.GetName()
+	}
+
+	if repo := repositoryName(git); repo != "" {
+		title += " in " + repo
+	}
+
+	return title
+}
+
+// repositoryName is the short name of the repository a request names: the last
+// element of its path, or of its origin URL when there is no path.
+func repositoryName(git *ladulasv1.GitContext) string {
+	name := strings.TrimRight(git.GetRepositoryPath(), "/")
+
+	if name == "" {
+		name = strings.TrimSuffix(strings.TrimRight(git.GetOriginUrl(), "/"), ".git")
+	}
+
+	if i := strings.LastIndexAny(name, "/:"); i >= 0 {
+		name = name[i+1:]
+	}
+
+	return name
 }
 
 // GitIdentityString renders an author, committer or tagger line for a prompt.

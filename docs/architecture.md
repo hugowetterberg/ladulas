@@ -441,6 +441,49 @@ context's claimed commit matches the payload it is about to sign (it has
 the full object, so message/author shown are provably what is signed; only
 repo/branch/diff remain requester-asserted, and are labelled so in the UI).
 
+**The verdict has to reach the screen that shows it, and for a while on the
+desktop it did not.** The engine checks the object before it serializes a
+request, so that the verdict is in the bytes the approval's digest covers
+(§9). A request raised here is serialized after that, and the window drew
+those bytes. A request that came from a peer is different: it brings its
+own bytes, and the digest has to stay over them so that the requester can
+check the answer against what it sent. So the desktop window drew the
+*requester's* serialization, with the requester's parse and verdict in it
+or none at all. A key borrowed from this machine (decision T) showed up as
+"not checked" with no message, author or subject. On the requesting side
+`signRemotely` never runs its own engine, so it never parsed anything,
+while the holder's engine had in fact checked the commit and approved it.
+Worse, a requester that sent a parse of its own choosing marked verified
+had that parse drawn under the verified banner, while the holder signed the
+real payload. That is the attack this section exists to stop, reopened by
+the one front end that lives in another process (decision Z). The phone,
+the console and the bridge were never affected: they render the request
+object the engine holds.
+
+So `approval.Request` carries two serializations. `Body` is what the digest
+covers, and `Display` is the request as this instance decided it. The two
+are the same bytes for a local request, and the control socket's
+`WatchApprovals` sends `Display`. **Do not send a front end `Body`** on the
+grounds that the card should be drawn from the bytes the digest covers.
+That was the old reasoning, and it was only true of local requests. The
+answer is bound to the prompt by its token (decision AM), not by those
+bytes.
+
+**How the card marks a claim.** Each row that is the requester's word, and
+for a commit that was not checked each row parsed from it, carries a small
+amber triangle with the reason in its tooltip. That used to be a sentence
+after each such value, "— reported by the requester", plus a red banner for
+an unchecked commit. On top of that the prompt's own warning said the same
+thing, so a card from another machine led with two alarms. Those were
+followed by a column that was half disclaimers, and the commit ended up off
+the screen. A commit that was not checked is not, on its own, alarming: there
+was no object to check, and it gets the marker rather than a banner. A
+check that *failed* still gets a banner, though it is only ever read in the
+record of the decision: a mismatch is a hard denial and is put to nobody
+(§9). The title leads with which machine asked and in which repository,
+"Git signature for buildbox in ladulas", because that is the question a
+popup is answering before any of its rows.
+
 ## 6. Project publishing and doc browsing
 
 Approving for a headless box is easier when you know what the project is.
@@ -1543,7 +1586,7 @@ signed*: the commit object is proven against the payload digest, a bound
 login's host key is proven against the payload. It does not govern the fields
 a scope *matches on*. A grant scoped to a repository pins
 `git_context.repository_path`, which is the requesting machine's word and is
-labelled "reported by the requester" on the card; a policy `approve` rule may
+marked as a claim on the card (§5); a policy `approve` rule may
 match on the same field, and on the destination label and the calling
 executable, none of them proven. For a request from a peer borrowing a key
 (`OriginPeerSigning`), those fields are entirely the borrower's to set.
@@ -3554,10 +3597,12 @@ rather than from inside the daemon, so four things joined the surface:
 * `WatchApprovals` — a server stream that *is* the registration. While it
   is open the caller is a local approver in the engine's fan-out, marked
   `LocalPrompt` like the tray window it replaces, so a soft lock takes it
-  away for the same reason (§10). It carries the request as **the bytes
-  the digest covers**, not as a message, so the card is drawn from the
-  same material the signature commits to — the rule the peer channel
-  follows, for the same reason (§8) — plus what may be promised, and it
+  away for the same reason (§10). It carries the request as bytes rather
+  than as a message, and they are **the request as this instance decided
+  it** — its own parse of the commit and its own verdict on it. For a
+  local request those are the bytes the digest covers. For one from a peer
+  they are not, and sending the digest's bytes is what put the requester's
+  verdict on the card (§5). It also carries what may be promised, and it
   carries withdrawals and the announcements an auto-approved request still
   gets. Answers come back through `AnswerApproval`, a separate unary call
   rather than the other half of a bidirectional stream, so that an answer
@@ -4044,7 +4089,7 @@ Added 2026-09-01:
 | AJ | How long a signing request waits, and who may change it | **an hour, and one field on the control socket.** It was five minutes, and five minutes is the length that fails whenever the phone is in a pocket: long enough to walk to the kitchen, not long enough to be in a meeting or in another room. The two costs are not symmetric — a budget that is too long costs a terminal somebody has walked away from, and one that is too short costs the commit, because git aborts and the work is repeated and the person answering is punished for having been elsewhere. Nothing counts at the requester's end (`ssh-keygen` and git block happily), so the only clock is this one. SSH authentication keeps its ~90 s and must: sshd is counting, and a budget past `LoginGraceTime` is a login that fails after the person answered it. **Two numbers elsewhere are the same number** and moved with it — a request collected out of an inbox by a phone was capped at fifteen minutes, which never bit against five and would have been the shorter of the two against an hour, taking the prompt off the phone while the requester still waited; and the approval-wait histogram's last bucket was 300 s, so every request that ran the clock out would have piled into `+Inf` together. **The budget is also the one setting a surface may change**, through `Settings` and `SetSignTimeout` on the control socket: the desktop's Settings screen draws it from the instance view with the bounds the instance will accept (at least 30 s, at most a day, refused rather than trimmed), the daemon re-reads the document before writing so a hand edit waiting for a reload is adopted rather than reverted, and requests already waiting keep the budget they started under, because a clock that jumps under somebody reading a diff is not a clock. Rejected: a policy editor on the socket, which is what "let the screen change the policy" would grow into — the document decides what is approved *without asking*, so a screen that could write rules is an auto-approve rule one mis-click from every process running as this user, where a number deciding how long somebody has to answer cannot approve anything by itself. Also rejected: bounding the document. A hand-edited `policy.json` stays unbounded, because somebody editing the file has said what they mean. Rationale in §9 |
 | AK | Whether a terminal can be a front end | **it is the third shell on the seam decision Z left.** `ladulas tui` attaches to a running daemon as an approver, draws the same `RequestView` the window draws, and answers through the same `POST /api/v1/requests/{id}/answer` — so the bound on a promise, the audit entry naming what was on screen, and the refusal of a request settled elsewhere all stay in one place. Nothing in `internal/tui` parses a commit or knows what a scope is; a second surface answering signing requests is a second chance to disagree about what a commit says, and having nothing there that could disagree is the only way not to take it. **It is not the console approver**, and the distinction is the one `pkg/approval` already wrote down: `ConsoleHandler` is inside the daemon on the daemon's stdin and offers a yes, a no and four fixed lengths, because a line-oriented prompt asked to express a reach and a clock is asking somebody to spell out in the dark the thing the wording exists to make plain. This is a screen with a picker on it, so it offers the whole of decision V, decision X's trust note, and the diff a file at a time. Both may be attached at once, as `console` and `terminal`. Three things a terminal decides for itself: the answer keys are drawn at the bottom whatever is scrolled where (the window's pinned-footer rule, for its reason — an answer underneath the diff means scrolling past the whole change before you can refuse it); the change is read on screens of its own rather than folded into the card (decision AN); and the palette is the sixteen ANSI colours, so red and green are whatever the terminal's owner decided, with every coloured line saying in words what the colour says. The log goes to stderr only when stderr is not the screen. The verb is `tui` rather than `approve` because answering is the first thing it does rather than the only thing it will do — the window it is modelled on grew a status pane, a key list and an activity log around this same seam. It also unlocks the store, because a terminal is often the only surface in front of somebody and a sealed instance is the state where an empty screen is most misleading. **It shipped unable to see a request raised before it started**, which decision AL then fixed. Rationale in §12 |
 
-| AL | Whether an approver that arrives late may answer a request already waiting | **it may, and the set is no longer fixed when the request goes out.** The engine settled the eligible approvers as it fanned a request out and never looked again, so a front end that attached a second later was one it would not ask: a signature blocking a terminal could only be answered by something that happened to be running already, and `ssh` in, start the terminal approver, and the screen was empty while `git commit` hung. **That was never a rule about authority.** The question has been asked of this machine, a front end is authorised by the socket it is on (§14, "possession of the unix account is the authority"), and a late arrival can answer nothing an earlier one could not — the deadline stays the request's, the answer is signed and logged the same way, and the card is drawn from the same digest-covered bytes. It was where the fan-out kept its count. So an approver that registers is offered everything still waiting, and so is a local prompt the moment a soft lock is lifted from one, which is the same event: a set of approvers becoming eligible. **The count is the part this decision is careful about.** `prompt` denies with `NO_APPROVER` once every approver it asked has gone, and decision AC is the bug that lived in exactly that arithmetic — a peer with nobody to ask reported instantly, won every race, and vetoed every signature on the machine. The denominator therefore moves under a lock rather than being a `len()` in the loop, is re-read on each pass, and grows only through the one function that also refuses three things: a request that has been settled, a request whose context has finished, and an approver already asked. The eligibility test itself is shared with the fan-out's rather than copied, so a request from a peer cannot reach another peer through this door and a soft lock cannot be walked around by attaching. Results are sent with a `select` on the request's context, because a joiner may find a channel sized for the approvers asked up front already full and a blocking send would leak the goroutine for the life of the process. What surfaces get for free: a request joined this way carries its own `created_at`, so a card says how long the thing has really been waiting instead of how long this screen has been looking at it. Rejected: parking local requests the way the peer inbox parks them for a phone (§8), which is a second mechanism for the same idea and would have the front end poll for what the engine can hand it. Qualifies decision Z's "restarting the front end does not re-raise it", which is withdrawn. Rationale in §9 |
+| AL | Whether an approver that arrives late may answer a request already waiting | **it may, and the set is no longer fixed when the request goes out.** The engine settled the eligible approvers as it fanned a request out and never looked again, so a front end that attached a second later was one it would not ask: a signature blocking a terminal could only be answered by something that happened to be running already, and `ssh` in, start the terminal approver, and the screen was empty while `git commit` hung. **That was never a rule about authority.** The question has been asked of this machine, a front end is authorised by the socket it is on (§14, "possession of the unix account is the authority"), and a late arrival can answer nothing an earlier one could not — the deadline stays the request's, the answer is signed and logged the same way, and the card is drawn from the same bytes (`Display`, §5). It was where the fan-out kept its count. So an approver that registers is offered everything still waiting, and so is a local prompt the moment a soft lock is lifted from one, which is the same event: a set of approvers becoming eligible. **The count is the part this decision is careful about.** `prompt` denies with `NO_APPROVER` once every approver it asked has gone, and decision AC is the bug that lived in exactly that arithmetic — a peer with nobody to ask reported instantly, won every race, and vetoed every signature on the machine. The denominator therefore moves under a lock rather than being a `len()` in the loop, is re-read on each pass, and grows only through the one function that also refuses three things: a request that has been settled, a request whose context has finished, and an approver already asked. The eligibility test itself is shared with the fan-out's rather than copied, so a request from a peer cannot reach another peer through this door and a soft lock cannot be walked around by attaching. Results are sent with a `select` on the request's context, because a joiner may find a channel sized for the approvers asked up front already full and a blocking send would leak the goroutine for the life of the process. What surfaces get for free: a request joined this way carries its own `created_at`, so a card says how long the thing has really been waiting instead of how long this screen has been looking at it. Rejected: parking local requests the way the peer inbox parks them for a phone (§8), which is a second mechanism for the same idea and would have the front end poll for what the engine can hand it. Qualifies decision Z's "restarting the front end does not re-raise it", which is withdrawn. Rationale in §9 |
 
 | AM | What an answer on the control socket names | **the prompt, not the request.** Two front ends attached at once are two approvers and both are asked (decision Z), so one request id names two cards on two screens. `AnswerApproval` carried only the id, so the daemon delivered the answer to every prompt waiting under it: both approvers' `Decide` returned with it, neither reached the branch that sends `WITHDRAWN`, and the desktop's popup went on asking after the terminal had answered and the commit had been signed. **The withdrawal machinery was never broken** — the engine cancels the losers on the first decision and a cancelled approver takes its own card down — it just never ran, because nobody lost. So the daemon mints a token per card, sends it on the `ApprovalPrompt`, and the front end echoes it back; the answer settles that one prompt and the rest are cancelled and withdrawn as they always were. Rejected: matching on the approver id, which two terminals share by default and which would have made the fix work on a desktop-plus-terminal pair and not on two terminals; and broadcasting `WITHDRAWN` to every prompt after an answer, which fixes the symptom by sending the answering front end a withdrawal it is expected to ignore because its card happens to be gone already — correct only by an accident of ordering. A front end that sends no token is answered the old way, which is right when it is the only one attached and cannot be got right when it is not, so it says so in the log. Not found by a test for a year because one attached front end is the case every test had; the reproduction attaches two that share a name. Rationale in §9 |
 

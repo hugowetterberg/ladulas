@@ -46,8 +46,14 @@ import (
 // window has a sidebar and a pane beside it, so it is the shape of a small
 // application window rather than of a dialog, and it has a floor under it —
 // narrower than that and the sidebar is eating the pane it exists to navigate.
+//
+// The prompt's width is set by the commit message rather than by the facts: a
+// body wrapped at 72 columns has to fit the message box without wrapping again.
+// At 620 the box held 69 or so, so every full-length line broke in two and the
+// message read as ragged prose. 700 holds about 80, which leaves room for the
+// scrollbar a long card brings with it.
 const (
-	promptWidth  = 620
+	promptWidth  = 700
 	promptHeight = 680
 
 	mainWidth     = 1040

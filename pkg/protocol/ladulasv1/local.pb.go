@@ -7070,10 +7070,12 @@ type ApprovalPrompt struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Kind      ApprovalPromptKind     `protobuf:"varint,1,opt,name=kind,proto3,enum=ladulas.v1.ApprovalPromptKind" json:"kind,omitempty"`
 	RequestId string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	// The serialized ApprovalRequest, for the same reason the peer channel
-	// carries one: the card is drawn from the bytes the digest covers, so the
-	// front end and the daemon are looking at the same material rather than at
-	// two serializations of it.
+	// The serialized ApprovalRequest as this instance decided it: its own parse
+	// of a git object and its own verdict on it. For a local request these are
+	// the bytes the approval's digest covers. For one from a peer they are not —
+	// the digest covers the requester's serialization, which carries the
+	// requester's parse and verdict or none — and drawing those put a claim on
+	// the card in place of the check (architecture §5).
 	Request []byte `protobuf:"bytes,3,opt,name=request,proto3" json:"request,omitempty"`
 	// What may be promised, when a promise may be made at all (decisions U, V).
 	Grant *GrantOffer `protobuf:"bytes,4,opt,name=grant,proto3" json:"grant,omitempty"`

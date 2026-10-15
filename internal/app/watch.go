@@ -228,7 +228,7 @@ func (s *socketApprover) Decide(
 	if err := s.send(&ladulasv1.ApprovalPrompt{
 		Kind:        ladulasv1.ApprovalPromptKind_APPROVAL_PROMPT_KIND_PROMPT,
 		RequestId:   id,
-		Request:     req.Body,
+		Request:     req.Display,
 		Grant:       grantOffer(req),
 		PromptToken: entry.token,
 	}); err != nil {
@@ -259,7 +259,7 @@ func (s *socketApprover) Notify(
 	if err := s.send(&ladulasv1.ApprovalPrompt{
 		Kind:      ladulasv1.ApprovalPromptKind_APPROVAL_PROMPT_KIND_DECIDED,
 		RequestId: req.Msg.GetRequestId(),
-		Request:   req.Body,
+		Request:   req.Display,
 		Response:  resp,
 	}); err != nil {
 		s.app.log.Debug("could not announce a decision to the front end",
