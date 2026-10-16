@@ -321,10 +321,13 @@ requester desktop ──(optional wake-up: relay ▸ FCM/APNs/UnifiedPush)──
        └────────────── phone dials requester directly ◀─────────────────┘
 ```
 
-(The phone dials directly today. Phones join the tunnel only after a device
-run of our own `gomobile` build (decision AX); until then a phone's offer,
-when it has one, names a client key and no server — "phones never listen"
-holds at the RPC layer either way.)
+(The phone dials directly today. The core can carry a phone on the tunnel
+as a client only (decision BA): `pkg/tunnel` opens a tunnel with a client
+key and no server, and its offer names that key and no address, so "phones
+never listen" holds at the tunnel as well as at the RPC layer. Using it is
+the apps' change, and until a device has run it the phone dials directly.
+It used to wait on a device run of a `gomobile` build that could not have
+carried tailcat at all, because the engine was `internal/tunnel`.)
 
 When the approver is a desktop, or a phone that already has a live
 connection (foreground app or foreground service), the request goes
@@ -1938,14 +1941,19 @@ address is not built; until it is, a re-pick is a deliberate break. A
 peer-supplied region is something this instance would connect to, and is
 held to §11's rule before it is written down.
 
-*Where the code is.* `pkg/peer` declares a `Tunnel` interface in strings,
-byte slices and integers, and `pkg/transport` the listener, connection and
-gate it serves through, because `gomobile` binds nothing else (§21) and a
-phone build must not link tailcat. `internal/tunnel` is the only package
-that imports it; `internal/app` builds a tunnel through a factory a binary
-hands in (`app.Config.Tunnels`), and `cmd/ladulasd` and `cmd/ladulas` (for
-`ladulas agent`) are what hand it in, so nothing shared links tailcat
-either: `go list -deps ./pkg/...` names no `tailscale.com` package. A build
+*Where the code is.* `pkg/peer` declares a `Tunnel` interface, and
+`pkg/transport` the listener, connection and gate it serves through, so
+that no package a phone links without asking links tailcat. `pkg/tunnel` is
+the only package that imports it (decision BA; it was `internal/tunnel`
+until a phone needed it). `internal/app` builds a tunnel through a factory
+a binary hands in (`app.Config.Tunnels`), `internal/tunnel` is that factory,
+and `cmd/ladulasd` and `cmd/ladulas` (for `ladulas agent`) are what hand it
+in; a phone's core calls `tunnel.Open` with a client key only. Every other
+package under `pkg/` reaches no `tailscale.com` package, and
+`internal/phonebuild` fails the tests when one does (§21). The interface was
+first drawn in strings, byte slices and integers on the belief that
+`gomobile` would bind it; it never binds anything here (§21), and the shape
+is kept because it is a fine shape, not because it is required. A build
 with the `notailcat` tag has no tunnel and sends the withdrawal form. The
 module's `go` line is 1.27.1, which tailcat requires; `go mod tidy` ignores
 build tags, so this moves every `pkg/` consumer to 1.27.1 too. A nested
@@ -2128,7 +2136,8 @@ them (`StatusResponse.inbound_tunnels`); and `ladulas_peers` carries a `path`
 label, with raises, failures, switches, fallbacks and re-offers counted in
 `ladulas_tunnel_events_total` (observability.md).
 
-*Not in this step.* Phones on the tunnel. This list also named settling a
+*Not in this step.* Phones on the tunnel, whose core half — a client-only
+tunnel and its offer — arrived with decision BA. This list also named settling a
 pending pairing over the tunnel and the pairing server until both arrived
 with decision AZ (§7), and the dialer hearing whether its tunnel has punched
 in its first draft, which it asks once a heartbeat now, above.
@@ -5136,7 +5145,7 @@ CLI and the phone are themselves consumers of this API, which is what
 keeps it honest, and `internal/app` is the assembly they share rather than
 a fifth arrangement of the same parts.
 
-**Seventeen packages are in `pkg/` and the promise has still not been
+**The packages in `pkg/` are public and the promise has still not been
 made.** The rule this violates is a good one: a package moves out of
 `internal/` once something outside the module has embedded it *and* the
 shape has stopped changing, because publishing an import path costs more
@@ -5239,7 +5248,7 @@ Added 2026-08-19:
 
 | # | Decision | Resolution |
 |---|----------|------------|
-| AB | Whether the packages a mobile core binds are public | **they are, and nothing about them is promised.** A phone is a full Ladulås node — a keystore, an agent, an approval engine, a peer link and the viewer bundle — and not a client of one, so a `gomobile` bind surface reaches very nearly everything that is not the desktop. Seventeen packages are in `pkg/` rather than `internal/` for that reason alone, and not one of them carries a compatibility guarantee; the shell that binds them, and the version pin naming the commit it was built from, belong to the consumer, and this module depends on nothing of theirs. Rejected: building `Mobile.xcframework` here and publishing it as a versioned binary artifact, which would have kept every package `internal/`. It puts a macOS runner in the middle of this repository's release path, and it makes every change a consumer needs wait on a release of this module before anything can be built against it at all. Two things follow. Nothing here compiles the bind surface, so a change that breaks `gomobile`'s type rules is green here and fails where it is bound. And `pkg/` is a published import path, which §18 would rather it were not. Rationale in §21 |
+| AB | Whether the packages a mobile core binds are public | **they are, and nothing about them is promised.** A phone is a full Ladulås node — a keystore, an agent, an approval engine, a peer link and the viewer bundle — and not a client of one, so a `gomobile` bind surface reaches very nearly everything that is not the desktop. Seventeen packages are in `pkg/` rather than `internal/` for that reason alone, and not one of them carries a compatibility guarantee; the shell that binds them, and the version pin naming the commit it was built from, belong to the consumer, and this module depends on nothing of theirs. Rejected: building `Mobile.xcframework` here and publishing it as a versioned binary artifact, which would have kept every package `internal/`. It puts a macOS runner in the middle of this repository's release path, and it makes every change a consumer needs wait on a release of this module before anything can be built against it at all. Two things follow. Nothing here compiles the bind surface, so a change that breaks `gomobile`'s type rules is green here and fails where it is bound. And `pkg/` is a published import path, which §18 would rather it were not. **Corrected 2026-10-16:** the first of those was wrong — `gomobile` binds only the consumer's own bind surface, which reaches `pkg/` through ordinary Go, so `pkg/` has no type rules to break. What a phone does need from `pkg/` is that it compiles for the phone platforms and links nothing desktop-only unless asked, and `internal/phonebuild` checks both. Rationale in §21 |
 | AC | What a peer's "nobody to ask" counts as | **a report, not a decision: first *decision* wins.** An answer of `NO_APPROVER` from a paired peer goes where an approver that could not be reached goes — the request is denied only once every eligible approver has gone that way, and the prompts that are up stay up. It qualifies §2's "first response wins", which was flat and wrong in one case that turned out to be ordinary: a peer runs this same engine, and one with no approver of its own answers instantly because nothing was asked of anybody, so it won every race against a desktop prompt waiting on a person. An instance paired to a box like that had every signature and every SSH login denied, deterministically, with the peer's name on the refusal — pairing had removed the only way to get an answer instead of adding a second one. Narrow deliberately: only `NO_APPROVER`, only from a peer, and never an approval. A peer's timeout means somebody was asked and did not answer; a policy denial, a hard rule and a human saying no are decisions and settle the request as they always did. Rejected: excluding a peer with no approver from the eligible set up front, which is cheaper but needs the peer to keep advertising a fact that changes when somebody closes a laptop lid, and would still need this rule for the moment in between. Rationale in §9; the report is in `bugs/` |
 | AD | Who decides what a pairing is for | **the side displaying the code, once, for both sides.** `ladulas pair --listen --intent approver\|requester\|mutual` — an approver for this instance, an instance to approve for, or both — and the side that uses the code declares nothing: it is shown the sentence on its own confirmation and either agrees to that pairing or does not. Each record is that one answer and its mirror, because a peer that may ask us to approve is a peer we approve for. It replaces two independent declarations, one per side, each defaulting to "both", with nothing making them agree and neither side ever shown what the other had chosen — which is how an instance came to record "may approve for me" about a box with nobody at it and hand decision AC its veto. The intent is required rather than defaulted: guessing here is the thing being fixed. Changing what a pairing is for means removing the peer and pairing again, which is a limit and is meant to be one; `ladulas peers allow` still edits a record for somebody who knows exactly what they are doing. On the wire the joining side's direction fields are reserved rather than reused, and the answer it gets carries the intent it is agreeing to. Rationale in §7 |
 | AE | Where the pairing QR comes from | **a Go dependency, drawn by the bridge.** `rsc.io/qr` encodes and this repository renders the matrix to SVG, served on `/api/v1/pairings/qr` the way `pkg/avatar` serves a face — so the viewer bundle keeps its no-dependencies rule, which its own tests assert, and the phone gets the picture for nothing by being the other host of the same handler. It settles open question 6, which had been "the viewer takes its first dependency, or somebody writes an encoder, or `qrencode` stays the documented step" since M3, with the phone able to read a QR nothing here could draw. `qrencode` stays the documented step for a headless box, where the terminal's pixels are not Ladulås's to choose. The one response the bridge serves `no-store`: the string behind the picture is a five-minute single-use secret. Rejected: writing the encoder, which is Reed–Solomon over GF(256) plus four tables to be got exactly right, against a dependency that is 700 lines, unchanged since 2015 and read in an afternoon |
@@ -5308,6 +5317,12 @@ Added 2026-10-14:
 | AX | Whether two paired instances may reach each other through a NAT traversal layer, and on what terms | **yes, as an upgrade both sides opt into, with the same pinned TLS inside it and the direct path kept as the fallback; this step builds the listening half, and decision AY the dialling half.** The tunnel is [tailcat](https://github.com/tailscale/tailcat) pinned at `main` `52fbad3` (2026-10-07) for its `AllowClient` hook, `KeySet`, `DisconnectClient` and `Server.PeerKey`, which raises the module's `go` line to 1.27.1. **The tunnel never authenticates anybody**: every connection through it is decision A1's TLS 1.3 handshake pinned to the identity key, the tailcat keys (a server node key, a client node key and a pre-shared key per instance, generated once into the encrypted store) decide only who reaches that handshake, and `pkg/transport` asserts X25519MLKEM768 so that the post-quantum claim rests on the TLS rather than on tailcat's pre-shared key. **Opt-in per instance and described as a public exposure** in decision H's sense: `ladulas tunnel on`, `SetTunnel`, or the desktop's switch, each with the daemon's two sentences beside it — what it exposes, and what the DERP operator learns. **Capability rides AQ's carriers** as `TunnelOffer` (versions of ours, server address, client key): `WatchRequest`, every `PresenceEvent`, `FetchPendingResponse`, pairing's `PairRequest`/`PairResponse` and `PairFinishRequest`/`PairFinishResponse`, and `FetchPendingRequest` for a phone that has no other way back. Absent changes nothing, empty versions withdraws (and a build without tailcat or with the upgrade off sends that form on every carrier), a withdrawal from a peer that never offered is not written, the record is written on change only, the offer is kept on the pending pairing too, and an offer no beat has confirmed for fourteen days or that direct contacts without one have contradicted for ten minutes stops being raised — **except for a peer with no direct address**, whose tunnel is the only carrier of the next offer. **The allowlist** is the client keys of the trust records and pending pairings, rebuilt at every server start, changed for free (`KeySet`), with revoke, decline and withdraw removing the key and dropping the client. **The tunnel listener has its own gate**: a paired or pending identity arriving with the client key it offered, never anybody because a pairing window is open, no pairing RPCs, `SettlePairing` only for a pending identity, and `RemoteAddr` shown as the path. **The region is a contract**: picked once from the DERP map, persisted, and never re-picked implicitly; Tailscale's public fleet through tailcat's map is the default, a self-hosted map is a setting, and a re-pick is deliberate (`--repick`) and strands tunnel-only pairs until the two-server grace exists. A peer-supplied region — every one an address embeds — is held to the relay URL's rule (§11), by host name, ports and certificate name because the address does not carry the id, with literal addresses required for a region not our own. **Lifecycle is the inner half's**: unseal starts the server in the background and nothing is offered until it is up, seal closes clients then the server, a closing or closed node offers nothing rather than the withdrawal and takes no new tunnel, and the tunnel keys join the copies zeroing cannot reach. **tailcat stays out of `pkg/`**: `pkg/peer.Tunnel` and `pkg/transport`'s tunnel interfaces are strings and bytes, `internal/tunnel` is the only importer, the binaries hand a factory to `internal/app`, and `notailcat` builds without it. **Dialable** is written to count a usable tunnel server address and switched off until links can dial over the tunnel (§3): counting it on the offer alone moved collectors off their inboxes onto links that could not connect. (Switched on by decision AY, with this instance's own version made part of the rule so that the same failure cannot return through an instance with the upgrade off.) Retires §1's NAT-traversal non-goal (history kept there) and restates decision S's premise (§10); §1's no-mandatory-infrastructure goal survives because LAN pairing needs no relay and an upgraded pair falls back to direct. Not in this step: raising clients and dialling over the tunnel, the path order and hysteresis (all three decision AY's), the pairing server, phones. Rejected: tailcat as the only transport (a relay mandatory on every connection, the allowlist forced off, a flag day); trusting the node key as the identity (loses the hardware phone identity and the fingerprint confirmation); building against v0.7.0's add-only allowlist (revocation would restart the server and drop every other tunnel); a nested module to keep the root on 1.26.5 (two modules for one toolchain gap); a relay of our own as the default (author-hosted infrastructure on the path, §1). Rationale in §8 |
 | AY | How an upgraded pair chooses between the tunnel and the direct path, and what moving between them costs | **every side that issues RPCs raises its own client in the background, no call waits for one, and the link moves between paths without its presence ever changing; a punched tunnel beats direct TCP, and direct TCP beats a relayed tunnel.** A link holds a client for its lifetime (a mutual pair has one each way) and the dialer raises one on demand for a peer whose offer names a server, reaped after five minutes unused because `CloseIdle` cannot reach a network stack. A raise runs the same pinned TLS through the tunnel against the same fingerprint and counts only once a pinned `Ping` succeeds; the region rule is applied again at the raise; `Ping` answers any paired peer, since the dial-back that raises is an approver calling a requester. A call with no established path races the raise against the direct probe inside five seconds — direct answering or a punched raise win at once, a relayed raise waits for the probe — and the raise's timeout bounds only the background attempt; this holds for link presence, link calls and dialer calls. The link moves make-before-break (new `Watch`, first beat, then close the old) and, when its path breaks, tries the other before declaring anything lost; neither goes through `link.failed()`, so the agent's key list never blanks, no grant activity is pushed and nothing logs a new link; a key listing that broke on the way leaves the offered set alone, and a call whose only target is a tunnel not yet up returns an error rather than no answer. Precedence is re-evaluated on beats from the listening side's report of how it sees the caller's client (`TunnelPathReport` on every `PresenceEvent` and in `PingResponse`, from `Server.Status`), a fresh tunnel counting as relayed until reported punched; the dialer, with no stream, re-asks with a Ping through the tunnel once a heartbeat. A call's own deadline running out does not tear the tunnel down. A tunnel that failed in use is not preferred again until it has been re-raised and held for three minutes; raises back off between the presence loop's floor and ceiling, reset by presence returning on any path. A direct contact after a failure re-offers. `trust.Dialable` now takes this instance's tunnel version and counts a tunnel offer only when it can be raised, the switch-off constant is gone, and turning the upgrade on or off reconciles; a pending pairing stays dialable by address only until the pairing server. Status: `trust.DescribeTunnel` gains the path and state words from `trust.TunnelFacts`, `PeerStatus.path` names the tunnel, `ladulas status` has a TUNNEL column and an inbound-tunnels section, a tunnel failure has its own error type and rank, and `ladulas_peers` a `path` label beside raise, failure, switch, fallback and re-offer counts. Amends AQ's reached-address rule to direct dials only (§8). Rejected: raise-then-fall-back (spends AJ's ssh budget per holder, turns AT's fall-through into a wait, pushes a woken phone past its grace); the tunnel whenever it is up (a throttled relay carrying pairs that can reach each other in milliseconds); direct first and the tunnel only when direct fails (gives up the punched path where direct TCP is fragile); the tunnel exclusively once upgraded (a pair with the uplink down could not approve, and every upgraded pair would die with the DERP fleet); a switch through `failed()` (blanks the agent's keys for a reconnect); counting a tunnel towards dialable on the offer alone (moves collectors onto links an instance with the upgrade off cannot connect). Rationale in §8 |
 | AZ | How a machine on another network joins with the full code | **through a pairing server: a second tailcat server the displaying side runs for one window, whose address only the full code carries.** Started only while the long-lived server is up, before the code is shown and beside the DNS-SD announcement, bounded at eight seconds; otherwise the code is shown without it and says *off-network pairing unavailable:* and why (`PairingProgress.off_network`). Fresh node and pre-shared keys, never stored; `AllowClient` admitting any key up to eight distinct ones and refusing every later one; a pairing-only mux (`transport.Server.ServePairingTunnel`) whose gate admits any identity while its window is open and permits `PairStart` and `PairFinish` only; connections named *via pairing server*. Region picked from the DERP map, or the persisted one when the map fails, and not persisted. **Spent is not closed**: the window refuses new exchanges at once, and the pairing server closes a short grace after the exchange that spent it has returned, bounded by the five minutes, or at once when the window closes unused, is replaced, the tunnel is switched off, or the node seals or shuts down — pairing server first, then clients, then the long-lived server. The joiner tries the direct addresses all at once, pinned, for at most three seconds when the code names a pairing server, then raises a client against the pairing server and pins the handshake through it, and the PIN exchange starts only after the pin holds; joining that way needs the joiner's own upgrade on and its server up ("turn on the tunnel to pair across networks"), a matching tunnel version and the region rule. The dialled address is never recorded. On spend both sides admit the other's long-lived client key and keep its long-lived offer (AX's carriers), decline and withdraw remove them once the peer has heard — a refusal is held in memory, its key admitted and both gates letting the peer in to ask, until it is delivered or asked for (§7; this amends decision M's "propagates by asking", which never reached the question) — `trust.PendingDialable` counts a raisable tunnel, and `SettlePairing` goes through a client raised for the call when no direct address answers a probe. `PairingCode.tunnel_address` and `tunnel_version` are new fields; the code stays at version 1 for AV's overlap. Rejected: the long-lived server's address in the code (a bearer capability for as long as the keys live, admitting anybody for every window); closing the pairing server on spend (tears down the connection carrying the response, stranding the displayer's pending pairing); keeping it up for the joiner until the pairing resolves and sending the long-lived offer only at completion (a pending pairing has no clock, so the server would outlive seals with a persisted key); joining across networks with the upgrade off (a pair with no path that could never settle); dropping a refusal on the spot (the far side is refused at the door for ever). Rationale in §7 |
+
+Added 2026-10-16:
+
+| # | Decision | Resolution |
+|---|----------|------------|
+| BA | Whether a phone may carry tailcat, and as what | **yes, as a client only, from a public package it opts into.** The tunnel engine moved from `internal/tunnel` to `pkg/tunnel`, and `internal/tunnel` keeps only the daemon's factory, which needs `internal/app`. A `tunnel.Options` with a client key and no server key or pre-shared key builds a client-only tunnel: `Start` answers with no address and no error, `Listen` and `StartPairing` refuse with `ErrClientOnly`, and `Raise` works as it always did, because a client needs nothing but its own key. `pkg/peer` takes an address-less start as client-only: no listener, no allowlist, and an offer that carries the version and the client key and no server address, which a peer already knew how to read — it admits the key, has nothing to dial, and the phone raises clients to its server. So "phones never listen" holds at the tunnel too: a phone runs no tailcat server, and never displays a code another machine joins through one. **What it reverses** is the belief that keeping tailcat out of `pkg/` was a `gomobile` binding requirement; it was a choice about what a phone links without asking, and it still holds for every other package under `pkg/`, which `internal/phonebuild` checks (§21). Every package under `pkg/`, `tunnel` included, cross-compiles for android/arm64, android/amd64 and ios/arm64. Not established here: tailcat's memory and battery cost on a device, and what iOS suspension does to a raised client — the apps' to find out. Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the
@@ -6030,11 +6045,12 @@ Still open, to resolve during early implementation:
 
 ## 21. The public surface, and what nothing here checks
 
-`pkg/` is a published import path, and the seventeen packages under it —
-`agent`, `apns`, `approval`, `avatar`, `bridge`, `gitctx`, `hardware`,
-`identity`, `keystore`, `peer`, `peercred`, `project`, `relay`, `sshsig`,
-`storepb`, `transport` and `trust` — are out there because a mobile core
-built out of this module reaches all of them. A phone is a peer and not a
+`pkg/` is a published import path, and the packages under it — `agent`,
+`apns`, `approval`, `avatar`, `bridge`, `gitctx`, `hardware`, `identity`,
+`keystore`, `peer`, `peercred`, `project`, `protocol`, `relay`, `sshsig`,
+`storepb`, `transport`, `trust` and `tunnel` — are out there because a
+mobile core built out of this module reaches them. `tunnel` is the one a
+core links only by asking for it (decision BA). A phone is a peer and not a
 client: it opens a store, serves an approval engine, holds keys in
 hardware, dials the peer channel and renders the shared viewer bundle,
 which is what `ladulasd` assembles, arranged for a device that sleeps. So
@@ -6045,16 +6061,46 @@ not the desktop, and §18 is why the promise is still not made with it.
 the whole of the distinction. Everything below is a consequence of the
 other side of the seam being built somewhere this repository cannot see.
 
-### The gomobile constraint on exported signatures
+### What a phone needs from `pkg/`, and the rule that was wrong
 
-Nothing here compiles a `gomobile` bind surface. `gomobile` binds
-strings, signed integers, booleans, `[]byte`, errors and types declared
-in the bound package, and nothing else — so widening an exported
-signature in `pkg/` to take a `map`, a slice of structs, an interface or
-an unexported type compiles perfectly, passes every test in this
-repository, and then fails to bind. There is no check on this side that
-catches it, so a change to `pkg/` that widens an exported signature is
-worth saying out loud.
+**Two things, both checked.** Every package under `pkg/` has to compile
+for the phone platforms (android/arm64 and amd64, ios/arm64), and no
+package a phone links without asking may bring a desktop-only dependency
+with it: the Tailscale stack under tailcat, gVisor, the Prometheus client.
+`internal/phonebuild` checks both as part of `go test ./...`, the second
+with an allowance for the packages a core opts into — `pkg/tunnel`, which
+is tailcat (decision BA). The cross-compile runs without cgo, so it finds a
+package that cannot be built for a phone at all and not a linker problem;
+the device build is still the consumer's, and §21's list below still says
+what only a phone notices.
+
+**It used to say something else, and it was wrong.** This subsection was
+"the gomobile constraint on exported signatures": that `gomobile` binds
+strings, signed integers, booleans, `[]byte`, errors and the bound
+package's own types, so a `pkg/` signature taking a map, a slice of
+structs, an interface or an unexported type would compile here and fail to
+bind, with nothing on this side to catch it — and CLAUDE.md told every
+change to `pkg/` to say so out loud. The first half is true of the package
+`gomobile` is handed. The second does not follow, because that package is
+the consumer's: `gomobile bind` binds `ladulas-apps/mobile` and nothing
+else, and `mobile` reaches `pkg/` through `mobilecore`, which is ordinary
+Go. A slice of structs in `pkg/bridge` is a slice of structs to
+`mobilecore`. It was established by binding the apps' surface against this
+module after the tunnel work (decisions AV–AZ), whose `pkg/` signatures
+took interfaces and slices of structs freely and which the rule had flagged
+six times: `gobind` exited cleanly with nothing skipped. Where the type
+rules do bite, the fix is an adapter in `mobile/`, which the apps' own
+documents already said.
+
+What the rule cost while it stood: signatures drawn around a constraint
+that was not there — deadlines as Unix nanoseconds, `peer.TunnelStatus`
+returned by pointer "because gomobile binds structs by pointer only",
+strings of JSON where a slice would do — and, worse, the belief that
+keeping tailcat out of `pkg/` was a binding requirement rather than a
+choice about what a phone links, which is what kept the engine in
+`internal/` where a phone could not use it. **Do not reinstate a type
+rule on `pkg/`** on the strength of those comments; they describe the old
+belief. The checks above are the constraint.
 
 Versions flow the same way. A consumer pins a pseudo-version of `main`
 rather than a release, deliberately: a tag per consumer-visible change is

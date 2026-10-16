@@ -137,12 +137,11 @@ is a heavier obligation here than it looks: a consumer builds against a
 pseudo-version of this branch rather than against a release, so a commit
 that does not compile is a commit nobody can build anything from.
 
-There is no phone target here, and nothing in the tree compiles against
-gomobile — which is also the only check `pkg/` does not get. Gomobile
-takes strings, signed integers, booleans, `[]byte`, errors and types
-declared in the bound package, so a change that widens an exported
-signature past that list compiles perfectly, passes `make test`, and then
-fails to bind. §21 has the rest of what nothing here checks.
+There is no phone target here. What a phone needs from `pkg/` — that it
+compiles for android and ios, and links nothing desktop-only unless it
+asks, as it does for `pkg/tunnel` — is checked by `internal/phonebuild` in
+`make test`. `gomobile`'s type rules apply to the apps' own bind surface,
+not to `pkg/` (§21). §21 has the rest of what nothing here checks.
 
 ## Running a local instance
 

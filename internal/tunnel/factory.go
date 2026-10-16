@@ -1,8 +1,15 @@
+// Package tunnel wires the tailcat engine in pkg/tunnel into the daemon's
+// instance (docs/architecture.md §8, decisions AX and BA).
+//
+// The engine is public so that a phone can carry it as a client; this
+// package is the one piece that needs internal/app, and so the one piece
+// that stays here.
 package tunnel
 
 import (
 	"github.com/hugowetterberg/ladulas/internal/app"
 	"github.com/hugowetterberg/ladulas/pkg/peer"
+	engine "github.com/hugowetterberg/ladulas/pkg/tunnel"
 )
 
 // Factory is what a daemon binary hands its instance so that the instance can
@@ -14,12 +21,12 @@ import (
 // tailcat: the binaries choose to carry it, and everything else built from
 // internal/app — the tests, an embedder — does not (decision AX).
 func Factory() app.TunnelFactory {
-	if !Available {
+	if !engine.Available {
 		return nil
 	}
 
 	return func(spec app.TunnelSpec) (peer.Tunnel, error) {
-		return newTunnel(Options{
+		return engine.Open(engine.Options{
 			ServerKey:    spec.ServerKey,
 			PresharedKey: spec.PresharedKey,
 			ClientKey:    spec.ClientKey,

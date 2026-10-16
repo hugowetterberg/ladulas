@@ -43,6 +43,12 @@ type Tunnel struct {
 	// restarts the server.
 	allow tailcat.KeySet
 
+	// clientOnly is a tunnel built without server keys: it raises clients to
+	// peers' servers and runs no server of its own, which is what a phone is
+	// (decision BA). Start answers with no address and no error, and that is
+	// how pkg/peer tells it apart from a server that has not come up.
+	clientOnly bool
+
 	mu     sync.Mutex
 	server *tailcat.Server
 	region *tailcfg.DERPRegion
@@ -54,11 +60,20 @@ var _ peer.Tunnel = (*Tunnel)(nil)
 
 // New builds a tunnel. It does not start; the node does that, at the point in
 // its lifecycle where the address is to be published.
+//
+// Options without a server key and pre-shared key build a client-only tunnel
+// (decision BA). Half of the pair is a mistake rather than a mode, and is
+// refused.
 func New(opts Options) (*Tunnel, error) {
-	for name, raw := range map[string][]byte{
-		"server key": opts.ServerKey, "client key": opts.ClientKey,
-		"pre-shared key": opts.PresharedKey,
-	} {
+	clientOnly := len(opts.ServerKey) == 0 && len(opts.PresharedKey) == 0
+
+	keys := map[string][]byte{"client key": opts.ClientKey}
+	if !clientOnly {
+		keys["server key"] = opts.ServerKey
+		keys["pre-shared key"] = opts.PresharedKey
+	}
+
+	for name, raw := range keys {
 		if len(raw) != 32 {
 			return nil, fmt.Errorf("tunnel: the %s is %d bytes, want 32", name, len(raw))
 		}
@@ -75,9 +90,10 @@ func New(opts Options) (*Tunnel, error) {
 	}
 
 	t := &Tunnel{
-		opts:      opts,
-		log:       log,
-		clientPub: client.Public(),
+		opts:       opts,
+		log:        log,
+		clientPub:  client.Public(),
+		clientOnly: clientOnly,
 	}
 
 	if len(opts.Region) > 0 {
@@ -92,8 +108,10 @@ func New(opts Options) (*Tunnel, error) {
 	return t, nil
 }
 
-// newTunnel is New as Factory needs it.
-func newTunnel(opts Options) (peer.Tunnel, error) {
+// Open is New as a node takes it: the tunnel as a peer.Tunnel, and a nil
+// interface rather than a typed nil when it cannot be built. It is what the
+// daemon's factory calls and what a phone's core calls.
+func Open(opts Options) (peer.Tunnel, error) {
 	built, err := New(opts)
 	if err != nil {
 		return nil, err
@@ -119,6 +137,12 @@ func (t *Tunnel) Start() (string, error) {
 		t.mu.Unlock()
 
 		return "", errors.New("tunnel: closed")
+	}
+
+	if t.clientOnly {
+		t.mu.Unlock()
+
+		return "", nil // no server is the whole of a client-only tunnel
 	}
 
 	if t.server != nil {
@@ -275,6 +299,10 @@ func (t *Tunnel) Listen() (transport.TunnelListener, error) {
 	t.mu.Unlock()
 
 	if server == nil {
+		if t.clientOnly {
+			return nil, ErrClientOnly
+		}
+
 		return nil, errors.New("tunnel: the server has not started")
 	}
 

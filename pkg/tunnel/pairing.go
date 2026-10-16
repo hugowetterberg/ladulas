@@ -49,6 +49,10 @@ func (t *Tunnel) StartPairing(maxClients int32) (peer.PairingServer, error) {
 		return nil, errors.New("tunnel: closed")
 	}
 
+	if t.clientOnly {
+		return nil, ErrClientOnly
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	defer cancel()
 

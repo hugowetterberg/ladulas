@@ -401,6 +401,70 @@ func TestTheOfferFollowsTheServer(t *testing.T) {
 	}
 }
 
+// A tunnel that starts with no address is a client-only one, as a phone's is:
+// it serves nothing, builds no allowlist, and offers its client key without an
+// address, so that peers admit it to their own servers (decision BA).
+func TestAClientOnlyTunnelOffersItsKeyAndNoAddress(t *testing.T) {
+	t.Parallel()
+
+	tunnel := newFakeTunnel("", 9)
+	n := tunnelNode(&memoryStore{}, tunnel)
+
+	if !n.startServer(tunnel) {
+		t.Fatal("a client-only start was not taken as up")
+	}
+
+	got := n.offer()
+	if got.GetServerAddress() != "" ||
+		!bytes.Equal(got.GetClientKey(), tunnel.client) ||
+		len(got.GetVersions()) != 1 || got.GetVersions()[0] != 1 {
+		t.Errorf("a client-only tunnel offers %v, want its key and no address", got)
+	}
+
+	status := n.TunnelStatus()
+	if !status.ClientOnly || status.Running {
+		t.Errorf("status %+v, want client-only and not running", status)
+	}
+
+	// Replacing the tunnel forgets the mode until the new one has started.
+	n.SetTunnel(newFakeTunnel("", 8))
+
+	if got := n.offer(); got != nil {
+		t.Errorf("a replacement that has not started offers %v, want nothing", got)
+	}
+}
+
+// The other end of a client-only offer: a server admits the key, and has no
+// address to write down or dial (decision BA).
+func TestAClientOnlyOfferIsAdmitted(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryStore{records: []*storepb.TrustRecord{{
+		Fingerprint: "SHA256:phone",
+		Name:        "phone",
+	}}}
+	tunnel := newFakeTunnel("tcours", 9)
+	n := tunnelNode(store, tunnel)
+	n.tunnelAddress = tunnel.address
+
+	offer := offerFrom("", 3)
+	n.learnTunnel("SHA256:phone", offer)
+
+	if !tunnel.admits(offer.GetClientKey()) {
+		t.Error("a client-only offer's key was not admitted")
+	}
+
+	record, _ := store.Peer("SHA256:phone")
+	if record.GetTunnel().GetServerAddress() != "" ||
+		!bytes.Equal(record.GetTunnel().GetClientKey(), offer.GetClientKey()) {
+		t.Errorf("stored %v, want the key and no address", record.GetTunnel())
+	}
+
+	if trust.Dialable(record, n.tunnelVersion()) {
+		t.Error("a peer that offers only a client key is dialable")
+	}
+}
+
 // The allowlist is rebuilt from the store when the server starts: the client
 // keys of the trust records and of the pending pairings, and nothing else
 // (decision AX).

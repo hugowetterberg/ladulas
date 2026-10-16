@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -37,6 +38,33 @@ func options(t *testing.T) Options {
 		ServerKey:    randomKey(t),
 		PresharedKey: randomKey(t),
 		ClientKey:    randomKey(t),
+	}
+}
+
+// A tunnel built without server keys is client-only: it starts with no address
+// and no error, which is how pkg/peer tells it apart, and refuses what only a
+// server has. Half of the server pair is a mistake, not a mode (decision BA).
+func TestATunnelWithoutServerKeysIsClientOnly(t *testing.T) {
+	tunnel, err := New(Options{ClientKey: randomKey(t)})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	address, err := tunnel.Start()
+	if address != "" || err != nil {
+		t.Errorf("start: %q, %v; want no address and no error", address, err)
+	}
+
+	if _, err := tunnel.Listen(); !errors.Is(err, ErrClientOnly) {
+		t.Errorf("listen: %v, want ErrClientOnly", err)
+	}
+
+	if _, err := tunnel.StartPairing(1); !errors.Is(err, ErrClientOnly) {
+		t.Errorf("start pairing: %v, want ErrClientOnly", err)
+	}
+
+	if _, err := New(Options{ClientKey: randomKey(t), ServerKey: randomKey(t)}); err == nil {
+		t.Error("a server key without a pre-shared key built a tunnel")
 	}
 }
 

@@ -132,18 +132,28 @@ the numbers expose a function field or a small interface, which is what
 keeps a Prometheus client out of the phone's gomobile build. Never a
 package-level collector, never `promauto`, never the default registry.
 
-## `pkg/` is bound by something this repository cannot compile
+## What a phone needs from `pkg/`
 
-Exported signatures in `pkg/` have to stay `gomobile`-bindable: a
-parameter or result that is a map, a slice of structs, an interface or an
-unexported type is one `gomobile` cannot bind, and it compiles perfectly
-here, passes `go test ./...` here, and fails where it is bound. Nothing in
-this tree catches it. So when a change to `pkg/` widens an exported
-signature, **say so** rather than reporting it green.
+A phone's core builds out of `pkg/`, so every package there has to compile
+for android and ios, and no package a phone links without asking may pull
+in a desktop-only dependency — the Tailscale stack, gVisor, the Prometheus
+client. `pkg/tunnel` is the one opt-in exception (decision BA).
+`internal/phonebuild` checks both in `go test ./...`, so a failure there is
+a real break and not a flaky cross-compile.
 
-`internal/` is exempt — nothing outside the module can reach it. §21 has
-the rest of what nothing here checks, and decision AB is why `pkg/` is
-public at all.
+**There is no type rule on `pkg/` signatures.** This file used to say that
+exported signatures in `pkg/` had to stay `gomobile`-bindable — no maps,
+slices of structs or interfaces — and that widening one should be reported.
+That was wrong: `gomobile` binds only the apps' own `mobile` package, which
+reaches `pkg/` through ordinary Go, and binding it against `pkg/`
+signatures full of interfaces and slices of structs skipped nothing. The
+type rules belong to `ladulas-apps/mobile`, whose adapters are where they
+are met. Do not reinstate the old rule from the comments in `pkg/` that
+still cite it; §21 has the history.
+
+`internal/` is what nothing outside the module can reach. §21 has the rest
+of what nothing here checks, and decision AB is why `pkg/` is public at
+all.
 
 ## Commits
 

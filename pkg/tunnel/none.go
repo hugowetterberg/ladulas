@@ -23,6 +23,7 @@ func New(Options) (*Tunnel, error) {
 	return nil, ErrUnavailable
 }
 
-func newTunnel(Options) (peer.Tunnel, error) {
+// Open refuses for the same reason.
+func Open(Options) (peer.Tunnel, error) {
 	return nil, ErrUnavailable
 }

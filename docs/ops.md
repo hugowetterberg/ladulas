@@ -48,7 +48,7 @@ this, and `ladulas status` says so in one line.
 | `cmd/ladulas` | The management CLI, and — in a build with `-tags gui` — the desktop application, `ladulas gui`. Both are clients of a running daemon; neither opens the store (decision Z). |
 | `cmd/ladulas-sign` | The git signer, run by git as `gpg.ssh.program`. Not a service. |
 | `cmd/ladulas-relay` | The wake-up relay. One instance, on guppy, on the tailnet. |
-| `pkg/` | The seventeen packages a mobile core binds against, which is why they are not `internal/` (§18, §21). |
+| `pkg/` | The packages a mobile core builds against, which is why they are not `internal/` (§18, §21); `pkg/tunnel` is the tailcat engine, which a core links only by asking (decision BA). |
 
 ## Deployment shape
 

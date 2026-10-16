@@ -41,14 +41,12 @@ import (
 // the node needs them.
 //
 // It is an interface because tailcat is not linked here. `tailscale.com`, its
-// gVisor stack and its pre-release pin stay out of pkg/ — and so out of every
-// phone build and every consumer of this module that does not want them — by
-// living behind internal/tunnel, which only the daemon binaries wire in. A node
-// without one is a build without tailcat or an instance with the upgrade
-// switched off, and it sends the withdrawal form of the offer on every carrier.
-//
-// The signatures are strings, byte slices, integers, errors and the transport
-// package's own tunnel interfaces, which is all `gomobile` binds (§21).
+// gVisor stack and its pre-release pin are linked only by a binary that asks
+// for them through pkg/tunnel — the daemons, and a phone's core that opens a
+// client-only tunnel (decision BA) — and stay out of every other consumer of
+// this module. A node without one is a build without tailcat or an instance
+// with the upgrade switched off, and it sends the withdrawal form of the
+// offer on every carrier.
 type Tunnel interface {
 	// Version is the tunnel wire version this instance offers. It is ours, not
 	// tailcat's, and is bumped whenever the pinned tailcat changes its address
@@ -173,6 +171,10 @@ type tunnelState struct {
 	tunnelAddress string
 	tunnelDetail  string
 	tunnelStale   time.Duration
+	// tunnelClientOnly is set when the tunnel started and has no server: a
+	// phone's, which raises clients and serves nothing (decision BA). Its
+	// offer carries the client key and no address.
+	tunnelClientOnly bool
 	// tunnelClosed is set once the node has closed its tunnel for good, at
 	// seal or shutdown. From then on SetTunnel refuses, nothing starts, and
 	// the offer says nothing rather than "withdrawn" (closeTunnel).
@@ -221,6 +223,9 @@ func (n *Node) newDirectClient(opts transport.ClientOptions) (*transport.Client,
 type TunnelStatus struct {
 	// Configured is whether the node has a tunnel at all.
 	Configured bool
+	// ClientOnly is a tunnel that serves nothing and only raises clients, as a
+	// phone's does (decision BA); Running stays false for it.
+	ClientOnly bool
 	// Running is whether the server is up, Region where, and Detail why not.
 	Running bool
 	Region  string
@@ -240,6 +245,7 @@ func (n *Node) TunnelStatus() *TunnelStatus {
 
 	status := &TunnelStatus{
 		Configured: true,
+		ClientOnly: n.tunnelClientOnly,
 		Running:    n.tunnelAddress != "",
 		Detail:     n.tunnelDetail,
 		Version:    n.tunnel.Version(),
@@ -290,6 +296,7 @@ func (n *Node) SetTunnel(tunnel Tunnel) {
 	n.tunnel = tunnel
 	n.tunnelAddress = ""
 	n.tunnelDetail = ""
+	n.tunnelClientOnly = false
 	n.tunnelMu.Unlock()
 
 	// A pairing server belongs to the tunnel it was started from, and turning
@@ -411,6 +418,26 @@ func (n *Node) startServer(tunnel Tunnel) bool {
 		return false
 	}
 
+	// No address and no error is a client-only tunnel (decision BA). There is
+	// no listener to serve and no allowlist to build, since nothing can reach
+	// a server that does not exist; what is left is to start offering the
+	// client key, so that peers admit it to their own servers.
+	if address == "" {
+		n.tunnelMu.Lock()
+		current := n.tunnel == tunnel
+		if current {
+			n.tunnelClientOnly = true
+			n.tunnelDetail = ""
+		}
+		n.tunnelMu.Unlock()
+
+		if current {
+			n.log.Info("the tunnel is up as a client only")
+		}
+
+		return true
+	}
+
 	listener, err := tunnel.Listen()
 	if err != nil {
 		n.tunnelMu.Lock()
@@ -473,6 +500,7 @@ func (n *Node) closeTunnel() {
 	tunnel := n.tunnel
 	n.tunnel = nil
 	n.tunnelAddress = ""
+	n.tunnelClientOnly = false
 	n.tunnelMu.Unlock()
 
 	if tunnel == nil {
@@ -505,7 +533,8 @@ func (n *Node) tunnelVersion() int32 {
 // has not started yet is nil, which says nothing: the address it will have is
 // the address it had, since key and region are persisted, and a beat that said
 // "withdrawn" while the server was still coming up would cost every peer its
-// allowlist entry for nothing. And a running server is the offer.
+// allowlist entry for nothing. A running server is the offer, and so is a
+// client-only tunnel that has started, without the address (decision BA).
 //
 // A node that has closed its tunnel, at seal or shutdown, also says nothing:
 // it is going away, not turning the upgrade off (closeTunnel).
@@ -519,6 +548,15 @@ func (n *Node) offer() *ladulasv1.TunnelOffer {
 
 	if n.tunnel == nil {
 		return &ladulasv1.TunnelOffer{}
+	}
+
+	// A client-only tunnel offers its key and no address: peers admit the key
+	// to their servers, and nobody dials it (decision BA).
+	if n.tunnelClientOnly {
+		return &ladulasv1.TunnelOffer{
+			Versions:  []uint32{uint32(max(n.tunnel.Version(), 0))},
+			ClientKey: n.tunnel.ClientKey(),
+		}
 	}
 
 	if n.tunnelAddress == "" {

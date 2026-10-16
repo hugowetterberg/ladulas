@@ -1,17 +1,22 @@
 // Package tunnel is the tunnel upgrade's tailcat half (docs/architecture.md §8,
-// decision AX): the long-lived tailcat server, this instance's client key, and
-// the allowlist of client keys the server admits.
+// decisions AX and BA): the long-lived tailcat server, this instance's client
+// key, and the allowlist of client keys the server admits.
 //
-// It is the only package that imports tailcat, and nothing under pkg/ imports
-// it. pkg/peer declares the Tunnel interface it needs in strings and byte
-// slices, which is what gomobile binds and what keeps `tailscale.com`, gVisor
-// and the pre-release pin out of every phone build; the daemon binaries wire
-// this package in through Factory. A build with the notailcat tag compiles the
-// package without tailcat at all: Available is false, Factory returns nil, and
-// the instance sends every peer the withdrawal form of the offer.
+// It is the only package that imports tailcat, and no other package under pkg/
+// imports it. pkg/peer declares the Tunnel interface it needs, so that
+// `tailscale.com`, gVisor and the pre-release pin are linked only by a binary
+// that asks for them: the daemon binaries, through internal/tunnel's Factory,
+// and a phone's core, which opens a client-only tunnel with Open (decision
+// BA). It is public for that second reason; it used to be internal/tunnel,
+// which kept the phone from carrying a tunnel at all.
+//
+// A build with the notailcat tag compiles the package without tailcat:
+// Available is false, New and Open refuse, and the instance sends every peer
+// the withdrawal form of the offer.
 package tunnel
 
 import (
+	"errors"
 	"log/slog"
 )
 
@@ -34,10 +39,16 @@ const Port = 7373
 // to most.
 const DefaultDERPMapURL = "https://tailcat.dev/derpmap.json"
 
+// ErrClientOnly is what a client-only tunnel says when asked for something only
+// a server has: a listener, or a pairing server.
+var ErrClientOnly = errors.New("tunnel: a client-only tunnel runs no server")
+
 // Options configures a tunnel.
 type Options struct {
 	// The keys, raw: the server's node private key and pre-shared key, and the
-	// client's node private key. Required; the store generates them.
+	// client's node private key. The store generates them. The client key is
+	// required; leaving out both server keys builds a client-only tunnel,
+	// which raises clients to peers' servers and serves nothing (decision BA).
 	ServerKey    []byte
 	PresharedKey []byte
 	ClientKey    []byte
