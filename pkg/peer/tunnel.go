@@ -205,6 +205,8 @@ type tunnelState struct {
 	tunnelIdle   time.Duration
 	probe        probeFunc
 	directClient func(transport.ClientOptions) (*transport.Client, error)
+	// dial is Options.Dial, nil for a plain net.Dialer.
+	dial transport.DialFunc
 	// linked is told each time a link comes up — the transition that pushes
 	// grant activity and logs "linked" — nil outside tests. It is how a test
 	// holds a path change to the rule that it is not one of those.
@@ -213,6 +215,10 @@ type tunnelState struct {
 
 // newDirectClient is the client for the direct path to a peer.
 func (n *Node) newDirectClient(opts transport.ClientOptions) (*transport.Client, error) {
+	if opts.Dial == nil {
+		opts.Dial = n.dial
+	}
+
 	if n.directClient != nil {
 		return n.directClient(opts)
 	}

@@ -1651,6 +1651,17 @@ And loopback is advertised only by an instance that has nothing else, since
 telling a peer on another machine to dial `127.0.0.1` is telling it to dial
 itself.
 
+`--peer-no-tailnet-names` (`LADULAS_PEER_NO_TAILNET_NAMES`) turns the name
+off and advertises the bound list as it is. It is a diagnostic, not a
+preference, and so a daemon flag rather than a stored setting: with it a
+peer dials only the numbers it was given and never asks a resolver, which is
+how a fault in the name lookup or in the IPv6 path a name can resolve to is
+told apart from one in the channel. It was added on 2026-10-16 while
+looking at a phone whose Tailscale stopped passing traffic after Ladulås
+had used it — the extension kept sending and stopped receiving, and a
+toggle cured it — and it says nothing yet about whether the name was
+involved.
+
 Which it did, and the consequences were not confined to a wasted
 connection. **An address that answers with our own identity is not an
 impostor**: the dialler compares the pin it met against its own before it
@@ -2035,6 +2046,18 @@ fall back" was the obvious alternative and was rejected: it would spend
 decision AJ's ssh login budget per holder, turn decision AT's cheap
 fall-through to the next holder into a wait, and push a woken phone past its
 wake grace into the loud alert.
+
+*An embedder may make the connections itself.* `peer.Options.Dial` (and
+`transport.ClientOptions.Dial` under it) is the one function every direct
+TCP connection to a peer goes through: each address the probe races, and
+each connection a direct client's calls run over, held to `DialTimeout`
+like the default. Nil is a plain `net.Dialer`. Pairing's first contact and
+the tunnel do not go through it, since neither is a direct connection to a
+peer the node already knows. It was added on 2026-10-16 so that the phone
+could serialise its connections, or refuse those to a named machine, while
+finding out what about its traffic stops an iOS Tailscale extension from
+receiving (the phone's own architecture has the diagnostics); nothing in
+this repository sets it.
 
 *A path change is not a presence change.* The link's presence stream is
 held on one path at a time, and the link moves between paths

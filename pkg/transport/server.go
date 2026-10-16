@@ -45,6 +45,11 @@ type ServerOptions struct {
 	// AllowPublic opts in to binding addresses reachable from outside the local
 	// network (decision H).
 	AllowPublic bool
+	// NoTailnetNames advertises the bound addresses as they are, without a
+	// tailnet node name in front of them (§8). A peer then dials numbers it
+	// was given and never asks a resolver, which is for telling a fault in
+	// the name lookup or the paths behind it from one in the channel.
+	NoTailnetNames bool
 	// Handler serves the peer RPCs. Required.
 	Handler http.Handler
 	// Gate refuses unknown identities at handshake time.
@@ -58,6 +63,7 @@ type Server struct {
 	identity    *identity.Identity
 	listenSpec  string
 	allowPublic bool
+	noNames     bool
 	handler     http.Handler
 	gate        Gate
 	log         *slog.Logger
@@ -102,6 +108,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		identity:    opts.Identity,
 		listenSpec:  opts.Listen,
 		allowPublic: opts.AllowPublic,
+		noNames:     opts.NoTailnetNames,
 		handler:     opts.Handler,
 		gate:        opts.Gate,
 		log:         log,
@@ -192,6 +199,10 @@ func (s *Server) Advertised() []string {
 	s.mu.Lock()
 	bound := append([]string(nil), s.addresses...)
 	s.mu.Unlock()
+
+	if s.noNames {
+		return bound
+	}
 
 	return advertise(bound, func(host string) {
 		s.log.Debug("no tailnet node name for a bound address",

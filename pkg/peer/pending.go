@@ -436,6 +436,7 @@ func (n *Node) callSettle(
 	client, err := transport.NewClient(transport.ClientOptions{
 		Identity: n.identity,
 		Expect:   key,
+		Dial:     n.dial,
 	})
 	if err != nil {
 		return nil, err

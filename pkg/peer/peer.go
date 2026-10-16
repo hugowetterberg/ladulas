@@ -138,6 +138,9 @@ type Options struct {
 	// addresses reachable from outside the local network.
 	Listen      string
 	AllowPublic bool
+	// NoTailnetNames advertises the bound addresses without a tailnet node
+	// name in front of them; see transport.ServerOptions.
+	NoTailnetNames bool
 	// Headless says this instance has no GUI of its own, which is worth
 	// telling an approver that is being asked to answer for it.
 	Headless bool
@@ -163,6 +166,12 @@ type Options struct {
 	// ObserveTunnel is told about every tunnel event, for the metrics port
 	// (internal/observe). Optional.
 	ObserveTunnel func(event string)
+	// Dial makes every direct TCP connection to a peer: the probes that race
+	// a peer's addresses and the connections calls are made over. Nil is a
+	// plain net.Dialer. It exists for an embedder that has to decide how
+	// connections are made (transport.ClientOptions.Dial); pairing's first
+	// contact and the tunnel do not go through it.
+	Dial transport.DialFunc
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -395,16 +404,18 @@ func New(opts Options) (*Node, error) {
 			tunnelSeen:         map[string]time.Time{},
 			tunnelContradicted: map[string]time.Time{},
 			observeTunnel:      opts.ObserveTunnel,
+			dial:               opts.Dial,
 		},
 	}
 
 	server, err := transport.NewServer(transport.ServerOptions{
-		Identity:    opts.Identity,
-		Listen:      opts.Listen,
-		AllowPublic: opts.AllowPublic,
-		Handler:     node.handler(),
-		Gate:        node.gate,
-		Logger:      log,
+		Identity:       opts.Identity,
+		Listen:         opts.Listen,
+		AllowPublic:    opts.AllowPublic,
+		NoTailnetNames: opts.NoTailnetNames,
+		Handler:        node.handler(),
+		Gate:           node.gate,
+		Logger:         log,
 	})
 	if err != nil {
 		return nil, err

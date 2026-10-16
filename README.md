@@ -842,6 +842,7 @@ APNS_KEY_FILE=AuthKey_XXXX.p8 APNS_KEY_ID=… APNS_TEAM_ID=… \
 | `--no-keyring` | `LADULAS_NO_KEYRING` | off | Ignore the platform keychain entirely, so an instance that enrolled "unlock at login" can still be started without it |
 | `--peer-listen` | `LADULAS_PEER_LISTEN` | port 7373 on the tailnet and the local network — see `ladulas listen` | A port, a `host:port`, a comma-separated list of either, `auto`, or `off`. Set, it **overrides** what `ladulas listen set` stored, which is what makes it the way back into a machine whose stored address no longer exists |
 | `--peer-listen-public` | `LADULAS_PEER_LISTEN_PUBLIC` | off | Allow binding addresses reachable from outside. The channel does not trust the network either way; this exists so it never happens by accident |
+| `--peer-no-tailnet-names` | `LADULAS_PEER_NO_TAILNET_NAMES` | off | Advertise tailnet addresses to peers as numbers only, without the node name in front. A diagnostic: a peer then never asks a resolver for this machine (§8) |
 | `--log-level` | `LADULAS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ### Running an instance: `ladulasd run` and `ladulas agent`

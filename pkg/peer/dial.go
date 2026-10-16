@@ -204,7 +204,7 @@ func reachableFirst(ctx context.Context, addresses []string) []string {
 		return addresses
 	}
 
-	first := firstAnswering(ctx, addresses)
+	first := firstAnswering(ctx, addresses, nil)
 	if first == "" {
 		return addresses
 	}
@@ -224,14 +224,19 @@ func reachableFirst(ctx context.Context, addresses []string) []string {
 // firstAnswering is the race itself: the first address that accepts a TCP
 // connect inside probeTimeout, or "" when none does. It probes a single
 // address too, because deciding between direct TCP and a relayed tunnel needs
-// to know whether that one address answers (route.go).
-func firstAnswering(ctx context.Context, addresses []string) string {
+// to know whether that one address answers (route.go). dial is Options.Dial,
+// nil for a plain net.Dialer.
+func firstAnswering(ctx context.Context, addresses []string, dial transport.DialFunc) string {
 	if len(addresses) == 0 {
 		return ""
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
+
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
 
 	winner := make(chan string, len(addresses))
 
@@ -243,9 +248,7 @@ func firstAnswering(ctx context.Context, addresses []string) string {
 		go func() {
 			defer wait.Done()
 
-			var dialer net.Dialer
-
-			conn, err := dialer.DialContext(probeCtx, "tcp", address)
+			conn, err := dial(probeCtx, "tcp", address)
 			if err != nil {
 				return
 			}

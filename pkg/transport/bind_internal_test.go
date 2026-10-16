@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -354,5 +355,32 @@ func TestAFailedNameLookupIsAskedAgain(t *testing.T) {
 	if lookups != before {
 		t.Errorf("looked the name up again after finding it (%d then %d)",
 			before, lookups)
+	}
+}
+
+// TestNoTailnetNamesAdvertisesTheNumbersOnly covers the diagnostic switch in
+// §8: the bound list goes out as it is, and the resolver is never asked.
+func TestNoTailnetNamesAdvertisesTheNumbersOnly(t *testing.T) {
+	previous := tailnetName
+
+	forgetTailnetNames()
+
+	t.Cleanup(func() {
+		tailnetName = previous
+
+		forgetTailnetNames()
+	})
+
+	tailnetName = func(string) string {
+		t.Error("the resolver was asked for a name")
+
+		return "guppy.tail97712.ts.net"
+	}
+
+	bound := []string{"100.121.203.120:7373", "192.168.1.160:7373"}
+	server := &Server{addresses: bound, noNames: true, log: slog.Default()}
+
+	if got := server.Advertised(); !slices.Equal(got, bound) {
+		t.Errorf("advertised %v, want %v", got, bound)
 	}
 }

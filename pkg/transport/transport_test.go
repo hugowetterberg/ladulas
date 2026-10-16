@@ -639,3 +639,64 @@ func TestTailnetAddressesAreLocal(t *testing.T) {
 		}
 	}
 }
+
+// TestADialHookMakesEveryConnection covers ClientOptions.Dial: a call and a
+// handshake both connect through it, and a refusal from it is the client's
+// failure, so an embedder that decides how connections are made decides it for
+// all of them.
+func TestADialHookMakesEveryConnection(t *testing.T) {
+	serverID := newIdentity(t, "server")
+	clientID := newIdentity(t, "client")
+
+	var reached bool
+
+	_, address := serve(t, transport.ServerOptions{
+		Identity: serverID,
+		Handler:  echoHandler(&reached),
+	})
+
+	var dialled []string
+
+	refuse := false
+
+	client, err := transport.NewClient(transport.ClientOptions{
+		Identity: clientID,
+		Expect:   serverID.PublicKey(),
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialled = append(dialled, addr)
+
+			if refuse {
+				return nil, errors.New("refused by the hook")
+			}
+
+			var d net.Dialer
+
+			return d.DialContext(ctx, network, addr)
+		},
+	})
+	if err != nil {
+		t.Fatalf("create the client: %v", err)
+	}
+
+	if _, err := client.Handshake(context.Background(), address); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	if _, err := get(client, address); err != nil {
+		t.Fatalf("call: %v", err)
+	}
+
+	if len(dialled) != 2 || dialled[0] != address || dialled[1] != address {
+		t.Fatalf("the hook made %v, want the handshake and the call to %s",
+			dialled, address)
+	}
+
+	client.CloseIdle()
+
+	refuse = true
+
+	if _, err := get(client, address); err == nil ||
+		!strings.Contains(err.Error(), "refused by the hook") {
+		t.Errorf("a call the hook refused returned %v", err)
+	}
+}

@@ -2,7 +2,10 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"net"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -246,5 +249,40 @@ func TestForgettingSendsTheNextCallBackToTheRace(t *testing.T) {
 
 	if !raced {
 		t.Error("forgetting did not send the next call back to the race")
+	}
+}
+
+// TestTheProbeDialsThroughTheNodesHook covers Options.Dial for the race: every
+// address the probe tries goes through the hook, and a hook that refuses them
+// all leaves nothing answering.
+func TestTheProbeDialsThroughTheNodesHook(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		dialled []string
+	)
+
+	n := &Node{tunnelState: tunnelState{
+		dial: func(_ context.Context, _, address string) (net.Conn, error) {
+			mu.Lock()
+			dialled = append(dialled, address)
+			mu.Unlock()
+
+			return nil, errors.New("refused by the hook")
+		},
+	}}
+
+	addresses := []string{"198.51.100.7:7373", "198.51.100.8:7373"}
+
+	if got := n.probeOf()(context.Background(), addresses); got != "" {
+		t.Errorf("the probe chose %q through a hook that refuses everything", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	slices.Sort(dialled)
+
+	if !slices.Equal(dialled, addresses) {
+		t.Errorf("the hook dialled %v, want %v", dialled, addresses)
 	}
 }

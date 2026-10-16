@@ -62,6 +62,9 @@ type Config struct {
 	// PeerAllowPublic opts in to binding addresses reachable from outside the
 	// local network.
 	PeerAllowPublic bool
+	// PeerNoTailnetNames advertises the bound addresses without a tailnet
+	// node name in front of them (§8).
+	PeerNoTailnetNames bool
 	// Headless says this instance has no GUI, which is worth telling a peer
 	// that is being asked to approve for it.
 	Headless bool
@@ -575,8 +578,11 @@ func (a *App) buildPeerNode(built *core) (*peer.Node, error) {
 		Endorsements: built.vault,
 		Listen:       built.listen.spec,
 		AllowPublic:  built.listen.allowPublic,
-		Headless:     cfg.Headless,
-		Logger:       cfg.Logger,
+		// A flag only, not a stored setting: it exists to take the name
+		// lookup out of a peer's dialling while a path is being diagnosed.
+		NoTailnetNames: cfg.PeerNoTailnetNames,
+		Headless:       cfg.Headless,
+		Logger:         cfg.Logger,
 		// The tunnel is built with the node and closed with it, so that every
 		// engine belongs to the inner half sealing destroys (§3, decision AX).
 		Tunnel: a.buildTunnel(built.vault),

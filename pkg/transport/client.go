@@ -30,6 +30,28 @@ type ClientOptions struct {
 	// meets for the rest of its life, and the pairing exchange is what decides
 	// whether that identity was the right one.
 	Expect ssh.PublicKey
+	// Dial makes the TCP connection under the TLS, for an embedder that has
+	// to decide how connections are made — a phone diagnosing a VPN that
+	// misbehaves under its traffic serialises them or refuses some. It is
+	// held to DialTimeout like the default. Nil is a plain net.Dialer.
+	Dial DialFunc
+}
+
+// DialFunc makes a connection, with net.Dialer.DialContext's signature.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// netDialer is opts.Dial bounded by DialTimeout, or the default dialer.
+func netDialer(dial DialFunc) DialFunc {
+	if dial == nil {
+		return (&net.Dialer{Timeout: DialTimeout}).DialContext
+	}
+
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, DialTimeout)
+		defer cancel()
+
+		return dial(ctx, network, address)
+	}
 }
 
 // Client dials one peer.
@@ -47,6 +69,8 @@ type Client struct {
 	// dial is how Handshake reaches the peer when it is not a TCP dial to an
 	// address: a tunnel client's, which ignores the address (NewTunnelClient).
 	dial func(ctx context.Context) (net.Conn, error)
+	// netDial makes the TCP connection when dial is nil (ClientOptions.Dial).
+	netDial DialFunc
 
 	mu   sync.Mutex
 	peer *PeerIdentity
@@ -68,7 +92,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		return nil, err
 	}
 
-	client := &Client{self: self}
+	client := &Client{self: self, netDial: netDialer(opts.Dial)}
 
 	if opts.Expect != nil {
 		pin, err := PinFor(opts.Expect)
@@ -94,10 +118,8 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 	client.http = &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: client.tls,
-			DialContext: (&net.Dialer{
-				Timeout: DialTimeout,
-			}).DialContext,
+			TLSClientConfig:     client.tls,
+			DialContext:         client.netDial,
 			TLSHandshakeTimeout: DialTimeout,
 			IdleConnTimeout:     IdleConnTimeout,
 			// A custom TLS configuration switches HTTP/2 off unless it is asked
@@ -166,21 +188,14 @@ func (c *Client) Handshake(ctx context.Context, address string) (*PeerIdentity, 
 
 // handshakeConn is a connection that has completed the pinned handshake.
 func (c *Client) handshakeConn(ctx context.Context, address string) (net.Conn, error) {
-	if c.dial == nil {
-		dialer := tls.Dialer{
-			NetDialer: &net.Dialer{Timeout: DialTimeout},
-			Config:    c.tls,
+	dial := c.dial
+	if dial == nil {
+		dial = func(ctx context.Context) (net.Conn, error) {
+			return c.netDial(ctx, "tcp", address)
 		}
-
-		conn, err := dialer.DialContext(ctx, "tcp", address)
-		if err != nil {
-			return nil, fmt.Errorf("transport: connect to %s: %w", address, err)
-		}
-
-		return conn, nil
 	}
 
-	raw, err := c.dial(ctx)
+	raw, err := dial(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("transport: connect to %s: %w", address, err)
 	}

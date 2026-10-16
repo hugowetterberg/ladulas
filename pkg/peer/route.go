@@ -41,7 +41,9 @@ func (n *Node) probeOf() probeFunc {
 		return n.probe
 	}
 
-	return firstAnswering
+	return func(ctx context.Context, addresses []string) string {
+		return firstAnswering(ctx, addresses, n.dial)
+	}
 }
 
 // arrange orders the ways to try a peer when no path is established for it,

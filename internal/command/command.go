@@ -119,6 +119,12 @@ func GlobalFlags() []cli.Flag {
 				"this exists so that it never happens by accident",
 			Sources: cli.EnvVars("LADULAS_PEER_LISTEN_PUBLIC"),
 		},
+		&cli.BoolFlag{
+			Name: "peer-no-tailnet-names",
+			Usage: "advertise tailnet addresses to peers as numbers only, " +
+				"without the node name in front of them",
+			Sources: cli.EnvVars("LADULAS_PEER_NO_TAILNET_NAMES"),
+		},
 		&cli.StringFlag{
 			Name:    "log-level",
 			Usage:   "one of debug, info, warn, error",
@@ -138,16 +144,17 @@ var Tunnels app.TunnelFactory
 // ConfigFromFlags builds an app configuration from the global flags.
 func ConfigFromFlags(cmd *cli.Command) app.Config {
 	return app.Config{
-		DataDir:         cmd.String("data-dir"),
-		ConfigDir:       cmd.String("config-dir"),
-		SocketPath:      cmd.String("socket"),
-		ControlSocket:   cmd.String("control-socket"),
-		PeerListen:      cmd.String("peer-listen"),
-		PeerAllowPublic: cmd.Bool("peer-listen-public"),
-		NoKeyring:       cmd.Bool("no-keyring"),
-		Passphrase:      TerminalPassphrase,
-		Tunnels:         Tunnels,
-		Logger:          Logger(cmd),
+		DataDir:            cmd.String("data-dir"),
+		ConfigDir:          cmd.String("config-dir"),
+		SocketPath:         cmd.String("socket"),
+		ControlSocket:      cmd.String("control-socket"),
+		PeerListen:         cmd.String("peer-listen"),
+		PeerAllowPublic:    cmd.Bool("peer-listen-public"),
+		PeerNoTailnetNames: cmd.Bool("peer-no-tailnet-names"),
+		NoKeyring:          cmd.Bool("no-keyring"),
+		Passphrase:         TerminalPassphrase,
+		Tunnels:            Tunnels,
+		Logger:             Logger(cmd),
 	}.WithDefaults()
 }
 
