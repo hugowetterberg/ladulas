@@ -1939,7 +1939,14 @@ every pair whose only path is the tunnel. The grace period that would keep
 the old region serving beside the new one until every peer has the new
 address is not built; until it is, a re-pick is a deliberate break. A
 peer-supplied region is something this instance would connect to, and is
-held to §11's rule before it is written down.
+held to §11's rule before it is written down. A relay in this instance's
+own DERP map passes as one of ours; the map is the one a region pick
+fetched, or, for a tunnel that did not pick this run — a client-only one,
+or a server whose region was persisted earlier — one fetched in the
+background for the purpose (decision BA). Before that such a tunnel knew
+its own region or nothing, and refused a self-hosted relay the configured
+map names. A refused offer is dropped rather than remembered as refused,
+so the next beat or poll that carries it is checked against the map again.
 
 *Where the code is.* `pkg/peer` declares a `Tunnel` interface, and
 `pkg/transport` the listener, connection and gate it serves through, so
@@ -2191,6 +2198,34 @@ worked and everything against the socket that was open to it. The link's
 presence stream is left alone — it is a live request, not an idle
 connection, and one that died with the network is found by its own read
 failing, which is what the backoff is for.
+
+**A raised tunnel client is the same claim, one level down** (decision BA).
+A phone carrying the tunnel holds a whole tailcat stack per peer it has
+raised against — a DERP connection and WireGuard sessions — and iOS cuts a
+suspended app's sockets without a word, so a client kept across a
+suspension looks established and reaches nothing, and the first call
+through it waits out its timeout before the race falls back. CloseIdle
+cannot reach it: it drops pooled connections, and the client is the stack
+they run over. `Node.DropTunnelClients` closes every raised client, the
+links' and the dialers', and keeps the tunnel, the offers and the
+addresses each client was raised against, so the next call that wants a
+tunnel raises one and races it against the direct path like any first
+call. The phone calls it going to the background and coming back. Before it
+existed the apps did the same thing by handing the node a fresh tunnel,
+which withdrew the offer and re-made it and reconciled every link each
+time the screen locked, and still left the links' clients alone: a link's
+client was dropped only when the peer's address changed, which a new tunnel
+on this side is not. `SetTunnel` drops the links' clients now as well as
+the dialers', so `ladulas tunnel off` ends every raised client at once.
+
+**The far end says which path a phone's held call came in on.** A phone is
+never dialled, so its status on a desktop comes from the calls it holds
+open there (§7), and those were described as `direct` without looking,
+which was true until a phone could collect through the desktop's tunnel
+listener. `transport.PeerIdentity.Tunnelled` marks a call that came through
+a tunnel listener, and a held call that did is described by the server's
+own view of the client — `tunnel direct`, or `tunnel relayed <region>` —
+unless a direct call is held beside it.
 
 The protocol (sketch — to be specified precisely in a follow-up):
 
@@ -5322,7 +5357,7 @@ Added 2026-10-16:
 
 | # | Decision | Resolution |
 |---|----------|------------|
-| BA | Whether a phone may carry tailcat, and as what | **yes, as a client only, from a public package it opts into.** The tunnel engine moved from `internal/tunnel` to `pkg/tunnel`, and `internal/tunnel` keeps only the daemon's factory, which needs `internal/app`. A `tunnel.Options` with a client key and no server key or pre-shared key builds a client-only tunnel: `Start` answers with no address and no error, `Listen` and `StartPairing` refuse with `ErrClientOnly`, and `Raise` works as it always did, because a client needs nothing but its own key. `pkg/peer` takes an address-less start as client-only: no listener, no allowlist, and an offer that carries the version and the client key and no server address, which a peer already knew how to read — it admits the key, has nothing to dial, and the phone raises clients to its server. So "phones never listen" holds at the tunnel too: a phone runs no tailcat server, and never displays a code another machine joins through one. **What it reverses** is the belief that keeping tailcat out of `pkg/` was a `gomobile` binding requirement; it was a choice about what a phone links without asking, and it still holds for every other package under `pkg/`, which `internal/phonebuild` checks (§21). Every package under `pkg/`, `tunnel` included, cross-compiles for android/arm64, android/amd64 and ios/arm64. Not established here: tailcat's memory and battery cost on a device, and what iOS suspension does to a raised client — the apps' to find out. Rationale in §8 |
+| BA | Whether a phone may carry tailcat, and as what | **yes, as a client only, from a public package it opts into.** The tunnel engine moved from `internal/tunnel` to `pkg/tunnel`, and `internal/tunnel` keeps only the daemon's factory, which needs `internal/app`. A `tunnel.Options` with a client key and no server key or pre-shared key builds a client-only tunnel: `Start` answers with no address and no error, `Listen` and `StartPairing` refuse with `ErrClientOnly`, and `Raise` works as it always did, because a client needs nothing but its own key. `pkg/peer` takes an address-less start as client-only: no listener, no allowlist, and an offer that carries the version and the client key and no server address, which a peer already knew how to read — it admits the key, has nothing to dial, and the phone raises clients to its server. So "phones never listen" holds at the tunnel too: a phone runs no tailcat server, and never displays a code another machine joins through one. **What it reverses** is the belief that keeping tailcat out of `pkg/` was a `gomobile` binding requirement; it was a choice about what a phone links without asking, and it still holds for every other package under `pkg/`, which `internal/phonebuild` checks (§21). Every package under `pkg/`, `tunnel` included, cross-compiles for android/arm64, android/amd64 and ios/arm64. Not established here: tailcat's memory and battery cost on a device, and what iOS suspension does to a raised client — the apps' to find out. *Extended the same day, from what the iOS app needed:* `Node.DropTunnelClients` closes every raised client, the links' and the dialers', keeping the tunnel and the offers, for a phone around each suspension (iOS cuts the sockets under a client silently), where replacing the tunnel had withdrawn and re-made the offer every time; `SetTunnel` now drops the links' raised clients too, which it had left holding clients raised by the tunnel it closed; a desktop describes a phone's held call by the path it came in on (`PeerIdentity.Tunnelled`), where it had called every held call `direct`; and a tunnel that did not pick a region this run — a client-only one, or a server with a persisted region — fetches the configured DERP map in the background for the region rule, which had refused a relay the map names but the rule cannot pass alone, such as a self-hosted derper on a port other than 443. Rationale in §8 |
 
 **Decision L in full.** It sharpens K rather than contradicting it: K
 said the socket is the complete management surface, and L says it is the

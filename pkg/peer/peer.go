@@ -265,7 +265,11 @@ type Node struct {
 	// second for a fact that expires.
 	seen       map[string]time.Time
 	collecting map[string]int
-	window     *pairingWindow
+	// collectingTunnelled is how many of each peer's held calls came through
+	// the tunnel listener, so that a phone holding its collection open over
+	// its tunnel is not described as connected directly (decision BA).
+	collectingTunnelled map[string]int
+	window              *pairingWindow
 	// announcer is what puts a window on the local network, and announced
 	// is the window it is announcing, if any (decision AW). Nil on a phone.
 	// Both are read under mu, but the announcer is called under windowAnnounceMu
@@ -350,40 +354,41 @@ func New(opts Options) (*Node, error) {
 	}
 
 	node := &Node{
-		identity:      opts.Identity,
-		trust:         opts.Trust,
-		engine:        opts.Engine,
-		keys:          opts.Keys,
-		projects:      opts.Projects,
-		serving:       opts.Serving,
-		versions:      opts.Versions,
-		delegations:   opts.Delegations,
-		wakeups:       opts.Wakeups,
-		handovers:     opts.Handovers,
-		endorsements:  opts.Endorsements,
-		log:           log,
-		headless:      opts.Headless,
-		heartbeat:     orDuration(opts.Heartbeat, DefaultHeartbeat),
-		floor:         orDuration(opts.RetryFloor, DefaultRetryFloor),
-		ceiling:       orDuration(opts.RetryCeiling, DefaultRetryCeiling),
-		retry:         orDuration(opts.PairingRetry, DefaultPairingRetry),
-		load:          newPeerLoad(),
-		links:         map[string]*link{},
-		reached:       map[string]*reach{},
-		seen:          map[string]time.Time{},
-		collecting:    map[string]int{},
-		confirmations: map[string]chan *approval.Answer{},
-		prompts:       map[string]context.CancelFunc{},
-		watchers:      map[string][]chan pairingEvent{},
-		attempted:     map[string]time.Time{},
-		converge:      make(chan struct{}, 1),
-		inflight:      map[string]*outgoing{},
-		announced:     map[string]announced{},
-		announcedKeys: map[string]announcedList{},
-		inboxes:       map[string]func(){},
-		parked:        map[string]*parked{},
-		waiters:       map[string]map[chan struct{}]bool{},
-		handled:       map[string]*handledRequest{},
+		identity:            opts.Identity,
+		trust:               opts.Trust,
+		engine:              opts.Engine,
+		keys:                opts.Keys,
+		projects:            opts.Projects,
+		serving:             opts.Serving,
+		versions:            opts.Versions,
+		delegations:         opts.Delegations,
+		wakeups:             opts.Wakeups,
+		handovers:           opts.Handovers,
+		endorsements:        opts.Endorsements,
+		log:                 log,
+		headless:            opts.Headless,
+		heartbeat:           orDuration(opts.Heartbeat, DefaultHeartbeat),
+		floor:               orDuration(opts.RetryFloor, DefaultRetryFloor),
+		ceiling:             orDuration(opts.RetryCeiling, DefaultRetryCeiling),
+		retry:               orDuration(opts.PairingRetry, DefaultPairingRetry),
+		load:                newPeerLoad(),
+		links:               map[string]*link{},
+		reached:             map[string]*reach{},
+		seen:                map[string]time.Time{},
+		collecting:          map[string]int{},
+		collectingTunnelled: map[string]int{},
+		confirmations:       map[string]chan *approval.Answer{},
+		prompts:             map[string]context.CancelFunc{},
+		watchers:            map[string][]chan pairingEvent{},
+		attempted:           map[string]time.Time{},
+		converge:            make(chan struct{}, 1),
+		inflight:            map[string]*outgoing{},
+		announced:           map[string]announced{},
+		announcedKeys:       map[string]announcedList{},
+		inboxes:             map[string]func(){},
+		parked:              map[string]*parked{},
+		waiters:             map[string]map[chan struct{}]bool{},
+		handled:             map[string]*handledRequest{},
 		tunnelState: tunnelState{
 			tunnel:             opts.Tunnel,
 			tunnelStale:        orDuration(opts.TunnelStale, DefaultTunnelStale),
@@ -651,9 +656,14 @@ func (n *Node) saw(fingerprint string) {
 // holding marks a call a peer is keeping open, and returns the function that
 // says it has ended. A collector long-polls, so this is the closest thing to a
 // link it has: while the count is above zero it is talking to this instance.
-func (n *Node) holding(fingerprint string) func() {
+//
+// tunnelled says the call came through the tunnel listener.
+func (n *Node) holding(fingerprint string, tunnelled bool) func() {
 	n.mu.Lock()
 	n.collecting[fingerprint]++
+	if tunnelled {
+		n.collectingTunnelled[fingerprint]++
+	}
 	n.seen[fingerprint] = time.Now()
 	n.mu.Unlock()
 
@@ -666,17 +676,28 @@ func (n *Node) holding(fingerprint string) func() {
 			delete(n.collecting, fingerprint)
 		}
 
+		if tunnelled {
+			n.collectingTunnelled[fingerprint]--
+			if n.collectingTunnelled[fingerprint] <= 0 {
+				delete(n.collectingTunnelled, fingerprint)
+			}
+		}
+
 		n.seen[fingerprint] = time.Now()
 	}
 }
 
 // presence is what the inbound side knows about a peer: whether it is holding a
-// call open, and when it last made one.
-func (n *Node) presence(fingerprint string) (bool, time.Time) {
+// call open, whether every call it is holding came through the tunnel, and
+// when it last made one.
+func (n *Node) presence(fingerprint string) (holding, tunnelled bool, last time.Time) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	return n.collecting[fingerprint] > 0, n.seen[fingerprint]
+	held := n.collecting[fingerprint]
+
+	return held > 0, held > 0 && n.collectingTunnelled[fingerprint] == held,
+		n.seen[fingerprint]
 }
 
 // Reconcile brings the approvers into agreement with the trust store: for every

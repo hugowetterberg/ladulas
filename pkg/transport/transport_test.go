@@ -70,6 +70,14 @@ func echoHandler(reached *bool) http.Handler {
 			return
 		}
 
+		// A bound listener's connection is never a tunnel's, and saying so
+		// here makes the HTTP/2 check below catch a flag set on every call.
+		if peer.Tunnelled {
+			http.Error(w, "a bound listener's call reads as tunnelled", http.StatusTeapot)
+
+			return
+		}
+
 		fmt.Fprintf(w, "%s %s", peer.Fingerprint, r.Proto)
 	})
 }

@@ -431,6 +431,9 @@ func (s *Server) withPeerIdentity(next http.Handler) http.Handler {
 		}
 
 		if tracked := connFrom(r.Context()); tracked != nil {
+			// A tunnel listener's connections carry the client key in their
+			// remote address, and nothing else does.
+			peer.Tunnelled = tunnelClientKey(tracked) != nil
 			tracked.setPeer(peer)
 		}
 

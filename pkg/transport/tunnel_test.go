@@ -234,7 +234,14 @@ func TestTunnelAdmitsOnlyTheOfferedClientKey(t *testing.T) {
 // pathHandler records what the handler is told about where a call came from.
 func pathHandler(remote *string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*remote = transport.PeerFrom(r.Context()).RemoteAddr
+		peer := transport.PeerFrom(r.Context())
+
+		*remote = peer.RemoteAddr
+		if !peer.Tunnelled {
+			// The path without the flag would let a phone's tunnelled calls
+			// read as direct ones on the far side (decision BA).
+			*remote += " (not marked tunnelled)"
+		}
 		fmt.Fprint(w, "reached")
 	})
 }

@@ -162,18 +162,26 @@ func (n *Node) peerStatus(record *storepb.TrustRecord) *ladulasv1.PeerStatus {
 	// through the front door. A call it is holding open now is as connected as a
 	// device that does not listen gets; the last call it made is the honest
 	// answer to "when was it here" (§7).
-	holding, lastCall := n.presence(record.GetFingerprint())
+	holding, tunnelled, lastCall := n.presence(record.GetFingerprint())
 
 	if holding {
 		status.Online = true
 
-		// The peer dialled in. The calls a peer holds open here are a phone's
-		// collections, and a phone is not on the tunnel yet (§8), so the call
-		// it is holding is a direct one. When phones join the tunnel, the
-		// connection's RemoteAddr — the path, on the tunnel listener — is what
-		// will have to say otherwise.
+		// The peer dialled in, and the calls a peer holds open here are a
+		// phone's collections. Until phones carried tunnel clients that made
+		// them direct calls by construction, and this said so without
+		// looking; a phone with the tunnel on collects through this
+		// instance's tunnel listener whenever the race gives it the tunnel
+		// (decision BA), and was described as connected directly all the
+		// same. So the path is the one the held calls came in on, and for
+		// the tunnel it is this instance's server's own view of the client,
+		// punched or relayed.
 		if status.GetPath() == "" {
 			status.Path = pathDirect.word()
+
+			if tunnelled {
+				status.Path = n.inboundTunnelWord(record)
+			}
 		}
 	}
 

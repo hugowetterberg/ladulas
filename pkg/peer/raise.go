@@ -551,6 +551,23 @@ func (t *tunnelPath) reset() {
 	closeRaw(stale)
 }
 
+// drop closes the client and keeps the address it was raised against, with no
+// backoff left over: the client is known dead, which says nothing against the
+// peer's server (Node.DropTunnelClients). Nothing is raised here; the next
+// call that wants the tunnel kicks a raise, as for a client the reaper took.
+func (t *tunnelPath) drop() {
+	if t == nil {
+		return
+	}
+
+	t.mu.Lock()
+	stale := t.dropLocked()
+	t.backoff, t.next, t.tainted, t.fallback, t.lastErr = 0, time.Time{}, time.Time{}, "", ""
+	t.mu.Unlock()
+
+	closeRaw(stale)
+}
+
 // close closes the client for good.
 func (t *tunnelPath) close() {
 	if t == nil {
@@ -650,6 +667,18 @@ func (n *Node) clientReport(record *storepb.TrustRecord) *ladulasv1.TunnelPathRe
 	}
 
 	return parseClientPath(tunnel.ClientPath(key))
+}
+
+// inboundTunnelWord is the path word for a peer's calls through this
+// instance's tunnel listener, from the server's view of its client: punched,
+// relayed through a region, or relayed when the server cannot say.
+func (n *Node) inboundTunnelWord(record *storepb.TrustRecord) string {
+	report := n.clientReport(record)
+	if report == nil {
+		return trust.TunnelPath(true, "")
+	}
+
+	return trust.TunnelPath(report.GetRelayed(), report.GetRelay())
 }
 
 // parseClientPath is Tunnel.ClientPath's answer as the report carries it.

@@ -54,7 +54,16 @@ type Tunnel struct {
 	region *tailcfg.DERPRegion
 	known  *tailcfg.DERPMap
 	closed bool
+	// mapFetching and mapAsked are the background fetch of the DERP map that
+	// fills known when no region pick did (learnMap).
+	mapFetching bool
+	mapAsked    time.Time
 }
+
+// mapRetry is how long a DERP map fetch that failed is left before the next
+// one, so that a map host that is down is asked once in a while rather than
+// on every peer's beat.
+const mapRetry = time.Minute
 
 var _ peer.Tunnel = (*Tunnel)(nil)
 
@@ -140,9 +149,12 @@ func (t *Tunnel) Start() (string, error) {
 	}
 
 	if t.clientOnly {
+		// No server is the whole of a client-only tunnel. The map is still
+		// wanted, for the region rule (learnMapLocked).
+		t.learnMapLocked()
 		t.mu.Unlock()
 
-		return "", nil // no server is the whole of a client-only tunnel
+		return "", nil
 	}
 
 	if t.server != nil {
@@ -431,6 +443,8 @@ func (t *Tunnel) KnownRelays() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.learnMapLocked()
+
 	var out []relayRegion
 
 	if t.region != nil {
@@ -449,6 +463,64 @@ func (t *Tunnel) KnownRelays() string {
 	}
 
 	return string(encoded)
+}
+
+// learnMapLocked fetches the DERP map in the background when nothing has
+// filled known, unless a fetch is under way or one failed within mapRetry.
+//
+// Only a region pick used to fill it, so known was empty on every tunnel that
+// did not pick this run: a client-only one, which never picks, and a server
+// whose region was persisted by an earlier start. KnownRelays then named the
+// persisted region or nothing, and the region rule refused any relay the
+// configured map names that it cannot pass on its own — a self-hosted derper
+// named by host alone, or on a port other than 443 — although the map is the
+// one this instance was told to trust (decision BA). A refused offer is not
+// lost: the peer says it again on its next beat or poll, and the map is known
+// by then.
+//
+// The fetch is in client mode for a client-only tunnel, which is what it is
+// on behalf of. tailcat caches the map per process, so the clients raised
+// later reuse it.
+func (t *Tunnel) learnMapLocked() {
+	if t.known != nil || t.closed || t.mapFetching ||
+		(!t.mapAsked.IsZero() && time.Since(t.mapAsked) < mapRetry) {
+		return
+	}
+
+	t.mapFetching = true
+
+	go t.learnMap()
+}
+
+func (t *Tunnel) learnMap() {
+	url := t.opts.DERPMapURL
+	if url == "" {
+		url = DefaultDERPMapURL
+	}
+
+	opts := []any{tailcat.DERPMapURL(url)}
+	if !t.clientOnly {
+		opts = append(opts, tailcat.ExpandForServer)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+	defer cancel()
+
+	known, err := tailcat.FetchDERPMap(ctx, opts...)
+	if err != nil {
+		t.log.Debug("could not fetch the DERP map for the region rule",
+			"url", url, "error", err.Error())
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.mapFetching = false
+	t.mapAsked = time.Now()
+
+	if err == nil && t.known == nil {
+		t.known = known
+	}
 }
 
 // Region implements peer.Tunnel.

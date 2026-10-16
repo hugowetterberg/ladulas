@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
 // A phone is never dialled, so everything a surface can say about whether it is
@@ -60,7 +61,7 @@ func TestPeerStatusOfADeviceThatComesToUs(t *testing.T) {
 
 	// And a call it is holding open is as connected as a device that does not
 	// listen ever gets.
-	release := node.holding(phone.GetFingerprint())
+	release := node.holding(phone.GetFingerprint(), false)
 
 	if !node.peerStatus(phone).GetOnline() {
 		t.Error("a phone holding a poll open is not reported as connected")
@@ -87,18 +88,62 @@ func TestHoldingCountsCalls(t *testing.T) {
 		collecting: map[string]int{},
 	}
 
-	first := node.holding("SHA256:phone")
-	second := node.holding("SHA256:phone")
+	first := node.holding("SHA256:phone", false)
+	second := node.holding("SHA256:phone", false)
 
 	first()
 
-	if holding, _ := node.presence("SHA256:phone"); !holding {
+	if holding, _, _ := node.presence("SHA256:phone"); !holding {
 		t.Error("a peer with a call still open is reported as gone")
 	}
 
 	second()
 
-	if holding, _ := node.presence("SHA256:phone"); holding {
+	if holding, _, _ := node.presence("SHA256:phone"); holding {
 		t.Error("a peer that ended both calls is still reported as holding one")
+	}
+}
+
+// A phone with the tunnel on collects through this instance's tunnel listener
+// whenever the race gives it the tunnel (decision BA), and its held call is
+// described by the path it came in on. Until phones carried tunnel clients
+// every held call was called direct without looking. One direct call among
+// the held ones is enough to say direct, since that path is plainly working.
+func TestAHeldCallSaysWhichPathItCameIn(t *testing.T) {
+	t.Parallel()
+
+	node := &Node{
+		links:               map[string]*link{},
+		reached:             map[string]*reach{},
+		seen:                map[string]time.Time{},
+		collecting:          map[string]int{},
+		collectingTunnelled: map[string]int{},
+	}
+
+	phone := &storepb.TrustRecord{
+		Fingerprint: "SHA256:phone",
+		Name:        "iPhone",
+		MayApprove:  true,
+	}
+
+	tunnelled := node.holding(phone.GetFingerprint(), true)
+
+	// No server here to ask how it sees the client, so relayed, which is the
+	// conservative word.
+	if path := node.peerStatus(phone).GetPath(); path != trust.PathTunnelRelayed {
+		t.Errorf("a call held through the tunnel reads path %q", path)
+	}
+
+	direct := node.holding(phone.GetFingerprint(), false)
+
+	if path := node.peerStatus(phone).GetPath(); path != trust.PathDirect {
+		t.Errorf("a direct call beside a tunnelled one reads path %q", path)
+	}
+
+	direct()
+	tunnelled()
+
+	if holding, _, _ := node.presence(phone.GetFingerprint()); holding {
+		t.Error("a phone that hung up is still holding a call")
 	}
 }

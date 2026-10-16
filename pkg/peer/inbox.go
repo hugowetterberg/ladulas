@@ -16,6 +16,7 @@ import (
 	"github.com/hugowetterberg/ladulas/pkg/identity"
 	ladulasv1 "github.com/hugowetterberg/ladulas/pkg/protocol/ladulasv1"
 	"github.com/hugowetterberg/ladulas/pkg/storepb"
+	"github.com/hugowetterberg/ladulas/pkg/transport"
 	"github.com/hugowetterberg/ladulas/pkg/trust"
 )
 
@@ -342,7 +343,8 @@ func (n *Node) collect(
 ) []*ladulasv1.PendingApproval {
 	// A call held open is the nearest thing a collector has to a link, and every
 	// surface that says whether a peer is there reads it (see Node.holding).
-	done := n.holding(fingerprint)
+	peer := transport.PeerFrom(ctx)
+	done := n.holding(fingerprint, peer != nil && peer.Tunnelled)
 	defer done()
 
 	if pending := n.pendingApprovals(fingerprint); len(pending) > 0 {

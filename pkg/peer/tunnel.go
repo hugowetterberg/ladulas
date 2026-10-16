@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -324,32 +325,68 @@ func (n *Node) SetTunnel(tunnel Tunnel) {
 	// syncs its tunnel, and moves a tunnel-only peer between a link and an
 	// inbox.
 	//
-	// The dialer's raised clients are dropped here rather than left to sync on
-	// their next call: each is a whole tailcat stack with its DERP and
-	// WireGuard sessions, and `ladulas tunnel off` is somebody ending a public
-	// exposure (decision AX), who expects it to end now rather than at the
-	// next dial-back or five idle minutes later. A dialer that wants a tunnel
-	// again raises one against the new tunnel on its next call.
-	n.resetDialerTunnels()
+	// The raised clients are dropped here rather than left to sync on their
+	// next call: each is a whole tailcat stack with its DERP and WireGuard
+	// sessions, and `ladulas tunnel off` is somebody ending a public exposure
+	// (decision AX), who expects it to end now rather than at the next
+	// dial-back or five idle minutes later. A dialer that wants a tunnel again
+	// raises one against the new tunnel on its next call, and a link when
+	// Reconcile below hands it its record again.
+	//
+	// The links' clients go too. The first version reset only the dialers',
+	// and a link's sync drops its client only when the peer's address changes
+	// — which a change of tunnel on this side is not — so a link kept a
+	// client raised by the tunnel just closed, for as long as it stayed up.
+	for _, path := range n.tunnelPaths() {
+		path.reset()
+	}
 
 	if serving {
 		n.Reconcile()
 	}
 }
 
-// resetDialerTunnels drops every dialer's raised tunnel client.
-func (n *Node) resetDialerTunnels() {
-	n.dialMu.Lock()
-	held := make([]*dialer, 0, len(n.dialers))
+// DropTunnelClients closes every raised tunnel client — the dialers' and the
+// links' — and keeps everything else: the tunnel, the peers' offers, the
+// addresses each client was raised against. Nothing is raised again here; the
+// next call that wants a tunnel to a peer raises one, racing the direct path
+// as any first call does (decision AY).
+//
+// It is for a host that knows its raised clients are dead without having been
+// told. A phone is the case it was written for (decision BA): iOS cuts a
+// suspended app's sockets without a word, so a client held across a
+// suspension has a DERP connection and WireGuard sessions that look up and
+// reach nothing, and the first call through one waits out its timeout before
+// falling back. The phone drops them as it goes to the background and again
+// as it comes back. Replacing the whole tunnel with SetTunnel did the same
+// job, at the cost of a node that briefly had no tunnel, an offer withdrawn
+// and re-made, and a reconcile of every link, every time the screen locked.
+func (n *Node) DropTunnelClients() {
+	for _, path := range n.tunnelPaths() {
+		path.drop()
+	}
+}
 
+// tunnelPaths is every raised tunnel path the node holds, the dialers' and
+// the links', nil entries left out.
+func (n *Node) tunnelPaths() []*tunnelPath {
+	var paths []*tunnelPath
+
+	n.dialMu.Lock()
 	for _, d := range n.dialers {
-		held = append(held, d)
+		paths = append(paths, d.tunnelPath())
 	}
 	n.dialMu.Unlock()
 
-	for _, d := range held {
-		d.tunnelPath().reset()
+	n.mu.Lock()
+	for _, existing := range n.links {
+		paths = append(paths, existing.tunnel)
 	}
+	n.mu.Unlock()
+
+	return slices.DeleteFunc(paths, func(path *tunnelPath) bool {
+		return path == nil
+	})
 }
 
 // raiseServer starts the long-lived server and keeps trying until it is up,

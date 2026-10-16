@@ -7,8 +7,11 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tailscale/tailcat"
 	"go4.org/mem"
@@ -216,5 +219,68 @@ func TestTheAllowlistNeedsNoServer(t *testing.T) {
 
 	if _, err := tunnel.Start(); err == nil {
 		t.Error("a closed tunnel started")
+	}
+}
+
+// A client-only tunnel never picks a region, and once had nothing in
+// KnownRelays at all: the region rule then refused every relay the configured
+// map names that it cannot pass on its own, such as a self-hosted derper on a
+// port other than 443. It fetches the map for the rule instead, in the
+// background, in client mode (decision BA).
+func TestAClientOnlyTunnelKnowsTheConfiguredMap(t *testing.T) {
+	modes := make(chan string, 4)
+
+	derpMap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modes <- r.Header.Get("Tailcat-Mode")
+
+		_ = json.NewEncoder(w).Encode(&tailcfg.DERPMap{
+			Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
+				900: {
+					RegionID:   900,
+					RegionCode: "home",
+					Nodes: []*tailcfg.DERPNode{{
+						Name:     "900a",
+						RegionID: 900,
+						HostName: "derp.home.example",
+						DERPPort: 8443,
+					}},
+				},
+			},
+		})
+	}))
+	t.Cleanup(derpMap.Close)
+
+	tunnel, err := New(Options{ClientKey: randomKey(t), DERPMapURL: derpMap.URL})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	t.Cleanup(func() { _ = tunnel.Close() })
+
+	if _, err := tunnel.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for !strings.Contains(tunnel.KnownRelays(), "derp.home.example") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the configured map never reached KnownRelays: %s", tunnel.KnownRelays())
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	var known []relayRegion
+	if err := json.Unmarshal([]byte(tunnel.KnownRelays()), &known); err != nil {
+		t.Fatalf("decode the known relays: %v", err)
+	}
+
+	if len(known) != 1 || len(known[0].Nodes) != 1 || known[0].Nodes[0].DERPPort != 8443 {
+		t.Errorf("the known relays are %+v", known)
+	}
+
+	if mode := <-modes; mode != "client" {
+		t.Errorf("the map was fetched in %q mode, want client", mode)
 	}
 }

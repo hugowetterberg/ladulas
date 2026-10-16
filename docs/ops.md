@@ -707,7 +707,13 @@ wire formats differ; update the older one, and until then the pair stays on
 its direct path, which is the point of the version. `peer offers a client
 key only` — a phone, or an offer whose DERP region failed the region rule
 (`ladulas_tunnel_events_total{event="region_refused"}`, and a warning in
-the log naming the reason). `tunnel offer stale` — no beat has confirmed
+the log naming the reason). A region refused for a relay that *is* in this
+machine's DERP map is the map not yet fetched: a tunnel that did not pick a
+region this run — a phone's, or a server whose region was persisted —
+fetches the map in the background, retrying once a minute, and the peer's
+next beat or poll is checked against it. If it persists, the map URL does
+not answer from here (debug log: "could not fetch the DERP map for the
+region rule"). `tunnel offer stale` — no beat has confirmed
 it for fourteen days, or the peer's direct contacts have carried no offer at
 all for more than ten minutes; it clears on the next beat that carries one.
 `tunnel in backoff until <time>` — raises have been failing (`event="raise_failed"`);

@@ -97,6 +97,11 @@ type PeerIdentity struct {
 	Pin Pin
 	// RemoteAddr is where the connection came from. Corroborating only.
 	RemoteAddr string
+	// Tunnelled says the connection came through a tunnel listener rather
+	// than a bound one, which is what lets the far end say which path a call
+	// it is holding open took (decision BA). Like RemoteAddr it is a fact
+	// about the route and never about who is on the other end.
+	Tunnelled bool
 }
 
 // identityFromCert derives a peer identity from a presented certificate.

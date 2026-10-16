@@ -147,6 +147,10 @@ type fabricClient struct {
 	fabric  *fabric
 	address string
 	key     []byte
+	// conns is every connection dialled through the client, which closing it
+	// breaks: a tailcat client is the stack its connections run over.
+	mu    sync.Mutex
+	conns []net.Conn
 }
 
 func (c *fabricClient) server() (*fabricListener, error) {
@@ -210,6 +214,10 @@ func (c *fabricClient) Dial(int64) (transport.TunnelConn, error) {
 	c.fabric.conns = append(c.fabric.conns, near, far)
 	c.fabric.mu.Unlock()
 
+	c.mu.Lock()
+	c.conns = append(c.conns, near, far)
+	c.mu.Unlock()
+
 	path := server.server.path
 	if path == "" {
 		path = "tunnel, direct"
@@ -224,7 +232,18 @@ func (c *fabricClient) Dial(int64) (transport.TunnelConn, error) {
 	return &pipeConn{Conn: near, path: "tunnel"}, nil
 }
 
-func (c *fabricClient) Close() error { return nil }
+func (c *fabricClient) Close() error {
+	c.mu.Lock()
+	conns := c.conns
+	c.conns = nil
+	c.mu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+
+	return nil
+}
 
 // pipeConn is one end of a fabric connection as a TunnelConn.
 type pipeConn struct {
@@ -1211,4 +1230,90 @@ func TestTurningTheTunnelOffClosesTheDialBacksClients(t *testing.T) {
 	if tunnel.snapshot().up {
 		t.Error("the dial-back's tunnel is still up with the tunnel off")
 	}
+}
+
+// DropTunnelClients closes every raised client, the links' and the dialers',
+// and keeps the offers they were raised against: the next call that wants a
+// tunnel raises one again (decision BA). A phone does this around every
+// suspension, because iOS cuts the sockets under a client without a word.
+func TestDroppingTunnelClientsKeepsTheOffers(t *testing.T) {
+	h := newTunnelled(t, shape{requesterOffLAN: true})
+	l := h.link(t)
+
+	waitUntil(t, "the link to move to the tunnel", func() bool {
+		return l.currentPath() == pathTunnel
+	})
+
+	record, ok := h.approver.store.Peer(h.requester.identity.Fingerprint())
+	if !ok {
+		t.Fatal("the approver has no record of the requester")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := h.approver.node.call(ctx, record, pingFn); err != nil {
+		t.Fatalf("a dial-back to a tunnel-only requester: %v", err)
+	}
+
+	h.approver.node.dialMu.Lock()
+	held := h.approver.node.dialers[h.requester.identity.Fingerprint()]
+	h.approver.node.dialMu.Unlock()
+
+	dialed := held.tunnelPath()
+	if !dialed.snapshot().up {
+		t.Fatal("the dial-back's tunnel is not up after a call through it")
+	}
+
+	h.approver.node.DropTunnelClients()
+
+	if snap := dialed.snapshot(); snap.up || !snap.usable {
+		t.Errorf("after the drop the dialer's tunnel reads up=%v usable=%v, want down and still raisable",
+			snap.up, snap.usable)
+	}
+
+	if h.approver.node.TunnelStatus().Running != true {
+		t.Error("dropping the clients took the tunnel server down with them")
+	}
+
+	// The next call raises again.
+	before := h.tunnels.raiseCount()
+
+	if err := h.approver.node.call(ctx, record, pingFn); err != nil {
+		t.Fatalf("a dial-back after the drop: %v", err)
+	}
+
+	if h.tunnels.raiseCount() == before || !dialed.snapshot().up {
+		t.Error("the call after the drop did not raise the tunnel again")
+	}
+
+	// And the link's client goes the same way, and comes back on its own.
+	linkRaises := h.tunnels.raiseCount()
+
+	h.requester.node.DropTunnelClients()
+
+	waitUntil(t, "the link's tunnel to be raised again", func() bool {
+		return h.tunnels.raiseCount() > linkRaises && l.tunnel.snapshot().up
+	})
+}
+
+// Replacing the tunnel drops the links' raised clients as well as the
+// dialers'. A link's sync drops its client only when the peer's address
+// changes, which a new tunnel on this side is not, so the first version left
+// every link holding a client raised by the tunnel it had just closed.
+func TestReplacingTheTunnelRaisesTheLinksAgain(t *testing.T) {
+	h := newTunnelled(t, shape{})
+	l := h.link(t)
+
+	waitUntil(t, "the link's tunnel to come up", func() bool {
+		return l.tunnel.snapshot().up
+	})
+
+	before := h.tunnels.raiseCount()
+
+	h.requester.node.SetTunnel(h.tunnels.tunnel("tclaptop", 2))
+
+	waitUntil(t, "the link to raise against the new tunnel", func() bool {
+		return h.tunnels.raiseCount() > before && l.tunnel.snapshot().up
+	})
 }
